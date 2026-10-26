@@ -37,6 +37,5 @@ from agent_gateway.services.mcp.search_notes_cache import _ensure_note_cache
 from agent_gateway.services.mcp.search_notes_query import _query_project_notes
 from agent_gateway.services.mcp.search_vectors import (
     _ensure_symbol_embeddings,
-    _get_shared_embedder,
     _search_vectors,
 )

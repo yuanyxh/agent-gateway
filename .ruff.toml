@@ -5,7 +5,11 @@ target-version = "py312"
 quote-style = "double"
 indent-style = "space"
 
-# Pinned explicitly: ruff's defaults move between releases, and the migrated code
-# has a legacy baseline (mostly unused imports) that is being retired separately.
+# 规则显式固定：ruff 默认值随版本变动。
 [lint]
 select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# 兼容再导出模块：导入供外部按旧路径取用，F401 不适用。
+"src/agent_gateway/services/mcp/server_search.py" = ["F401"]
+"src/agent_gateway/services/proxy/proxy_usage.py" = ["F401"]

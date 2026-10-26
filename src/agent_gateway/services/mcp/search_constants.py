@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-import sqlite3
+import importlib.util
 import threading
 
 import numpy as np
 
-from agent_gateway.core.db import conn as dbconn
 from agent_gateway.core.log_utils import setup_logging
-from agent_gateway.core.synonyms import load_synonyms
 from agent_gateway.core.tool_defaults import arg_default
-from agent_gateway.services.mcp.server_embed import _get_shared_embedder, embed_query
 # ---------------------------------------------------------------------------
 # Configuration (same as pre-split server.py; NOTE_*/PROJECT_MARKER_* are server-specific)
 # ---------------------------------------------------------------------------
@@ -96,10 +91,4 @@ _note_cache_lock = threading.Lock()
 
 logger = setup_logging("server")
 
-_HAS_PATHSPEC = False
-try:
-    import pathspec
-
-    _HAS_PATHSPEC = True
-except ImportError:
-    pass
+_HAS_PATHSPEC = importlib.util.find_spec("pathspec") is not None

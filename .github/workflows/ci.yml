@@ -16,8 +16,6 @@ jobs:
       - run: pip install ruff
       - run: pip install -e ".[proxy,server]"
       - run: ruff format --check src tests scripts
-      # Report-only until the migrated lint baseline is retired (see .agent/status.md).
       - run: ruff check src tests scripts
-        continue-on-error: true
       - run: PYTHONPATH=src python -m unittest discover -s tests -t .
       - run: python -m build

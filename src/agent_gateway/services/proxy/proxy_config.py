@@ -1,58 +1,22 @@
 """Proxy configuration, provider routing, and shared HTTP session."""
 
-import asyncio
-from dataclasses import dataclass
 import json
 import os
-import sys
-import time
 
 import aiohttp
-from agent_gateway.llm import client as llm_client
 from aiohttp import web
-from agent_gateway.core.config import ui_language
-from agent_gateway.core.db import conn as dbconn
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.services.proxy.proxy_client import (
     load_client_accel,
-    matches_accel_client,
 )
 from agent_gateway.services.proxy.proxy_output_filter import (
     OUTPUT_FILTER_ENV_KEY,
-    filter_tool_outputs,
-)
-from agent_gateway.services.proxy.proxy_protocol import (
-    AnthropicToOpenAIStream,
-    OpenAIToAnthropicStream,
-    ProtocolConverter,
-    _detect_api_format,
-    _extract_output_from_sse,
-    _extract_tool_name_from_sse,
-    _extract_usage_from_sse,
-    _inject_classifier_disabled,
-    _inject_system_prompt,
-    _is_classifier_candidate,
 )
 from agent_gateway.services.proxy.proxy_provider import (
-    api_format_of,
-    api_key_of,
     missing_keys,
 )
 from agent_gateway.services.proxy.proxy_response_note import (
     RESPONSE_NOTE_ENV_KEY,
-    NoteBodyBuffer,
-    SSENoteInjector,
-    strip_notes_from_messages,
-)
-from agent_gateway.services.proxy.proxy_skill_dedup import dedup_tool_results
-from agent_gateway.services.proxy.proxy_usage import (
-    DB_PATH,
-    TOOL_OUTPUT_DB_PATH,
-    extract_tool_outputs,
-    init_db,
-    init_tool_output_db,
-    record_gateway_log,
-    record_usage,
 )
 
 # ---------------------------------------------------------------------------

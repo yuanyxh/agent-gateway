@@ -1,47 +1,13 @@
 """Batch aggregation of memory facts."""
 
-import difflib
-import fcntl
-import hashlib
-import json
-import os
-import re
-import sqlite3
-import subprocess
-import time
-from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
-
 from agent_gateway.core import prompt_loader
-from agent_gateway.core.config import (
-    data_dir,
-    notes_dir,
-    note_exclude_dirs,
-    note_extensions,
-    summary_exclude_tags,
-)
-from agent_gateway.core.l10n import all_templates, t
+from agent_gateway.core.l10n import t
 from agent_gateway.core.log_utils import setup_logging as _log_setup
-from agent_gateway.core.memory_lifecycle import (
-    COLD_SOURCE_MEMORY_IDS_FIELD,
-    PROCESSED_CONSUMED_MASK,
-    PROCESSED_FIELD,
-    STATUS_ACTIVE,
-    STATUS_FIELD,
-)
 from agent_gateway.services.summarize.summary_llm import (
-    _HTTP,
-    AI_API_KEY,
-    SUMMARY_LLM_TIMEOUT,
     _llm_chat,
     _parse_json_any,
     write_error_log,
 )
-from agent_gateway.services.summarize.summary_rules import _run_phase3
-from agent_gateway.services.summarize.summary_stats import _print_report_v2
-
-logger = _log_setup("summarize")
 
 from agent_gateway.services.summarize.constants import (
     AGGREGATE_BATCH_SIZE,
@@ -51,6 +17,9 @@ from agent_gateway.services.summarize.constants import (
     AGGREGATE_MAX_ROUNDS,
 )
 from agent_gateway.services.summarize.memory import _build_facts_text_v2
+
+
+logger = _log_setup("summarize")
 
 
 def _aggregate_round(

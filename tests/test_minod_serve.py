@@ -11,8 +11,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from agent_gateway.cli import env_builder, minod
-from agent_gateway.core import config_loader, daemon
+from agent_gateway.cli import env_builder, minod  # noqa: E402
+from agent_gateway.core import config_loader, daemon  # noqa: E402
 
 PYTHON = sys.executable
 

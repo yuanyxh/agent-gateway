@@ -2,18 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
-import sqlite3
-import threading
 
-import numpy as np
-
-from agent_gateway.core.db import conn as dbconn
-from agent_gateway.core.log_utils import setup_logging
-from agent_gateway.core.synonyms import load_synonyms
-from agent_gateway.core.tool_defaults import arg_default
-from agent_gateway.services.mcp.server_embed import _get_shared_embedder, embed_query
 
 from agent_gateway.services.mcp.search_constants import (
     NOTE_CHUNK_MAX_SIZE,
@@ -146,11 +136,11 @@ def _split_long_text(text: str, file_path: str, base_line: int) -> list[dict]:
             # Rewind for overlap: drop lines until we're below overlap threshold
             overlap_len = 0
             rewound: list[str] = []
-            for l in reversed(current_lines):
+            for line in reversed(current_lines):
                 if overlap_len >= NOTE_CHUNK_OVERLAP and rewound:
                     break
-                rewound.insert(0, l)
-                overlap_len += len(l) + 1
+                rewound.insert(0, line)
+                overlap_len += len(line) + 1
             current_lines = rewound
             current_len = overlap_len
             line_offset = idx + 1 - len(current_lines)

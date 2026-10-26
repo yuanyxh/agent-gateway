@@ -2,20 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
 import sqlite3
-import threading
 
-import numpy as np
 
 from agent_gateway.core.db import conn as dbconn
-from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.core.synonyms import load_synonyms
-from agent_gateway.core.tool_defaults import arg_default
-from agent_gateway.services.mcp.server_embed import _get_shared_embedder, embed_query
-
-from agent_gateway.services.mcp.search_constants import logger
 
 
 def expand_query(query: str) -> str:

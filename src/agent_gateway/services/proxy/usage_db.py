@@ -2,20 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from agent_gateway.llm import client as llm_client
-from agent_gateway.core.config import data_dir
 from agent_gateway.core.db import conn as dbconn
-from agent_gateway.core.log_utils import setup_logging
-from agent_gateway.services.proxy.proxy_client import load_client_text
-from agent_gateway.services.proxy.proxy_normalize import _result_text as result_text
-from agent_gateway.services.proxy.proxy_protocol import strip_injected_rules
 
 
 from agent_gateway.services.proxy.usage_constants import (
@@ -26,7 +17,6 @@ from agent_gateway.services.proxy.usage_constants import (
     GATEWAY_LOG_SIZE_THRESHOLD,
     TOOL_OUTPUT_DB_PATH,
     TOOL_OUTPUT_RETENTION_DAYS,
-    logger,
 )
 
 
