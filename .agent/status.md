@@ -8,7 +8,7 @@
 
 | 任务 | 状态 | 阻塞 |
 | --- | --- | --- |
-| （无） | — | — |
+| G2 宿主接入 | wheel 分发与模块启动已在 utility 侧验证；等本仓改动提交 | — |
 
 ## 已完成
 
@@ -19,10 +19,13 @@
 - 2026-10-26 `--export-contracts` 产出 `contracts/env.json`（39 个 env 键）
 - 2026-10-26 采用 src layout（`src/agent_gateway/`），pyproject 与测试路径同步
 - 2026-10-26 lint 基线清零（641 → 0）：删除未使用导入，兼容再导出模块加 per-file-ignores，CI lint 转阻塞门
+- 2026-10-26 宿主接入契约落地：`server.py` 的 `async main` 拆成同步 `main()` + `async serve()`（模块名启动 `main()` 原来只拿到未 await 的协程，进程秒退）；`scripts/server.py` 同步
+- 2026-10-26 迁入两个检查脚本 `scripts/check-web-search.py`、`scripts/check-search-cache-invariants.py`（import 改 `agent_gateway`，E402 按文件豁免）
 
 ## 下一步
 
-1. G2：宿主打包改用 wheel（在 utility 仓执行）
+1. 提交本仓改动（模块入口契约 + 迁入的检查脚本）
+2. utility 侧打包与整机回归通过后发版
 
 ## 最近验证
 

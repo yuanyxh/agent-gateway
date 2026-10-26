@@ -475,7 +475,12 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
         )
 
 
-async def main():
+def main() -> None:
+    """Sync entry: hosts bootstrap by module name (`-c "from <module> import main; main()"`)."""
+    asyncio.run(serve())
+
+
+async def serve():
     asyncio.create_task(
         archive_scheduler(lambda: (get_hot_memory(), get_qdrant()), ensure_hot_memory)
     )
@@ -751,4 +756,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

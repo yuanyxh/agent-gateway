@@ -23,6 +23,18 @@
 8. **配置唯一来源**：`config.yaml`；env 只做覆盖；任何服务都必须能在没有宿主注入时独立启动。
 9. **跨仓契约用文件**：消费方读 `contracts/*.json`，不扫描源码。
 
+## 宿主接入契约
+
+- 每个可被宿主拉起的模块必须暴露**同步** `main()`；异步内部逻辑放 `async def serve()`，`main()` 里 `asyncio.run(serve())`。
+  宿主按模块名启动：`python -c "import sys; from <module> import main; sys.exit(main())"`，
+  **没有脚本路径**，所以返回码要能通过 `sys.exit(main())` 传出去（int 返回值 = 退出码）
+- 当前入口：`services.mcp.server` / `services.proxy.token_proxy` / `services.summarize.summarize` /
+  `services.knowledge.knowledge_refill` / `services.rss.rss_daily` / `scanner.ast_extractor`
+- 宿主随包分发本仓 wheel，首启装进 venv；依赖只从 wheel extras（`proxy,memory,server`）来，不另发 `requirements.txt`
+- 提示词与 `scanner/ast-js` 必须留在包内（wheel 里），宿主读的是打包时拷出的副本
+- `core/l10n_catalog.py` 由 utility 仓 `scripts/gen-l10n.py --python-out <本仓路径>` 生成，
+  **生成后在本仓跑 `ruff format`**（生成器不做行宽折行）；不要在两侧各写一份生成逻辑
+
 ## 加载策略
 
 | 内容 | 层 | 触发 | 机制 |
