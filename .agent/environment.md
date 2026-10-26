@@ -15,6 +15,15 @@
 | Docker | 缺失 | 未安装 | 当前 `deploy_target: none`，部署验证留到 workspace 开工 |
 | pip-audit | 缺失 | 交付门依赖它 | 首次执行前安装；未安装时登记为降级，不阻塞本地开发 |
 
+## 2026-10-26（复验）
+
+| 项 | 状态 | 说明 |
+| --- | --- | --- |
+| 项目 venv | 已重建 | 复验时 `.venv` 缺失，用 `python3.12 -m venv .venv` 重建 |
+| 依赖 | 已安装 | `.venv/bin/pip install -e ".[proxy,memory,server]"` |
+| 构建工具 | 已安装 | `.venv/bin/pip install build`（非运行依赖） |
+| 系统 PATH | 注意 | `python` 不存在，需用 `.venv/bin/python` 或 `python3.12` |
+
 ## 判定
 
 - 质量门 `ruff`、`unittest`、`python -m build` 在当前环境可执行。

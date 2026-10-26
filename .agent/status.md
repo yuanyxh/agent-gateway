@@ -18,23 +18,23 @@
 - 2026-10-26 wheel 构建与干净 venv 安装验证通过，资源（prompts / ast-js）指向 site-packages
 - 2026-10-26 `--export-contracts` 产出 `contracts/env.json`（39 个 env 键）
 - 2026-10-26 采用 src layout（`src/agent_gateway/`），pyproject 与测试路径同步
+- 2026-10-26 lint 基线清零（641 → 0）：删除未使用导入，兼容再导出模块加 per-file-ignores，CI lint 转阻塞门
 
 ## 下一步
 
-1. 基座校验（format / lint / test / build）
-2. 用户确认基座
-3. G2：宿主打包改用 wheel（在 utility 仓执行）
+1. G2：宿主打包改用 wheel（在 utility 仓执行）
 
 ## 最近验证
 
 | 时间 | 命令 | 结果 |
 | --- | --- | --- |
-| 2026-10-26 | `PYTHONPATH=src python -m unittest discover -s tests -t .` | 通过（128，1 skipped） |
-| 2026-10-26 | `python -m build` + 干净 venv 安装 | 通过 |
-| 2026-10-26 | `agent-gateway --check` | 通过 |
+| 2026-10-26 | `ruff format --check src tests scripts` | 通过（153 文件） |
+| 2026-10-26 | `ruff check src tests scripts` | 通过（0 条） |
+| 2026-10-26 | `.venv/bin/python -m unittest discover -s tests -t .` | 通过（128，1 skipped） |
+| 2026-10-26 | `.venv/bin/python -m build` | 通过（wheel + sdist） |
+| 2026-10-26 | `UTILITY_DATA_DIR=<临时根> agent-gateway --check` | 通过 |
 
 ## 已知问题
 
 - `test_ast_imports` 中调用主项目二进制的用例被跳过：本仓没有 `utility` 可执行文件，属预期降级。
 - `pip-audit` 尚未安装，交付门暂未执行。
-- lint 基线未通过：`ruff check` 报 642 条历史告警（613 条未使用 import 为主）。当前定为报告态，CI 不阻塞；清理单独开任务并在完成后转为阻塞。

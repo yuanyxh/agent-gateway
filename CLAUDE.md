@@ -67,7 +67,7 @@
 | 检查 | 命令 |
 | --- | --- |
 | 格式化 | `ruff format --check src tests scripts` |
-| 静态检查 | `ruff check src tests scripts`（报告态：迁移基线待治理，不阻塞合并） |
+| 静态检查 | `ruff check src tests scripts` |
 | 测试 | `PYTHONPATH=src python -m unittest discover -s tests -t .` |
 | 构建 | `python -m build` |
 | 自检 | `agent-gateway --check` |
@@ -86,7 +86,7 @@
 | 安装 | `pip install -e ".[proxy,memory,server]"` |
 | 构建 | `python -m build` |
 | 格式化检查 | `ruff format --check src tests scripts` |
-| 静态检查 | `ruff check src tests scripts`（报告态：迁移基线待治理，不阻塞合并） |
+| 静态检查 | `ruff check src tests scripts` |
 | 测试 | `PYTHONPATH=src python -m unittest discover -s tests -t .` |
 | 运行 | `agent-gateway --check` |
 | 契约导出 | `agent-gateway --export-contracts` |
