@@ -1,0 +1,90 @@
+project:
+  name: agent-gateway
+  one_liner: 为 Utility 客户端提供 AI 能力层：MCP 记忆、LLM 网关、token 代理与桌面自动化服务
+  type: library
+  domain:
+    - AI 能力网关
+  scale: mvp
+  team: solo
+
+stack:
+  language: python
+  framework: none
+  package_manager: pip
+  runtime: ">=3.12"
+
+ui:
+  has_ui: false
+  design_system: none
+  i18n: false
+  a11y: none
+
+data:
+  storage: sqlite
+  auth: none
+  files: none
+  external_services:
+    - qdrant-local
+    - upstream-llm-providers
+
+delivery:
+  vcs: git
+  repo_host: github
+  branch_strategy: trunk
+  ci: github-actions
+  deploy_target: none
+  environments:
+    - dev
+  domain: ""
+
+quality:
+  test_level: standard
+  security_level: high
+  format: ruff
+  lint: ruff
+  typecheck: none
+  perf_budget: ""
+  compliance: []
+
+verify:
+  install: pip install -e ".[proxy,memory,server]"
+  build: python -m build
+  format: ruff format --check src tests scripts
+  lint: ruff check src tests scripts
+  typecheck: ""
+  test: PYTHONPATH=src python -m unittest discover -s tests -t .
+  run: agent-gateway --check
+  audit: pip-audit
+
+dev:
+  editors: []
+  toolchain_managers: []
+  task_entry: ""
+  containerized: false
+  env_files: false
+
+target:
+  platforms:
+    - macOS（宿主内运行）
+    - Linux（可独立部署）
+  versions:
+    python: ">=3.12"
+  constraints:
+    - 需在离线环境可用（随 macOS app 分发 wheel）
+    - 不写入签名包内文件
+
+governance:
+  openness: private
+  license: internal
+  contribution: direct
+  security_contact: ""
+
+supply_chain:
+  dependency_updates: manual
+  vulnerability_scan: pip-audit
+  license_audit: false
+  sbom: false
+
+agent:
+  platform: claude-code
+  rules_scope: core+type
