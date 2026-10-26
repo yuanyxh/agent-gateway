@@ -1,0 +1,11 @@
+{
+  "package": "agent-gateway",
+  "entries": {
+    "server": "agent_gateway.services.mcp.server",
+    "tokenProxy": "agent_gateway.services.proxy.token_proxy",
+    "summarize": "agent_gateway.services.summarize.summarize",
+    "astExtractor": "agent_gateway.scanner.ast_extractor",
+    "knowledgeRefill": "agent_gateway.services.knowledge.knowledge_refill",
+    "rssDaily": "agent_gateway.services.rss.rss_daily"
+  }
+}
