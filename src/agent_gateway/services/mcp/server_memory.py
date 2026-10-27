@@ -13,6 +13,7 @@ import hashlib
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta
 
 from agent_gateway.llm import client as llm_client
@@ -36,6 +37,12 @@ from agent_gateway.services.mcp.server_constants import (
     DEFAULT_TIMEOUT,
     DEFAULT_USER_ID,
     DELETED_AT_FIELD,
+    EPISODE_EXPAND_DECAY,
+    EPISODE_EXPAND_PER_GROUP,
+    EPISODE_EXPAND_TOP_N,
+    EPISODE_FIELD,
+    EPISODE_INHERIT_SIMILARITY,
+    EPISODE_MAX_GROUP_SIZE,
     ERR_HOT_LAYER_NOT_READY,
     ERR_MEMORY_IDS_EMPTY,
     ERR_VALUE_INVALID,
@@ -363,7 +370,80 @@ def _project_hot_result(r: dict) -> dict:
         kept = {k: meta[k] for k in _HOT_META_KEYS if k in meta}
         if kept:
             out["metadata"] = kept
+        episode = str(meta.get(EPISODE_FIELD) or "").strip()
+        if episode:
+            out["episode_id"] = episode
     return out
+
+
+def _dense_vector(raw) -> list[float] | None:
+    """Qdrant keeps the dense vector under ''; the BM25 one is a sparse dict."""
+    if isinstance(raw, dict):
+        raw = raw.get("") or raw.get("dense")
+    return raw or None
+
+
+def _dot(a, b) -> float:
+    return sum(x * y for x, y in zip(a, b))
+
+
+def _expand_hot_episodes(results: list[dict], query_vec=None) -> list[dict]:
+    """Pull same-group memories for the top hits, ranked by relevance to the query."""
+    seeds = [r for r in results if r.get("episode_id")][:EPISODE_EXPAND_TOP_N]
+    if not seeds or not get_hot_memory():
+        return []
+    known = {r.get("id") for r in results}
+    vector_store = get_hot_memory().vector_store
+    expanded = []
+    for seed in seeds:
+        episode_id = str(seed.get("episode_id") or "")
+        try:
+            points, _ = vector_store.client.scroll(
+                collection_name=vector_store.collection_name,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key=EPISODE_FIELD,
+                            match=MatchValue(value=episode_id),
+                        )
+                    ]
+                ),
+                limit=EPISODE_EXPAND_PER_GROUP + len(known),
+                with_payload=True,
+                with_vectors=query_vec is not None,
+            )
+        except Exception as e:
+            logger.warning(f"Episode expansion failed: {e}")
+            continue
+        candidates = []
+        for point in points:
+            payload = point.payload or {}
+            if point.id in known or payload.get("archived"):
+                continue
+            if _memory_status(payload) != STATUS_ACTIVE:
+                continue
+            vector = _dense_vector(getattr(point, "vector", None))
+            if query_vec is not None and vector:
+                score = _dot(query_vec, vector)
+            else:
+                score = float(seed.get("score", 0))
+            candidates.append((score, point, payload))
+        candidates.sort(key=lambda c: -c[0])
+        seed_score = float(seed.get("score", 0))
+        for _, point, payload in candidates[:EPISODE_EXPAND_PER_GROUP]:
+            known.add(point.id)
+            expanded.append(
+                {
+                    "id": point.id,
+                    "layer": "hot",
+                    "content": payload.get("data", ""),
+                    "score": seed_score * EPISODE_EXPAND_DECAY,
+                    "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
+                    "episode_id": episode_id,
+                    "expanded": True,
+                }
+            )
+    return expanded
 
 
 def _heat_sort_key(item: dict) -> float:
@@ -404,11 +484,64 @@ def _update_cold_heat(point_id: str) -> None:
         pass
 
 
+def _new_episode_id() -> str:
+    return f"ep_{datetime.now():%Y%m%d}_{uuid.uuid4().hex[:8]}"
+
+
+def _episode_size(episode_id: str) -> int:
+    """Active member count; a failed count returns 0 so writes are never blocked."""
+    if not episode_id or not get_hot_memory():
+        return 0
+    vector_store = get_hot_memory().vector_store
+    try:
+        result = vector_store.client.count(
+            collection_name=vector_store.collection_name,
+            count_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key=EPISODE_FIELD,
+                        match=MatchValue(value=episode_id),
+                    )
+                ],
+                must_not=[
+                    FieldCondition(
+                        key=STATUS_FIELD,
+                        match=MatchAny(any=[STATUS_SUPERSEDED, STATUS_DELETED]),
+                    ),
+                    FieldCondition(key="archived", match=MatchValue(value=True)),
+                ],
+            ),
+            exact=False,
+        )
+        return int(result.count)
+    except Exception as e:
+        logger.warning(f"Episode size check failed: {e}")
+        return 0
+
+
+def _inherit_episode_id(supersedes: list[str], similar: list[dict]) -> str:
+    """Reuse the target's group, then the closest memory above the inherit threshold."""
+    for sid in supersedes:
+        try:
+            meta = (get_hot_memory().get(sid) or {}).get("metadata") or {}
+        except Exception:
+            meta = {}
+        inherited = str(meta.get(EPISODE_FIELD) or "").strip()
+        if inherited and _episode_size(inherited) < EPISODE_MAX_GROUP_SIZE:
+            return inherited
+    if similar and similar[0].get("score", 0) >= EPISODE_INHERIT_SIMILARITY:
+        inherited = str(similar[0].get("episode_id") or "").strip()
+        if inherited and _episode_size(inherited) < EPISODE_MAX_GROUP_SIZE:
+            return inherited
+    return _new_episode_id()
+
+
 def _build_metadata(src: dict, now_iso: str) -> dict:
     return {
         "agent_id": src.get("agent_id", "unknown"),
         "visibility": src.get("visibility", "all"),
         "tags": src.get("tags", []),
+        EPISODE_FIELD: str(src.get("episode_id") or ""),
         "confidence": src.get("confidence", 1.0),
         "heat_score": DEFAULT_HEAT_SCORE,
         "last_accessed_at": now_iso,
@@ -466,6 +599,9 @@ def _active_similar(content: str) -> list[dict]:
                 "id": r["id"],
                 "content": str(r.get("memory") or r.get("content") or "")[:120],
                 "score": round(float(score), 3),
+                "episode_id": str(
+                    (r.get("metadata") or {}).get(EPISODE_FIELD) or ""
+                ).strip(),
             }
         )
     return similar
@@ -553,6 +689,13 @@ def _write_memory(item: dict, now_iso: str) -> dict:
     # Idempotent write: the same fact is already active, so return its id instead of
     # creating a near-duplicate. Explicit supersede targets are still retired.
     if top and top["score"] >= DEDUPE_EXACT_SIMILARITY:
+        requested = str(item.get("episode_id") or "").strip()
+        if requested and not top.get("episode_id"):
+            old = get_hot_memory().get(top["id"]) or {}
+            meta = dict(old.get("metadata") or {})
+            meta[EPISODE_FIELD] = requested
+            _update_metadata(top["id"], meta)
+            top["episode_id"] = requested
         # Rewriting the same fact with supersedes pointing at itself must not
         # self-retire the only active copy.
         targets = [sid for sid in supersedes if sid != top["id"]]
@@ -563,12 +706,15 @@ def _write_memory(item: dict, now_iso: str) -> dict:
             "memory_id": top["id"],
             "layer": "hot",
             "deduped": True,
+            "episode_id": top.get("episode_id") or "",
             "superseded": superseded,
             "warnings": [f"supersede target not found: {sid}" for sid in failed],
             "similar": [s for s in similar if s["score"] >= DEDUPE_NOTICE_SIMILARITY],
         }
 
     metadata = _build_metadata(item, now_iso)
+    if not metadata[EPISODE_FIELD]:
+        metadata[EPISODE_FIELD] = _inherit_episode_id(supersedes, similar)
     revision = 1
     for sid in supersedes:
         try:
@@ -600,6 +746,7 @@ def _write_memory(item: dict, now_iso: str) -> dict:
         "memory_id": memory_id,
         "layer": "hot",
         "deduped": False,
+        "episode_id": metadata[EPISODE_FIELD],
         "superseded": superseded,
         "warnings": [f"supersede target not found: {sid}" for sid in failed],
         "similar": [s for s in similar if s["score"] >= DEDUPE_NOTICE_SIMILARITY],
@@ -988,6 +1135,10 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     )
     results.extend(cold)
     results.sort(key=_heat_sort_key, reverse=True)
+    extended = _expand_hot_episodes(results[:limit], embed_query(query))
+    if extended:
+        results.extend(extended)
+        results.sort(key=_heat_sort_key, reverse=True)
     # Per-layer counts must use the same basis as `count` — both taken from the
     # truncated list. Previously they were counted over the full `results`, and the sum
     # of the three could reach twice `count` (measured 10+1+9 for count=10), leading the

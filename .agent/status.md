@@ -9,6 +9,7 @@
 | 任务 | 状态 | 阻塞 |
 | --- | --- | --- |
 | G2 宿主接入 | wheel 分发与模块启动已在 utility 侧验证；等本仓改动提交 | — |
+| 记忆 episode_id 分组 | 阶段 1/2 完成并线上验证；cold 扩展未开始 | — |
 
 ## 已完成
 
@@ -34,6 +35,11 @@
 | 2026-10-26 | `ruff format --check src tests scripts` | 通过（153 文件） |
 | 2026-10-26 | `ruff check src tests scripts` | 通过（0 条） |
 | 2026-10-26 | `.venv/bin/python -m unittest discover -s tests -t .` | 通过（128，1 skipped） |
+| 2026-10-28 | `.venv/bin/python -m unittest discover -s tests -t .` | 通过（145，1 skipped） |
+| 2026-10-28 | `ruff format --check` / `ruff check` | 通过（158 文件 / 0 条） |
+| 2026-10-28 | `scripts/backfill_episode.py` 副本实测 | 写回 4199 条 / 3421 组 / 回滚清空 4199 条 |
+| 2026-10-28 | 线上回填与召回复验 | 回填 4205 条 / 3426 组；RSS query 返回 3 条 expanded，同组 ep_20260906_1226 |
+| 2026-10-28 | `package-utility.sh` | Utility-1.0.153 打包成功，bundle wheel 含全部修复 |
 | 2026-10-26 | `.venv/bin/python -m build` | 通过（wheel + sdist） |
 | 2026-10-26 | `UTILITY_DATA_DIR=<临时根> agent-gateway --check` | 通过 |
 

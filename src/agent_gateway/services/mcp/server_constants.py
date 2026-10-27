@@ -78,6 +78,20 @@ DEDUPE_TOP_K = 3
 DEDUPE_EXACT_SIMILARITY = 0.97
 DEDUPE_NOTICE_SIMILARITY = 0.90
 
+# Group key shared by related memories. The inherit threshold sits below dedupe so
+# related facts join one group without being merged into a single memory.
+EPISODE_FIELD = "episode_id"
+EPISODE_INHERIT_SIMILARITY = 0.80
+
+# Recall-time expansion: only the top hits seed a group, and expanded rows rank
+# behind the row that pulled them in.
+EPISODE_EXPAND_TOP_N = 3
+EPISODE_EXPAND_PER_GROUP = 3
+EPISODE_EXPAND_DECAY = 0.98
+# Transitive inheritance rolls same-project memories into one giant group; the cap
+# opens a fresh group instead of letting a group swallow the whole project.
+EPISODE_MAX_GROUP_SIZE = 8
+
 # Retention: superseded entries are physically removed sooner than active ones.
 SUPERSEDED_RETENTION_DAYS = 30
 

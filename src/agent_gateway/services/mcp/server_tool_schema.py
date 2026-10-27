@@ -80,6 +80,10 @@ def build_tools() -> list[Tool]:
                     "confidence": {"type": "number", "default": 1.0},
                     "supersedes": {"type": "array", "items": {"type": "string"}},
                     "disputed_by": {"type": "array", "items": {"type": "string"}},
+                    "episode_id": {
+                        "type": "string",
+                        "description": "Optional group key; memories sharing it are recalled together.",
+                    },
                 },
                 "required": ["content"],
             },
@@ -111,6 +115,10 @@ def build_tools() -> list[Tool]:
                                 "supersedes": {
                                     "type": "array",
                                     "items": {"type": "string"},
+                                },
+                                "episode_id": {
+                                    "type": "string",
+                                    "description": "Optional group key; memories sharing it are recalled together.",
                                 },
                             },
                             "required": ["content"],
