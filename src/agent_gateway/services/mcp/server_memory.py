@@ -738,6 +738,7 @@ def set_memory_status(
             meta[PROCESSED_FIELD] = flags & ~PROCESSED_RETIRED_MASK
             meta[SUPERSEDED_BY_FIELD] = ""
             meta[SUPERSEDED_AT_FIELD] = ""
+            meta[DELETED_AT_FIELD] = ""
         else:
             meta[PROCESSED_FIELD] = flags | PROCESSED_RETIRED_MASK
             if status == STATUS_SUPERSEDED:

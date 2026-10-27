@@ -25,6 +25,7 @@ os.environ["MEM0_TELEMETRY"] = "False"
 import uuid
 import time
 import asyncio
+import logging
 import anyio
 from datetime import datetime, timedelta
 
@@ -117,6 +118,12 @@ from agent_gateway.services.search import web_search
 from agent_gateway.core.log_utils import setup_logging
 
 logger = setup_logging("server")
+
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.WARNING)
+for _handler in logger.handlers:
+    _root_logger.addHandler(_handler)
+logger.propagate = False
 
 
 def _cleanup_qdrant_locks() -> None:
