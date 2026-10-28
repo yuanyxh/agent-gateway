@@ -29,11 +29,11 @@
   宿主按模块名启动：`python -c "import sys; from <module> import main; sys.exit(main())"`，
   **没有脚本路径**，所以返回码要能通过 `sys.exit(main())` 传出去（int 返回值 = 退出码）
 - 当前入口：`services.mcp.server` / `services.proxy.token_proxy` / `services.summarize.summarize` /
-  `services.knowledge.knowledge_refill` / `services.rss.rss_daily` / `scanner.ast_extractor`
+  `services.knowledge.knowledge_refill` / `scanner.ast_extractor`
 - 宿主随包分发本仓 wheel，首启装进 venv；依赖只从 wheel extras（`proxy,memory,server`）来，不另发 `requirements.txt`
 - 提示词与 `scanner/ast-js` 必须留在包内（wheel 里），宿主读的是打包时拷出的副本
-- `core/l10n_catalog.py` 由 utility 仓 `scripts/gen-l10n.py --python-out <本仓路径>` 生成，
-  **生成后在本仓跑 `ruff format`**（生成器不做行宽折行）；不要在两侧各写一份生成逻辑
+- i18n 语言包自持：`src/agent_gateway/locales/<lang>.json`（扁平 `{key: text}`），
+  `core/l10n.py` 启动时加载；不再由宿主生成，两仓各自维护自己的语言包
 
 ## 加载策略
 

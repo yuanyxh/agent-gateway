@@ -22,6 +22,12 @@
 - 2026-10-26 lint 基线清零（641 → 0）：删除未使用导入，兼容再导出模块加 per-file-ignores，CI lint 转阻塞门
 - 2026-10-26 宿主接入契约落地：`server.py` 的 `async main` 拆成同步 `main()` + `async serve()`（模块名启动 `main()` 原来只拿到未 await 的协程，进程秒退）；`scripts/server.py` 同步
 - 2026-10-26 迁入两个检查脚本 `scripts/check-web-search.py`、`scripts/check-search-cache-invariants.py`（import 改 `agent_gateway`，E402 按文件豁免）
+- 2026-10-28 解耦 P1-a：新增通用 `summarize` MCP 工具（单次文本总结，复用 `llm/client`，输入上限 50k 字符）；契约扫描登记 `_json_env`，导出含 `GATEWAY_SEARCH_*`
+- 2026-10-28 解耦 P0b：新增 `services/search/engine_config.py`，引擎 spec/顺序/限速数据化（内置默认 + `search.*` 配置 + `GATEWAY_SEARCH_*` env）；Google 改为 `search.providers.google.command` 注入，删除 `utility_binary()` 路径嗅探与 `UTILITY_BIN`；无 provider 时 Google 自动从顺序中移除
+- 2026-10-28 解耦 P0a：新增 `core/paths.py`（`GATEWAY_HOME`/`GATEWAY_CACHE`），`GATEWAY_CONFIG` 指定配置文件，data_dir/日志/agent_debug/fastembed 统一走 paths；过渡期兼容 `UTILITY_DATA_DIR` 与旧 cache 目录
+- 2026-10-28 解耦 P2：i18n 语言包自持（`src/agent_gateway/locales/{en,zh-Hans}.json`，57 键），`core/l10n.py` 启动加载 JSON，删除生成的 `core/l10n_catalog.py`；宿主 `gen-l10n.py` 去掉 `--python-out`，`check-l10n-contract.py` 只校验 Swift 侧，宿主 JSON 移除 57 个 mcp/proxy 键（203→146）
+- 2026-10-28 解耦 P1：RSS 日报编排迁宿主（utility `RSSDigestService` + `rss --digest`），删除 `services/rss/*`、`scripts/rss_daily.py`、`rssDaily` 入口、`RSS_DAILY_CONFIG` env 与 rss 提示词；新增 REST `/api/summarize`、`/api/read`、`/api/llm/chat`，宿主经 HTTP 调用通用能力、自持业务提示词
+- 2026-10-28 抓页噪声治理：`article.py` 接入 trafilatura（空/短结果回退 `html_to_markdown`），websearch 丢弃 <200 字符页面、默认 `fetch_top=0`，boilerplate 规则补 related/recommend/rank 类名；结果排序对空/短摘要（<20 字符）降权 0.15
 
 ## 下一步
 
@@ -40,6 +46,11 @@
 | 2026-10-28 | `scripts/backfill_episode.py` 副本实测 | 写回 4199 条 / 3421 组 / 回滚清空 4199 条 |
 | 2026-10-28 | 线上回填与召回复验 | 回填 4205 条 / 3426 组；RSS query 返回 3 条 expanded，同组 ep_20260906_1226 |
 | 2026-10-28 | `package-utility.sh` | Utility-1.0.153 打包成功，bundle wheel 含全部修复 |
+| 2026-10-28 | `.venv/bin/python -m unittest discover -s tests -t .` | 通过（150，1 skipped） |
+| 2026-10-28 | 删除 rss 后 `ruff format --check` / `ruff check` / `unittest` | 通过（153 文件 / 0 条 / 160 例，1 skipped） |
+| 2026-10-28 | `UTILITY_DATA_DIR=~/.config/utility agent-gateway --check` | 通过 |
+| 2026-10-28 | `agent-gateway --export-contracts` | entries 5 项、env 无 RSS_DAILY_CONFIG |
+| 2026-10-28 | 真实 8 页 trafilatura 提取（临时 venv） | 8/8 成功，链接占比全 0%，1 页尾部残留推荐 |
 | 2026-10-26 | `.venv/bin/python -m build` | 通过（wheel + sdist） |
 | 2026-10-26 | `UTILITY_DATA_DIR=<临时根> agent-gateway --check` | 通过 |
 

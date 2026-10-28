@@ -13,6 +13,8 @@
 | 2026-10-26 | D3 | 契约以 `contracts/*.json` 导出，跨仓读文件校验 | Agent | 跨仓后无法再同时扫描 Swift 与 Python 源码 | 恢复源码扫描需合并仓库 |
 | 2026-10-26 | D3 | lint 暂为报告态，不阻塞 CI | Agent | 迁移代码有 642 条历史告警，基座阶段不做大规模清理 | 清理完成后移除 `continue-on-error` |
 | 2026-10-26 | D3 | lint 基线清零并转为阻塞门：自动删除未使用导入；两个兼容再导出模块加 per-file-ignores；E402 由移动 logger 赋值解决；测试注入点保留 noqa | Agent | `ruff check` 0 条、128 测试通过；再导出模块 docstring 明示用途 | 回退本提交并恢复 `continue-on-error` |
+| 2026-10-28 | D1 | i18n 两仓各自自持：gateway 用 `locales/<lang>.json` 运行时加载，宿主不再生成也不再校验 Python 语言包 | 用户 | 框架不依赖宿主；生成器跨仓耦合是 P2 的剩余问题 | 恢复 `gen-l10n.py --python-out` 与宿主 contract 的 `--python-root` |
+| 2026-10-28 | D1 | RSS 日报业务编排归宿主（utility `RSSDigestService`），gateway 只保留 `/api/summarize`、`/api/read`、`/api/llm/chat` 通用能力 | 用户 | utility 是业务层、gateway 是框架；提示词与调度属业务 | 恢复 `services/rss` 与 `rssDaily` 入口（废纸篓有原文件） |
 
 ## 记录规则
 
