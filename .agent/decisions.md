@@ -15,6 +15,13 @@
 | 2026-10-26 | D3 | lint 基线清零并转为阻塞门：自动删除未使用导入；两个兼容再导出模块加 per-file-ignores；E402 由移动 logger 赋值解决；测试注入点保留 noqa | Agent | `ruff check` 0 条、128 测试通过；再导出模块 docstring 明示用途 | 回退本提交并恢复 `continue-on-error` |
 | 2026-10-28 | D1 | i18n 两仓各自自持：gateway 用 `locales/<lang>.json` 运行时加载，宿主不再生成也不再校验 Python 语言包 | 用户 | 框架不依赖宿主；生成器跨仓耦合是 P2 的剩余问题 | 恢复 `gen-l10n.py --python-out` 与宿主 contract 的 `--python-root` |
 | 2026-10-28 | D1 | RSS 日报业务编排归宿主（utility `RSSDigestService`），gateway 只保留 `/api/summarize`、`/api/read`、`/api/llm/chat` 通用能力 | 用户 | utility 是业务层、gateway 是框架；提示词与调度属业务 | 恢复 `services/rss` 与 `rssDaily` 入口（废纸篓有原文件） |
+| 2026-10-28 | D1 | 冷层历史 774 条 `source_memory_ids` 不回填，登记为不可恢复限制 | 用户 | 全部 created_at ≤ 2026-10-22；热层 processed 在 10-23 批量迁移抹平消费日期，无法按日反推；伪造 id 会错误传播 stale | 若找到历史 consume 日志可补 |
+
+| 2026-10-28 | D3 | 冷层摘要按来源热层记忆的多数派 episode 继承分组（显式优先，无来源则新建，查源上限 200） | Agent | 摘要由多条热层记忆汇总，单条 episode 无法表达；多数派与写入时的消费集合一致 | 清空冷层 `episode_id` 即可回退 |
+| 2026-10-28 | D3 | `EPISODE_INHERIT_SIMILARITY` 保持 0.80，不下调 | Agent | 4260 条离线实验：0.75 仅把多成员组从 418 增至 590，单条组仍 79.8%，新增组相关性未验证；扩展宁可少而准 | 改常量后重跑 `scripts/backfill_episode.py` 可重新分组 |
+
+| 2026-10-28 | D3 | 推翻冷层「多数派」继承：改按摘要向量最相似的源记忆继承 `episode_id`，无向量时退化多数派 | Agent | 实测 5 条跨主题摘要共享同一 episode，扩展带出无关条目；摘要是一对多汇总，多数派无法表达主题 | 恢复多数派实现即可回退 |
+| 2026-10-28 | D3 | 冷层继承增加 0.45 相似度下限，低于则新建组 | Agent | 副本模拟 5 条样本：最高分 0.745/0.648/0.619/0.557/0.359，0.45 是自然分界；弱继承会误扩无关条目 | 改回无下限或调整常量 |
 
 ## 记录规则
 
