@@ -76,6 +76,7 @@ from agent_gateway.services.mcp.server_search import (
 from agent_gateway.services.mcp.server_archive import archive_scheduler
 from agent_gateway.services.mcp.server_memory import (
     HANDLERS as MEMORY_HANDLERS,
+    _cold_episode_id,
     contradiction_check_cold,
     ensure_hot_memory,
     set_memory_status,
@@ -98,6 +99,7 @@ from agent_gateway.services.mcp.server_constants import (
     COLD_SOURCE_MEMORY_IDS_FIELD,
     DEFAULT_HEAT_SCORE,
     DEFAULT_USER_ID,
+    EPISODE_FIELD,
     ERR_BIT_VALUE_NOT_INT,
     ERR_HOT_LAYER_NOT_READY,
     ERR_MEMORY_IDS_EMPTY,
@@ -532,6 +534,8 @@ async def serve():
         now_iso = datetime.now().isoformat()
         vec = list(emb.embed(content))[0].tolist()
         point_id = str(uuid.uuid4())
+        source_ids = body.get(COLD_SOURCE_MEMORY_IDS_FIELD, [])
+        episode_id = _cold_episode_id(source_ids, body.get(EPISODE_FIELD, ""), vec)
         get_qdrant().upsert(
             collection_name=COLD_COLLECTION,
             points=[
@@ -551,9 +555,8 @@ async def serve():
                         "tags": body.get("tags", []),
                         "user_id": DEFAULT_USER_ID,
                         "confidence": body.get("confidence", 1.0),
-                        COLD_SOURCE_MEMORY_IDS_FIELD: body.get(
-                            COLD_SOURCE_MEMORY_IDS_FIELD, []
-                        ),
+                        COLD_SOURCE_MEMORY_IDS_FIELD: source_ids,
+                        EPISODE_FIELD: episode_id,
                     },
                 )
             ],

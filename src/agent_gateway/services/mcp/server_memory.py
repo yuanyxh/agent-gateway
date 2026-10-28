@@ -37,6 +37,8 @@ from agent_gateway.services.mcp.server_constants import (
     DEFAULT_TIMEOUT,
     DEFAULT_USER_ID,
     DELETED_AT_FIELD,
+    EPISODE_COLD_LOOKUP_LIMIT,
+    EPISODE_COLD_MIN_SIMILARITY,
     EPISODE_EXPAND_DECAY,
     EPISODE_EXPAND_PER_GROUP,
     EPISODE_EXPAND_TOP_N,
@@ -280,6 +282,7 @@ def search_cold_layer(
                         "heat_score": h.payload.get("heat_score", DEFAULT_HEAT_SCORE),
                         "access_count": h.payload.get("access_count", 0),
                         "last_accessed_at": h.payload.get("last_accessed_at", ""),
+                        "episode_id": h.payload.get(EPISODE_FIELD, ""),
                     }
                 )
                 _update_cold_heat(h.id)
@@ -446,6 +449,68 @@ def _expand_hot_episodes(results: list[dict], query_vec=None) -> list[dict]:
     return expanded
 
 
+def _expand_cold_episodes(results: list[dict], query_vec=None) -> list[dict]:
+    """Pull same-group cold summaries for the top cold hits."""
+    seeds = [r for r in results if r.get("layer") == "cold" and r.get("episode_id")][
+        :EPISODE_EXPAND_TOP_N
+    ]
+    if not seeds or not get_qdrant():
+        return []
+    known = {r.get("id") for r in results}
+    expanded = []
+    for seed in seeds:
+        episode_id = str(seed.get("episode_id") or "")
+        try:
+            points, _ = get_qdrant().scroll(
+                collection_name=COLD_COLLECTION,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key=EPISODE_FIELD,
+                            match=MatchValue(value=episode_id),
+                        )
+                    ]
+                ),
+                limit=EPISODE_EXPAND_PER_GROUP + len(known),
+                with_payload=True,
+                with_vectors=query_vec is not None,
+            )
+        except Exception as e:
+            logger.warning(f"Cold episode expansion failed: {e}")
+            continue
+        candidates = []
+        for point in points:
+            payload = point.payload or {}
+            if point.id in known or payload.get("archived"):
+                continue
+            if payload.get(COLD_STALE_FIELD):
+                continue
+            vector = _dense_vector(getattr(point, "vector", None))
+            if query_vec is not None and vector:
+                score = _dot(query_vec, vector)
+            else:
+                score = float(seed.get("score", 0))
+            candidates.append((score, point, payload))
+        candidates.sort(key=lambda c: -c[0])
+        seed_score = float(seed.get("score", 0))
+        for _, point, payload in candidates[:EPISODE_EXPAND_PER_GROUP]:
+            known.add(point.id)
+            expanded.append(
+                {
+                    "id": point.id,
+                    "layer": "cold",
+                    "content": payload.get("content", ""),
+                    "source_file": payload.get("source_file", ""),
+                    "created_at": payload.get("created_at", ""),
+                    "score": seed_score * EPISODE_EXPAND_DECAY,
+                    "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
+                    "episode_id": episode_id,
+                    "expanded": True,
+                }
+            )
+    return expanded
+
+
 def _heat_sort_key(item: dict) -> float:
     score = item.get("score", 0)
     heat = item.get("heat_score", (item.get("metadata") or {}).get("heat_score", 0.5))
@@ -534,6 +599,49 @@ def _inherit_episode_id(supersedes: list[str], similar: list[dict]) -> str:
         if inherited and _episode_size(inherited) < EPISODE_MAX_GROUP_SIZE:
             return inherited
     return _new_episode_id()
+
+
+def _cold_episode_id(
+    source_memory_ids: list, explicit: str = "", content_vec: list | None = None
+) -> str:
+    """Closest source memory's episode; majority is the vector-less fallback."""
+    explicit = str(explicit or "").strip()
+    if explicit:
+        return explicit
+    hot = get_hot_memory()
+    if not source_memory_ids or hot is None:
+        return _new_episode_id()
+    try:
+        points = hot.vector_store.client.retrieve(
+            collection_name=hot.vector_store.collection_name,
+            ids=list(source_memory_ids)[:EPISODE_COLD_LOOKUP_LIMIT],
+            with_payload=True,
+            with_vectors=content_vec is not None,
+        )
+    except Exception as e:
+        logger.warning(f"Cold episode lookup failed: {e}")
+        return _new_episode_id()
+    tally = {}
+    closest, closest_score = "", -1.0
+    for point in points:
+        payload = point.payload or {}
+        episode_id = str(payload.get(EPISODE_FIELD) or "").strip()
+        if not episode_id:
+            continue
+        tally[episode_id] = tally.get(episode_id, 0) + 1
+        if content_vec is not None:
+            vector = _dense_vector(getattr(point, "vector", None))
+            if vector:
+                score = _dot(content_vec, vector)
+                if score > closest_score:
+                    closest, closest_score = episode_id, score
+    if content_vec is not None:
+        if closest and closest_score >= EPISODE_COLD_MIN_SIMILARITY:
+            return closest
+        return _new_episode_id()
+    if not tally:
+        return _new_episode_id()
+    return max(tally, key=tally.get)
 
 
 def _build_metadata(src: dict, now_iso: str) -> dict:
@@ -1135,7 +1243,9 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     )
     results.extend(cold)
     results.sort(key=_heat_sort_key, reverse=True)
-    extended = _expand_hot_episodes(results[:limit], embed_query(query))
+    query_vec = embed_query(query)
+    extended = _expand_hot_episodes(results[:limit], query_vec)
+    extended += _expand_cold_episodes(results[:limit], query_vec)
     if extended:
         results.extend(extended)
         results.sort(key=_heat_sort_key, reverse=True)

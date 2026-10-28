@@ -91,6 +91,10 @@ EPISODE_EXPAND_DECAY = 0.98
 # Transitive inheritance rolls same-project memories into one giant group; the cap
 # opens a fresh group instead of letting a group swallow the whole project.
 EPISODE_MAX_GROUP_SIZE = 8
+# Cap the source-memory lookup when a cold summary inherits its group.
+EPISODE_COLD_LOOKUP_LIMIT = 200
+# A summary barely related to any source memory starts its own group.
+EPISODE_COLD_MIN_SIMILARITY = 0.45
 
 # Retention: superseded entries are physically removed sooner than active ones.
 SUPERSEDED_RETENTION_DAYS = 30

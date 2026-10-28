@@ -189,5 +189,111 @@ class EpisodeExpansionTest(unittest.TestCase):
         self.assertEqual(result, "ep_open")
 
 
+class ColdEpisodeTest(unittest.TestCase):
+    def test_explicit_episode_wins(self):
+        self.assertEqual(
+            server_memory._cold_episode_id(["a"], "ep_explicit"), "ep_explicit"
+        )
+
+    def test_no_sources_creates_new(self):
+        with mock.patch.object(server_memory, "get_hot_memory", return_value=None):
+            result = server_memory._cold_episode_id([])
+
+        self.assertRegex(result, EPISODE_RE)
+
+    def test_inherits_closest_source_episode(self):
+        hot = mock.Mock()
+        hot.vector_store.client.retrieve.return_value = [
+            _point("1", vector=[1.0, 0.0], episode_id="ep_a"),
+            _point("2", vector=[0.0, 1.0], episode_id="ep_b"),
+        ]
+
+        with mock.patch.object(server_memory, "get_hot_memory", return_value=hot):
+            result = server_memory._cold_episode_id(["1", "2"], content_vec=[0.1, 0.9])
+
+        self.assertEqual(result, "ep_b")
+
+    def test_weak_match_opens_new_episode(self):
+        hot = mock.Mock()
+        hot.vector_store.client.retrieve.return_value = [
+            _point("1", vector=[1.0, 0.0], episode_id="ep_a"),
+        ]
+
+        with mock.patch.object(server_memory, "get_hot_memory", return_value=hot):
+            result = server_memory._cold_episode_id(["1"], content_vec=[0.1, 0.99])
+
+        self.assertRegex(result, EPISODE_RE)
+
+    def test_majority_is_fallback_without_vector(self):
+        hot = mock.Mock()
+        hot.vector_store.client.retrieve.return_value = [
+            _point("1", episode_id="ep_a"),
+            _point("2", episode_id="ep_a"),
+            _point("3", episode_id="ep_b"),
+        ]
+
+        with mock.patch.object(server_memory, "get_hot_memory", return_value=hot):
+            result = server_memory._cold_episode_id(["1", "2", "3"])
+
+        self.assertEqual(result, "ep_a")
+
+    def test_lookup_failure_creates_new(self):
+        hot = mock.Mock()
+        hot.vector_store.client.retrieve.side_effect = RuntimeError("boom")
+
+        with mock.patch.object(server_memory, "get_hot_memory", return_value=hot):
+            result = server_memory._cold_episode_id(["1"])
+
+        self.assertRegex(result, EPISODE_RE)
+
+
+class FakeColdQdrant:
+    def __init__(self, points):
+        self.points = points
+
+    def scroll(self, **kwargs):
+        return (self.points, None)
+
+
+class ColdEpisodeExpansionTest(unittest.TestCase):
+    def test_expands_same_group(self):
+        seed = {"id": "c1", "score": 0.8, "episode_id": "ep_c", "layer": "cold"}
+        points = [_point("c1", content="seed"), _point("c2", content="sibling")]
+
+        with mock.patch.object(
+            server_memory, "get_qdrant", return_value=FakeColdQdrant(points)
+        ):
+            expanded = server_memory._expand_cold_episodes([seed])
+
+        self.assertEqual([row["id"] for row in expanded], ["c2"])
+        self.assertEqual(expanded[0]["layer"], "cold")
+        self.assertAlmostEqual(expanded[0]["score"], 0.8 * 0.98)
+        self.assertEqual(expanded[0]["episode_id"], "ep_c")
+
+    def test_skips_stale_and_archived(self):
+        seed = {"id": "c1", "score": 1.0, "episode_id": "ep_c", "layer": "cold"}
+        points = [
+            _point("c2", content="x", stale=True),
+            _point("c3", content="y", archived=True),
+        ]
+
+        with mock.patch.object(
+            server_memory, "get_qdrant", return_value=FakeColdQdrant(points)
+        ):
+            expanded = server_memory._expand_cold_episodes([seed])
+
+        self.assertEqual(expanded, [])
+
+    def test_non_cold_seed_ignored(self):
+        seed = {"id": "h1", "score": 1.0, "episode_id": "ep_h", "layer": "hot"}
+
+        with mock.patch.object(
+            server_memory, "get_qdrant", return_value=FakeColdQdrant([])
+        ):
+            expanded = server_memory._expand_cold_episodes([seed])
+
+        self.assertEqual(expanded, [])
+
+
 if __name__ == "__main__":
     unittest.main()
