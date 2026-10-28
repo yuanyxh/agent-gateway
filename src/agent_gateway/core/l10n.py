@@ -1,9 +1,9 @@
 """Shared i18n runtime for the Python side.
 
-The catalog is generated from `Sources/Resources/<lang>.json` (the same files the Swift app
-uses). Keys are namespaced; only `mcp.*` and `proxy.*` reach this runtime. The language comes
-from `config.ui_language()` ← `UTILITY_LANG` ← Swift `general.language`, and is normalised by
-the same rule as `L10n.resolvedLanguage` so both sides agree on "which language is active".
+The catalog is owned by this package: `agent_gateway/locales/<lang>.json`, one flat
+`{key: text}` map per language. Keys are namespaced (`mcp.*`, `proxy.*`). The language comes
+from `config.ui_language()` ← `UTILITY_LANG` ← Swift `general.language`, normalised by the same
+rule as `L10n.resolvedLanguage` so both sides agree on "which language is active".
 
 Placeholders use the shared grammar: `{name}` (string), `{name:d}` (int), `{name:.Nf}` (double).
 Replacement is a single pass — a substituted value containing `{other}` is not expanded again.
@@ -11,9 +11,11 @@ Replacement is a single pass — a substituted value containing `{other}` is not
 
 from __future__ import annotations
 
+import json
 import re
+from importlib.resources import files
+from pathlib import Path
 
-from agent_gateway.core import l10n_catalog
 from agent_gateway.core.config import ui_language
 from agent_gateway.core.log_utils import setup_logging
 
@@ -21,7 +23,24 @@ logger = setup_logging("l10n")
 
 BASELINE_LANG = "zh-Hans"
 
-AVAILABLE_LANGUAGES: tuple[str, ...] = tuple(l10n_catalog.AVAILABLE_LANGUAGES)
+
+def _load_catalog() -> tuple[dict[str, dict[str, str]], tuple[str, ...]]:
+    base = Path(str(files("agent_gateway") / "locales"))
+    catalog: dict[str, dict[str, str]] = {}
+    languages: list[str] = []
+    for path in sorted(base.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"{path.name}: locale file must contain a JSON object")
+        languages.append(path.stem)
+        for key, text in data.items():
+            catalog.setdefault(key, {})[path.stem] = str(text)
+    if not languages:
+        raise FileNotFoundError(f"no locale files under {base}")
+    return catalog, tuple(languages)
+
+
+CATALOG, AVAILABLE_LANGUAGES = _load_catalog()
 
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::(\.\d+f|d))?\}")
 
@@ -66,7 +85,7 @@ def resolved_language(configured: str = "") -> str:
 
 def t(key: str, *, lang: str | None = None, **values) -> str:
     """Render `key` in the given (or current) language, falling back to the baseline per key."""
-    entry = l10n_catalog.CATALOG.get(key)
+    entry = CATALOG.get(key)
     if entry is None:
         raise MissingText(f"unregistered text key: {key!r}")
     language = normalize(lang) if lang else resolved_language()
@@ -88,7 +107,7 @@ def t(key: str, *, lang: str | None = None, **values) -> str:
 def all_templates(key: str) -> dict[str, str]:
     """Every language's raw template for `key` (used to derive text that must be recognisable
     regardless of the language that produced it)."""
-    entry = l10n_catalog.CATALOG.get(key)
+    entry = CATALOG.get(key)
     if entry is None:
         raise MissingText(f"unregistered text key: {key!r}")
     return dict(entry)
