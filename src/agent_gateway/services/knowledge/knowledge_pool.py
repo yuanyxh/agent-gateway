@@ -29,8 +29,7 @@ KIND_TOPIC = "topic"
 
 
 def db_path() -> str:
-    base = config.data_dir() or str(Path.home() / ".config" / "utility")
-    return str(Path(base) / "knowledge.sqlite")
+    return str(Path(config.data_dir()) / "knowledge.sqlite")
 
 
 def _now() -> str:

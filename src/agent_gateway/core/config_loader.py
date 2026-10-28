@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from agent_gateway.core import paths
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - PyYAML is a declared dependency
@@ -28,12 +30,12 @@ _CONFIG_NAME = "config.yaml"
 _cache: tuple[tuple[str, int, int], dict[str, Any]] | None = None
 
 
-def config_file() -> Path | None:
-    """Config path derived from the injected config root; never a hardcoded personal path."""
-    root = os.environ.get("UTILITY_DATA_DIR", "").strip()
-    if not root:
-        return None
-    return Path(os.path.expanduser(root)) / _CONFIG_NAME
+def config_file() -> Path:
+    """Config path: `GATEWAY_CONFIG` wins, otherwise `$GATEWAY_HOME/config.yaml`."""
+    explicit = os.environ.get("GATEWAY_CONFIG", "").strip()
+    if explicit:
+        return Path(os.path.abspath(os.path.expanduser(explicit)))
+    return paths.gateway_home() / _CONFIG_NAME
 
 
 def load(path: Path | None = None) -> dict[str, Any]:

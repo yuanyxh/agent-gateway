@@ -24,6 +24,7 @@ import tempfile
 import time
 
 from agent_gateway.core.log_utils import setup_logging
+from agent_gateway.core.paths import gateway_cache
 
 logger = setup_logging("agent_call")
 
@@ -66,7 +67,7 @@ def call_agent(
     and MCP tools, and forbidding file writes.
     """
     # Output debug file directory
-    debug_dir = os.path.expanduser("~/.cache/utility/agent_debug")
+    debug_dir = str(gateway_cache() / "agent_debug")
     os.makedirs(debug_dir, exist_ok=True)
 
     with tempfile.NamedTemporaryFile(

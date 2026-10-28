@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_gateway.core import config_loader
+from agent_gateway.core.paths import gateway_cache
 
 MCP_BASE_PORT = 9001
 PROXY_BASE_PORT = 8613
@@ -73,7 +74,7 @@ def mcp_environment(port: int) -> dict[str, str]:
 
     fastembed = _expand(config_loader.value("mcp.fastembedCacheDir", ""))
     if not fastembed:
-        fastembed = str(Path.home() / ".cache/utility/fastembed")
+        fastembed = str(gateway_cache() / "fastembed")
     env["FASTEMBED_CACHE_PATH"] = fastembed
 
     embedder = config_loader.value("mcp.embedderModel", "")

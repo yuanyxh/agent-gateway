@@ -12,8 +12,9 @@ import os
 from datetime import datetime, timezone
 
 from agent_gateway.core.config import log_backup_count, log_max_size
+from agent_gateway.core.paths import gateway_cache
 
-_CACHE_BASE = os.path.expanduser("~/.cache/utility")
+_CACHE_BASE = str(gateway_cache())
 
 
 def setup_logging(name: str, level=logging.INFO, json_format=False):

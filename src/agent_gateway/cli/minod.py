@@ -13,7 +13,7 @@ import sys
 import threading
 
 from agent_gateway.cli import env_builder
-from agent_gateway.core import config_loader, daemon, ports
+from agent_gateway.core import config_loader, daemon, paths, ports
 
 MIN_PYTHON = (3, 12)
 
@@ -94,10 +94,8 @@ def _environment(service: str, port: int) -> dict[str, str]:
 def check() -> int:
     """Report whether a standalone run has everything it needs."""
     ok = True
-    root = os.environ.get("UTILITY_DATA_DIR", "").strip()
-    ok = (
-        _report(bool(root), f"config root: {root or 'UTILITY_DATA_DIR not set'}") and ok
-    )
+    root = str(paths.gateway_home())
+    ok = _report(bool(root), f"config root: {root}") and ok
 
     path = config_loader.config_file()
     exists = path is not None and path.is_file()

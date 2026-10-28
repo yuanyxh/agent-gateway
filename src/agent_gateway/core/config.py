@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import os
 
-from agent_gateway.core import config_loader
+from agent_gateway.core import config_loader, paths
 
 # Empty string = injected by the Swift layer via env var; when not injected, the related feature is disabled
 _DEFAULT_SUMMARY_MODEL = ""
@@ -55,7 +55,6 @@ _YAML_FALLBACKS: dict[str, tuple[str, str]] = {
     "KNOWLEDGE_TOPIC_TARGET": ("knowledge.poolTargetTopic", "text"),
     "KNOWLEDGE_MAX_FAIL_STREAK": ("knowledge.maxFailStreak", "text"),
     "KNOWLEDGE_RETENTION_DAYS": ("knowledge.retentionDays", "text"),
-    "RSS_DAILY_CONFIG": ("rss.daily", "json"),
 }
 
 
@@ -132,11 +131,6 @@ def summary_api_url(default: str = _DEFAULT_SUMMARY_API_URL) -> str:
     return get("SUMMARY_API_URL", default)
 
 
-def rss_daily_config(default: str = "") -> str:
-    """RSS daily task config as a JSON string (`rss.daily`)."""
-    return get("RSS_DAILY_CONFIG", default)
-
-
 def notes_dir(default: str = _DEFAULT_NOTES_DIR) -> str:
     raw = get("NOTES_DIR", default)
     if not raw:
@@ -149,10 +143,11 @@ def notes_dir(default: str = _DEFAULT_NOTES_DIR) -> str:
 
 
 def data_dir(default: str = _DEFAULT_DATA_DIR) -> str:
-    raw = get("UTILITY_DATA_DIR", default)
+    """State root: `GATEWAY_HOME` first, legacy config value second, then the default home."""
+    raw = os.environ.get("GATEWAY_HOME", "").strip() or get("UTILITY_DATA_DIR", default)
     if not raw:
-        return ""
-    return os.path.expanduser(raw)
+        return str(paths.gateway_home())
+    return os.path.abspath(os.path.expanduser(raw))
 
 
 def summary_exclude_tags() -> set[str]:
