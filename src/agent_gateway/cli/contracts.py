@@ -27,19 +27,32 @@ ENTRIES: dict[str, str] = {
 
 def _env_names(source: str) -> set[str]:
     names: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Call) or not node.args:
-            continue
-        func = node.func
-        attr = getattr(func, "attr", None) or getattr(func, "id", None)
-        if attr not in _ENV_CALLS:
-            continue
-        arg = node.args[0]
-        if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
-            continue
-        value = arg.value
-        if value.isupper() and value.replace("_", "").isalnum():
+
+    def add(value) -> None:
+        if (
+            isinstance(value, str)
+            and value.isupper()
+            and value.replace("_", "").isalnum()
+        ):
             names.add(value)
+
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call) and node.args:
+            func = node.func
+            attr = getattr(func, "attr", None) or getattr(func, "id", None)
+            if attr in _ENV_CALLS and isinstance(node.args[0], ast.Constant):
+                add(node.args[0].value)
+        elif isinstance(node, ast.Assign):
+            # `NAME_ENV_KEY = "X"` and `env["X"] = ...` are contracts too; the host injects them.
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.endswith("_ENV_KEY"):
+                    add(getattr(node.value, "value", None))
+                elif (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "env"
+                ):
+                    add(getattr(target.slice, "value", None))
     return names
 
 
