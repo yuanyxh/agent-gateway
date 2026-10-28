@@ -12,7 +12,7 @@ from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
-_ENV_CALLS = {"get", "setdefault"}
+_ENV_CALLS = {"get", "setdefault", "_json_env"}
 
 #: Modules the host launches by name. Keys are the host-facing stable names
 #: (`GatewayEntry` in the macOS host); renaming one is a contract change.
@@ -22,7 +22,6 @@ ENTRIES: dict[str, str] = {
     "summarize": "agent_gateway.services.summarize.summarize",
     "astExtractor": "agent_gateway.scanner.ast_extractor",
     "knowledgeRefill": "agent_gateway.services.knowledge.knowledge_refill",
-    "rssDaily": "agent_gateway.services.rss.rss_daily",
 }
 
 

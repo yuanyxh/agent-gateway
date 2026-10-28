@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 import tempfile
@@ -110,12 +109,6 @@ class ConfigFallbackTest(unittest.TestCase):
     def test_null_key_uses_default(self):
         self._write("mcp:\n  excludeTags:\n")
         self.assertEqual(config.summary_exclude_tags(), set())
-
-    def test_rss_daily_json_roundtrip(self):
-        self._write("rss:\n  daily:\n    enabled: true\n    cron: '0 9 * * *'\n")
-        parsed = json.loads(config.get("RSS_DAILY_CONFIG"))
-        self.assertEqual(parsed["enabled"], True)
-        self.assertEqual(parsed["cron"], "0 9 * * *")
 
     def test_notes_dir_derives_from_config_root(self):
         self._write("mcp:\n  knowledgeBasePath: ''\n")
