@@ -30,6 +30,7 @@
 - 2026-10-28 episode_id 阶段 3：冷层写入按内容最相似的源记忆继承分组（无向量时退化为多数派）；recall 对 top-3 冷层命中按组扩展（每组 ≤3，系数 0.98，过滤 stale/archived）；新增 8 例测试
 - 2026-10-28 修复冷层分组跨主题误分：线上实测发现 5 条不同主题摘要共享 `ep_gateway_decouple_p2`，改为按摘要向量与源记忆向量取最相似者继承，并加 0.45 相似度下限（低于则新建组）
 - 2026-10-28 抓页噪声治理：`article.py` 接入 trafilatura（空/短结果回退 `html_to_markdown`），websearch 丢弃 <200 字符页面、默认 `fetch_top=0`，boilerplate 规则补 related/recommend/rank 类名；结果排序对空/短摘要（<20 字符）降权 0.15
+- 2026-10-29 补 `set_memory_status` 生命周期测试（`tests/test_memory_status.py`，3 例）：恢复 active 清 `deleted_at` 与 supersede 字段、只清 retired 位保留 summarized 位；删除置 `deleted_at` 并置 retired 位
 
 ## 下一步
 
@@ -57,6 +58,7 @@
 | 2026-10-26 | `UTILITY_DATA_DIR=<临时根> agent-gateway --check` | 通过 |
 | 2026-10-28 | `ruff format` / `ruff check` / `unittest discover` | 通过（172 例，1 skipped） |
 | 2026-10-28 | 离线阈值实验（副本 mem0，4260 条） | 0.65/0.70/0.75/0.80/0.85 单条组占比 64.5%/71.1%/79.8%/88.0%/94.5% |
+| 2026-10-29 | `ruff format --check` / `ruff check` / `unittest discover` | 通过（155 文件 / 0 条 / 177 例，1 skipped） |
 
 ## 已知问题
 
