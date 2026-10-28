@@ -57,7 +57,6 @@ from agent_gateway.services.mcp.server_embed import (
 )
 from agent_gateway.services.mcp.server_tool_schema import (
     DEFAULT_PROJECT_NOTES_LIMIT,
-    DEFAULT_READ_MAX_CHARS,
     DEFAULT_WEBSEARCH_FETCH_TOP,
     DEFAULT_WEBSEARCH_LIMIT,
     DEFAULT_WEBSEARCH_MAX_CHARS,
@@ -88,6 +87,11 @@ from agent_gateway.services.mcp.server_state import (
     get_qdrant,
     set_qdrant,
 )
+from agent_gateway.services.mcp.server_rest import (
+    REST_ROUTES,
+    read_args,
+    summarize_args,
+)
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
 from agent_gateway.services.mcp.server_constants import (
     COLD_COLLECTION,
@@ -113,7 +117,8 @@ from agent_gateway.services.mcp.server_skills import (
     normalize_name,
     scan_skills,
 )
-from agent_gateway.services.read.read_service import normalize_max_chars, read_url
+from agent_gateway.services.read.read_service import read_url
+from agent_gateway.services.summarize import text as summarize_service
 from agent_gateway.services.search import web_search
 from agent_gateway.core.log_utils import setup_logging
 
@@ -438,12 +443,17 @@ async def _handle_websearch_engine(arguments: dict) -> list[TextContent]:
 
 @_register("read_url")
 async def _handle_read_url(arguments: dict) -> list[TextContent]:
-    url = str(arguments.get("url", "")).strip()
-    max_chars = normalize_max_chars(
-        int_arg(arguments, "max_chars", DEFAULT_READ_MAX_CHARS)
-    )
-    use_proxy = arguments.get("use_proxy", False) is True
+    url, max_chars, use_proxy = read_args(arguments)
     result = await asyncio.to_thread(read_url, url, max_chars, use_proxy)
+    return [TextContent(type="text", text=dumps(result))]
+
+
+@_register("summarize")
+async def _handle_summarize(arguments: dict) -> list[TextContent]:
+    text, instruction, max_tokens = summarize_args(arguments)
+    result = await asyncio.to_thread(
+        summarize_service.summarize_text, text, instruction, max_tokens
+    )
     return [TextContent(type="text", text=dumps(result))]
 
 
@@ -707,6 +717,7 @@ async def serve():
 
     rest_app = Starlette(
         routes=[
+            *REST_ROUTES,
             Route(
                 "/api/memory/add_knowledge",
                 endpoint=api_memory_add_knowledge,

@@ -16,6 +16,7 @@ from agent_gateway.services.mcp.server_search import (
     DEFAULT_PROJECT_STRUCTURE_LIMIT,
 )
 from agent_gateway.services.mcp.server_skills import scan_skills
+from agent_gateway.services.summarize.text import DEFAULT_MAX_TOKENS
 from agent_gateway.core.tool_defaults import arg_default
 from agent_gateway.core.tool_text import param_text
 
@@ -38,6 +39,7 @@ DEFAULT_WEBSEARCH_MAX_CHARS = max(
     1000, min(arg_default("websearch_engine", "max_chars"), 10000)
 )
 DEFAULT_READ_MAX_CHARS = max(0, arg_default("read_url", "max_chars"))
+DEFAULT_SUMMARIZE_MAX_TOKENS = DEFAULT_MAX_TOKENS
 
 #: Fixed English tool descriptions; parameter guidance lives in `tool_text.PARAM_DESCRIPTIONS`.
 TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -55,6 +57,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "set_memory_processed": "Set or reset the processed bit of memories. Idempotent.",
     "websearch_engine": "Trigger: user says web search/search online/look up/latest info. Returns result links and, when fetch_top>0, Markdown text of top pages.",
     "read_url": "Trigger: user says read this link, check this URL, fetch this page, 看这个链接/读一下/抓取网页. when a link needs to be read, returns the page as Markdown.",
+    "summarize": "Trigger: user says summarize this text, sum it up, shorten it, 总结/概括/提炼要点. Returns a single plain-text summary.",
 }
 
 
@@ -422,6 +425,29 @@ def build_tools() -> list[Tool]:
                     },
                 },
                 "required": ["url"],
+            },
+        ),
+        Tool(
+            name="summarize",
+            description=TOOL_DESCRIPTIONS["summarize"],
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": param_text("param.summarize_text"),
+                    },
+                    "instruction": {
+                        "type": "string",
+                        "description": param_text("param.summarize_instruction"),
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "default": DEFAULT_SUMMARIZE_MAX_TOKENS,
+                        "description": param_text("param.summarize_max_tokens"),
+                    },
+                },
+                "required": ["text"],
             },
         ),
     ]

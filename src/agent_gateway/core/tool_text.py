@@ -51,11 +51,14 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     ),
     "param.websearch_query": "Search query; Chinese and English are supported",
     "param.websearch_limit": "Max results; default 5",
-    "param.fetch_top": "Read the top N result pages as Markdown; default 1, max 3",
+    "param.fetch_top": "Read the top N result pages as Markdown; default 0, max 3",
     "param.max_chars": "Max Markdown chars per page; default 6000",
     "param.engines": "Optional comma-separated engines; default is a language-aware cascade",
     "param.read_url": "Absolute http/https URL to read",
     "param.read_max_chars": "Max Markdown chars to return; 0 = unlimited (default)",
+    "param.summarize_text": "Text to summarize; up to 50,000 characters",
+    "param.summarize_instruction": "Optional instruction overriding the default summary style",
+    "param.summarize_max_tokens": "Max tokens for the summary; default 600, max 4000",
     "param.read_use_proxy": (
         "Allow third-party readers (defuddle.md, r.jina.ai) when local extraction "
         "fails or is a login shell; only for public, non-sensitive URLs"
