@@ -16,11 +16,13 @@ import time
 import urllib.parse
 
 from agent_gateway.services.fetch import http
+from agent_gateway.services.markdown import article as md_article
 from agent_gateway.services.markdown import html as md
 from agent_gateway.services.search import engines as engine_layer
 from agent_gateway.services.search.engines import SEARCH_BUDGET, TIMEOUT
 
 MAX_TOTAL_CHARS = 16000
+MIN_PAGE_CHARS = 200
 PAGE_BUDGET = 25.0
 PAGE_TIMEOUT = 15
 
@@ -81,14 +83,14 @@ def fetch_markdown(url: str, max_chars: int = 6000, timeout: int = TIMEOUT) -> d
         interval=0.8,
         detect_challenge=False,
     )
-    markdown = html_to_markdown(raw, base_url=final, max_chars=max_chars)
+    markdown = md_article.extract_article(raw, base_url=final, max_chars=max_chars)
     return {"url": final, "markdown": markdown, "chars": len(markdown)}
 
 
 def websearch(
     query: str,
     limit: int = 5,
-    fetch_top: int = 1,
+    fetch_top: int = 0,
     max_chars: int = 6000,
     engines=None,
 ) -> dict:
@@ -116,6 +118,15 @@ def websearch(
                 max_chars=min(max_chars, budget),
                 timeout=min(PAGE_TIMEOUT, remaining),
             )
+            if page["chars"] < MIN_PAGE_CHARS:
+                page_errors.append(
+                    {
+                        "url": result["url"],
+                        "title": result["title"],
+                        "error": f"page too short ({page['chars']} chars), skipped",
+                    }
+                )
+                continue
             pages.append(
                 {
                     "url": page["url"],
@@ -139,8 +150,9 @@ def websearch(
         "pages": pages,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
     }
-    if page_errors and not pages:
+    if page_errors:
         payload["page_errors"] = page_errors
+    if page_errors and not pages:
         payload["page_error"] = f"all page fetches failed ({len(page_errors)} tried)"
     if not results:
         if report.get("no_engines_available"):

@@ -10,7 +10,6 @@ from __future__ import annotations
 import html as htmlmod
 import json
 import math
-import os
 import re
 import subprocess
 import threading
@@ -21,77 +20,24 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from agent_gateway.services.fetch import http
+from agent_gateway.services.search import engine_config
 
 TIMEOUT = http.TIMEOUT
 
 WIKI_LANGS = ("zh", "en")
 WIKI_MIN_CHARS = 600
 
-_ENDPOINTS = {
-    "bing": "https://www.bing.com/search?q={q}&count=10",
-    "duckduckgo": "https://html.duckduckgo.com/html/?q={q}",
-    "brave": "https://search.brave.com/search?q={q}",
-    "sogou": "https://www.sogou.com/web?query={q}",
-    "so360": "https://www.so.com/s?q={q}",
-    "baidu": "https://www.baidu.com/s?wd={q}&rn=10",
-    "marginalia": "https://old-search.marginalia.nu/search?query={q}",
-}
-_HOME = {
-    "bing": "https://www.bing.com/",
-    "duckduckgo": "https://html.duckduckgo.com/html/",
-    "brave": "https://search.brave.com/",
-    "sogou": "https://www.sogou.com/",
-    "so360": "https://www.so.com/",
-    "baidu": "https://www.baidu.com/",
-    "marginalia": "https://old-search.marginalia.nu/",
-    "google": "https://www.google.com/",
-}
-#: Google runs through the app's WKWebView subcommand, not the HTTP transport.
-GOOGLE_BIN_ENV = "UTILITY_BIN"
-GOOGLE_TIMEOUT = 15
-#: Only Baidu needs a homepage visit to receive the cookies that keep results stable.
-_WARMUP = ("baidu",)
-#: Seconds between two requests to the same engine. Longer for engines that ban quickly.
-_MIN_INTERVAL = {
-    "bing": 1.2,
-    "sogou": 2.0,
-    "so360": 1.5,
-    "baidu": 2.0,
-    "marginalia": 1.5,
-    "brave": 2.5,
-    "duckduckgo": 2.5,
-}
+#: Engine specs come from built-in defaults plus config/env overrides. A provider
+#: (for example Google through a browser helper) is injected by the caller; this
+#: module never discovers host binaries on its own.
+_ENGINES, _PROVIDERS, _ORDER = engine_config.load()
+_ENDPOINTS = {name: spec.endpoint for name, spec in _ENGINES.items()}
+_HOME = {name: spec.home for name, spec in _ENGINES.items()}
+_MIN_INTERVAL = {name: spec.min_interval for name, spec in _ENGINES.items()}
+_WARMUP = tuple(name for name, spec in _ENGINES.items() if spec.warmup)
 #: Chinese queries hit the CN engines first; English queries avoid their noise.
-CJK_ORDER = (
-    "sogou",
-    "google",
-    "so360",
-    "baidu",
-    "bing",
-    "marginalia",
-    "brave",
-    "duckduckgo",
-)
-LATIN_ORDER = (
-    "bing",
-    "google",
-    "marginalia",
-    "brave",
-    "duckduckgo",
-    "sogou",
-    "so360",
-    "baidu",
-)
-DEFAULT_ENGINES = (
-    "bing",
-    "google",
-    "sogou",
-    "so360",
-    "baidu",
-    "marginalia",
-    "brave",
-    "duckduckgo",
-)
+CJK_ORDER = _ORDER["cjk"]
+LATIN_ORDER = _ORDER["latin"]
 #: Stop cascading once this many candidates exist; IDF ranking needs a corpus.
 _CANDIDATE_TARGET = 15
 #: Drop candidates whose weighted token coverage is below this floor.
@@ -197,50 +143,28 @@ def _warm(engine: str) -> None:
         pass
 
 
-def utility_binary() -> str | None:
-    """Resolve the app binary that serves the WKWebView search subcommand."""
-    explicit = os.environ.get(GOOGLE_BIN_ENV, "").strip()
-    if explicit and os.access(explicit, os.X_OK):
-        return explicit
-    path = os.path.dirname(os.path.realpath(__file__))
-    while True:
-        if os.path.basename(path) == "Contents":
-            candidate = os.path.join(path, "MacOS", "utility")
-            if os.access(candidate, os.X_OK):
-                return candidate
-        if os.path.isfile(os.path.join(path, "Package.swift")):
-            candidate = os.path.join(path, ".build", "debug", "utility")
-            if os.access(candidate, os.X_OK):
-                return candidate
-        parent = os.path.dirname(path)
-        if parent == path:
-            return None
-        path = parent
-
-
-def _search_google(query: str, limit: int) -> list:
-    """Delegate Google to the app's offscreen WKWebView subcommand."""
-    binary = utility_binary()
-    if not binary:
-        raise RuntimeError(f"utility binary not found (set {GOOGLE_BIN_ENV})")
-    proc = subprocess.run(
-        [binary, "websearch", "--query", query, "--limit", str(limit)],
-        capture_output=True,
-        text=True,
-        timeout=GOOGLE_TIMEOUT,
-    )
+def _run_provider(engine: str, query: str, limit: int) -> list:
+    """Run an injected provider command and parse its last JSON line."""
+    spec = _PROVIDERS.get(engine)
+    if spec is None:
+        raise RuntimeError(f"search provider '{engine}' is not configured")
+    command = [
+        part.replace("{q}", query).replace("{limit}", str(limit))
+        for part in spec.command
+    ]
+    proc = subprocess.run(command, capture_output=True, text=True, timeout=spec.timeout)
     if proc.returncode != 0:
         lines = (proc.stderr or proc.stdout or "").strip().splitlines()
         raise RuntimeError(
-            f"websearch exit {proc.returncode}: {lines[-1] if lines else ''}"
+            f"{engine} exit {proc.returncode}: {lines[-1] if lines else ''}"
         )
     lines = (proc.stdout or "").strip().splitlines()
     if not lines:
-        raise RuntimeError("websearch returned no output")
+        raise RuntimeError(f"{engine} returned no output")
     payload = json.loads(lines[-1])
     if not payload.get("ok"):
         status = payload.get("status", "failed")
-        raise RuntimeError(f"google {status}: {payload.get('error', '')}")
+        raise RuntimeError(f"{engine} {status}: {payload.get('error', '')}")
     return [
         {
             "title": str(item.get("title", "")).strip(),
@@ -251,6 +175,11 @@ def _search_google(query: str, limit: int) -> list:
         for item in payload.get("results", [])
         if str(item.get("url", "")).startswith("http")
     ]
+
+
+def _search_google(query: str, limit: int) -> list:
+    """Backward-compatible alias for the injected Google provider."""
+    return _run_provider("google", query, limit)
 
 
 def fetch(url: str, engine: str = "bing", timeout: int = TIMEOUT) -> str:
@@ -856,6 +785,16 @@ def _contains_token(text: str, token: str) -> bool:
     return token in text
 
 
+_SNIPPET_MIN_CHARS = 20
+_SNIPPET_PENALTY = 0.15
+
+
+def _rank_key(result: dict) -> tuple[float, int]:
+    snippet = (result.get("snippet") or "").strip()
+    penalty = _SNIPPET_PENALTY if len(snippet) < _SNIPPET_MIN_CHARS else 0.0
+    return (-(result["score"] - penalty), len(result["title"]))
+
+
 def _score_results(results: list, query: str) -> list:
     """Rank candidates by query-token coverage with corpus-local IDF weights."""
     q = query.lower().strip()
@@ -884,7 +823,7 @@ def _score_results(results: list, query: str) -> list:
         elif any(_contains_token(title, t) for t in tokens):
             score += 0.1
         result["score"] = round(score, 4)
-    return sorted(results, key=lambda r: (-r["score"], len(r["title"])))
+    return sorted(results, key=_rank_key)
 
 
 def _order_for(query: str):
@@ -903,7 +842,7 @@ def search_report(query: str, engines=None, min_results: int = 5):
     stopped_at = None
     deadline = time.monotonic() + SEARCH_BUDGET
     for engine in order:
-        if engine == "google":
+        if engine in _PROVIDERS:
             if not _engine_ok(engine):
                 status[engine] = {"status": "cooldown"}
                 continue
@@ -912,7 +851,7 @@ def search_report(query: str, engines=None, min_results: int = 5):
                 continue
             attempted += 1
             try:
-                parsed = _search_google(query, _CANDIDATE_TARGET)
+                parsed = _run_provider(engine, query, _CANDIDATE_TARGET)
             except Exception as exc:
                 _record_failure(engine)
                 status[engine] = {

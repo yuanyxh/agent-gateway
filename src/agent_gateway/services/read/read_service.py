@@ -15,6 +15,7 @@ import re
 import urllib.parse
 
 from agent_gateway.services.fetch import http
+from agent_gateway.services.markdown import article as md_article
 from agent_gateway.services.markdown import html as md
 
 _MIN_CHARS = 200
@@ -149,7 +150,7 @@ def _fetch_local(url: str) -> tuple[str, str]:
     )
     if raw.lstrip().startswith("%PDF-"):
         raise ValueError("PDF response is not supported")
-    return final, md.html_to_markdown(raw, base_url=final)
+    return final, md_article.extract_article(raw, base_url=final)
 
 
 def _fetch_proxy(url: str, base: str) -> tuple[str, str]:

@@ -178,6 +178,32 @@ class MarkdownStructureTest(unittest.TestCase):
 
 
 class EngineParserTest(unittest.TestCase):
+    def test_empty_snippet_ranks_below_snippet(self):
+        results = [
+            {"title": "a", "url": "a", "snippet": "", "score": 0.50},
+            {
+                "title": "b",
+                "url": "b",
+                "snippet": "a long enough snippet",
+                "score": 0.40,
+            },
+        ]
+        ranked = sorted(results, key=engines._rank_key)
+        self.assertEqual(ranked[0]["url"], "b")
+
+    def test_short_snippet_is_penalized(self):
+        results = [
+            {"title": "a", "url": "a", "snippet": "PPT文档", "score": 0.50},
+            {
+                "title": "b",
+                "url": "b",
+                "snippet": "a long enough snippet",
+                "score": 0.40,
+            },
+        ]
+        ranked = sorted(results, key=engines._rank_key)
+        self.assertEqual(ranked[0]["url"], "b")
+
     def test_parsers_return_empty_on_unknown_markup(self):
         for name, parser in engines._PARSERS.items():
             with self.subTest(engine=name):
@@ -475,13 +501,36 @@ class FacadeCompatibilityTest(unittest.TestCase):
         original_report, original_fetch = facade.search_report, facade.fetch_markdown
         try:
             facade.search_report = lambda *a, **k: report
+            body = "# X\n\n" + "body " * 60
+            facade.fetch_markdown = lambda *a, **k: {
+                "url": "https://x.test/1",
+                "markdown": body,
+                "chars": len(body),
+            }
+            payload = facade.websearch("q", limit=1, fetch_top=1)
+            self.assertEqual(payload["pages"][0]["markdown"], body)
+        finally:
+            facade.search_report, facade.fetch_markdown = (
+                original_report,
+                original_fetch,
+            )
+
+    def test_websearch_drops_pages_without_enough_text(self):
+        report = (
+            [{"title": "T", "url": "https://x.test/1", "snippet": "S", "engine": "e"}],
+            {"engines": {"e": {"status": "ok"}}},
+        )
+        original_report, original_fetch = facade.search_report, facade.fetch_markdown
+        try:
+            facade.search_report = lambda *a, **k: report
             facade.fetch_markdown = lambda *a, **k: {
                 "url": "https://x.test/1",
                 "markdown": "# X",
                 "chars": 3,
             }
             payload = facade.websearch("q", limit=1, fetch_top=1)
-            self.assertEqual(payload["pages"][0]["markdown"], "# X")
+            self.assertEqual(payload["pages"], [])
+            self.assertIn("page too short", payload["page_errors"][0]["error"])
         finally:
             facade.search_report, facade.fetch_markdown = (
                 original_report,

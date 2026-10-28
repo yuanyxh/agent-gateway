@@ -48,7 +48,8 @@ _SKIP_TAGS = {
 _HEADINGS = {f"h{i}": i for i in range(1, 7)}
 _BOILERPLATE_RE = re.compile(
     r"(?:^|[-_ ])(nav|menu|footer|sidebar|cookie|banner|advert|ads?|share|social|"
-    r"comment|breadcrumb)(?:$|[-_ ])",
+    r"comment|breadcrumb|related|recommend|tuijian|hotlist|ranking|rank)"
+    r"(?:$|[-_ ]|[A-Z])",
     re.IGNORECASE,
 )
 
