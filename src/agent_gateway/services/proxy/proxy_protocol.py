@@ -38,37 +38,80 @@ logger = setup_logging("token_proxy", json_format=True)
 #: module); the stripper (usage extraction in proxy_usage) reuses the same constants —
 #: avoiding deriving "which marker the injector uses" and "which marker the stripper
 #: recognizes" in two places.
-RULE_START_MARK = "---rule_start"
-RULE_END_MARK = "---rule_end"
+RULE_START_MARK = "--rule_start"
+RULE_END_MARK = "--rule_end"
+SHORT_RULE_START_MARK = "--short_rule_start"
+SHORT_RULE_END_MARK = "--short_rule_end"
+
+#: Legacy markers written before 2026-10-29; still stripped so old blocks in
+#: client-side history do not leak into user-text extraction.
+LEGACY_RULE_START_MARK = "---rule_start"
+LEGACY_RULE_END_MARK = "---rule_end"
+
+#: Attention reminder injected after the first user message. Static English on
+#: purpose: it is a code constant, never a rendered template, so its bytes cannot
+#: drift between turns and break the cached prefix. It only points at the marker —
+#: restating rule content here would fork the single source (`System_Prompts.md`).
+SHORT_RULE_TEXT = (
+    "A rules block delimited by --rule_start and --rule_end appears once in this "
+    "conversation, in its earliest user message. It remains in force for every turn. "
+    "Before replying or calling tools, recall that block and follow it strictly."
+)
 
 
-def strip_injected_rules(text: str) -> str:
-    """Strip the rule block injected by `_inject_system_prompt`, keeping the rest of the user text.
+def _rule_injection_config() -> tuple[str, int]:
+    """Read `MODEL_PROXY_RULE_INJECTION` (JSON `{mode, fullEvery}`); defaults to progressive."""
+    raw = os.environ.get("MODEL_PROXY_RULE_INJECTION", "")
+    if not raw:
+        return "progressive", 0
+    try:
+        cfg = json.loads(raw)
+    except ValueError:
+        return "progressive", 0
+    if not isinstance(cfg, dict):
+        return "progressive", 0
+    mode = "full" if cfg.get("mode") == "full" else "progressive"
+    try:
+        every = int(cfg.get("fullEvery", 0) or 0)
+    except (TypeError, ValueError):
+        every = 0
+    return mode, max(0, every)
 
-    The injected block is a whole `System_Prompts.md` (up to several thousand
-    characters), while the extraction caps for usage records are only 100~500
-    characters — without stripping, the three fields `context_summary` /
-    `input_preview` / `actual_user_input` would all show the beginning of the rules
-    and the real user input would be pushed out entirely.
 
-    Supports stripping multiple blocks; an unclosed block is discarded to the end
-    (guarding against a leftover half-block).
-    """
-    if not text or RULE_START_MARK not in text:
+RULE_INJECTION_MODE, RULE_FULL_EVERY = _rule_injection_config()
+
+
+def _strip_blocks(text: str, start: str, end: str) -> str:
+    """Remove every `start`…`end` block; an unclosed block discards the remainder."""
+    if not text or start not in text:
         return text
     out: list[str] = []
     rest = text
     while True:
-        i = rest.find(RULE_START_MARK)
+        i = rest.find(start)
         if i < 0:
             out.append(rest)
             break
         out.append(rest[:i])
-        j = rest.find(RULE_END_MARK, i + len(RULE_START_MARK))
+        j = rest.find(end, i + len(start))
         if j < 0:
-            break  # block unclosed → discard the remainder, do not treat a half rule as user input
-        rest = rest[j + len(RULE_END_MARK) :]
-    return "".join(out).strip()
+            break
+        rest = rest[j + len(end) :]
+    return "".join(out)
+
+
+def strip_injected_rules(text: str) -> str:
+    """Strip injected rule blocks, keeping the rest of the user text.
+
+    The injected blocks are much longer than the 100~500 character extraction caps
+    of usage records — without stripping, `context_summary` / `input_preview` /
+    `actual_user_input` would all show rules and push the real input out. Legacy
+    triple-hyphen blocks are stripped first: the current double-hyphen marker is a
+    substring of them, so matching it first would leave a stray leading hyphen.
+    """
+    text = _strip_blocks(text, SHORT_RULE_START_MARK, SHORT_RULE_END_MARK)
+    text = _strip_blocks(text, LEGACY_RULE_START_MARK, LEGACY_RULE_END_MARK)
+    return _strip_blocks(text, RULE_START_MARK, RULE_END_MARK).strip()
 
 
 def _sse_event(event: str, data: dict) -> str:
@@ -791,21 +834,62 @@ _sys_prompt_content: str | None = None
 _sys_prompt_mtime: float = 0
 
 
-def _inject_system_prompt(body: dict) -> tuple[bytes | None, int]:
-    """Read System_Prompts.md and inject it into **every** real user input.
+def _is_real_user_input(content: object) -> bool:
+    """True when the message carries user text rather than only tool results."""
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        return any(
+            isinstance(block, dict) and block.get("type") == "text" for block in content
+        )
+    return False
 
-    The injection point must not follow "the last real user input": it shifts each time
-    the user speaks, the rule block vanishes from its old message, and the upstream
-    prompt cache breaks from there on (measured on a real session: 2 breaks per 247
-    requests with the moving target, 0 with this one). Injecting everywhere is
-    deterministic per message, so the prefix stays byte-identical across turns, and the
-    newest turn — the one that drives model adherence — is still covered. A real user
-    input has content as a string or an array containing a text block; a pure
-    tool_result message contains no text and is skipped — when such a message also
-    carries text (the user interjected while a tool was executing), the rule goes after
-    the last tool_result, which must always remain first. Returns (body_bytes, injected
-    count), the count being 0 when the file is missing / read fails / no match. Skips
-    disk reads when mtime is unchanged.
+
+def _starts_with_rule_marker(text: str) -> bool:
+    """True when the text itself begins with one of our injection markers.
+
+    Prefix-only on purpose: a body that merely mentions `--rule_start` (quoting
+    this feature, or pasting the legacy triple-hyphen block) is still user text
+    and must receive rules. Legacy blocks do not match — the third character is
+    `-`, not `r` — so they get one harmless re-injection.
+    """
+    return text.lstrip().startswith((RULE_START_MARK, SHORT_RULE_START_MARK))
+
+
+def _contains_rule_block(content: object) -> bool:
+    """True when a message starts with an injected rule block."""
+    if isinstance(content, str):
+        return _starts_with_rule_marker(content)
+    if isinstance(content, list):
+        return any(
+            isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+            and _starts_with_rule_marker(block["text"])
+            for block in content
+        )
+    return False
+
+
+def _insert_rule_block(msg: dict, block: str) -> None:
+    """Insert the block before user text, never before a leading tool_result."""
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        msg["content"] = block + content
+        return
+    last_tool_result = -1
+    for idx, item in enumerate(content):
+        if isinstance(item, dict) and item.get("type") == "tool_result":
+            last_tool_result = idx
+    content.insert(last_tool_result + 1, {"type": "text", "text": block})
+
+
+def _inject_system_prompt(body: dict) -> tuple[bytes | None, int, int]:
+    """Inject full rules into the first real user input, the short reminder into the rest.
+
+    Position-only, so every historical message keeps identical bytes across requests
+    and the prompt cache prefix stays stable; compaction simply yields a new first
+    message. Returns (body_bytes, full, short).
     """
     global _sys_prompt_content, _sys_prompt_mtime
 
@@ -813,7 +897,7 @@ def _inject_system_prompt(body: dict) -> tuple[bytes | None, int]:
         current_mtime = os.path.getmtime(SYSTEM_PROMPTS_FILE)
     except OSError:
         _sys_prompt_content = None
-        return None, -1
+        return None, 0, 0
 
     if current_mtime != _sys_prompt_mtime:
         try:
@@ -821,54 +905,47 @@ def _inject_system_prompt(body: dict) -> tuple[bytes | None, int]:
                 content = f.read().strip()
             _sys_prompt_content = content if content else None
             _sys_prompt_mtime = current_mtime
+            if _sys_prompt_content and RULE_END_MARK in _sys_prompt_content:
+                logger.warning(json.dumps({"msg": "system_prompt_contains_end_mark"}))
         except Exception as e:
             _sys_prompt_content = None
             logger.warning(
                 json.dumps({"msg": "system_prompt_read_failed", "error": str(e)})
             )
-            return None, -1
+            return None, 0, 0
 
     if _sys_prompt_content is None:
-        return None, -1
+        return None, 0, 0
 
-    # Every real user input gets its own copy: a moving injection point drops the rule block
-    # from its old message each turn, breaking the upstream prompt cache from there on.
+    full_block = f"{RULE_START_MARK}\n\n{_sys_prompt_content}\n{RULE_END_MARK}\n\n"
+    short_block = (
+        f"{SHORT_RULE_START_MARK}\n{SHORT_RULE_TEXT}\n{SHORT_RULE_END_MARK}\n\n"
+    )
     messages = body.get("messages", [])
-    rule_block = f"{RULE_START_MARK}\n" + _sys_prompt_content + f"\n{RULE_END_MARK}\n\n"
-    injected = 0
+    full = short = 0
+    real_index = 0
     for msg in messages:
         if msg.get("role") != "user":
             continue
         content = msg.get("content", "")
-        # Determine whether it is the real user input: a string type, or an array containing a text-type block
-        is_real_user_input = False
-        if isinstance(content, str):
-            is_real_user_input = True
-        elif isinstance(content, list):
-            is_real_user_input = any(
-                b.get("type") == "text" for b in content if isinstance(b, dict)
-            )
-        if not is_real_user_input:
+        if not _is_real_user_input(content):
             continue
-        if isinstance(content, str):
-            msg["content"] = rule_block + content
-        elif isinstance(content, list):
-            # Anthropic hard constraint: in a message responding to tool_use,
-            # tool_result must be the first block (officially listed under
-            # Troubleshooting as a cause of this error). Inserting it first would push
-            # tool_result back and the upstream would directly return 400 for "tool_use
-            # not immediately followed by tool_result", so insert **after** the last
-            # tool_result; with no tool_result it degenerates to the first position,
-            # behavior unchanged.
-            last_tool_result = -1
-            for idx, block in enumerate(content):
-                if isinstance(block, dict) and block.get("type") == "tool_result":
-                    last_tool_result = idx
-            content.insert(last_tool_result + 1, {"type": "text", "text": rule_block})
-        injected += 1
+        real_index += 1
+        if _contains_rule_block(content):
+            continue
+        if RULE_INJECTION_MODE == "full":
+            use_full = True
+        else:
+            use_full = real_index == 1 or (
+                RULE_FULL_EVERY > 0 and (real_index - 1) % RULE_FULL_EVERY == 0
+            )
+        _insert_rule_block(msg, full_block if use_full else short_block)
+        if use_full:
+            full += 1
+        else:
+            short += 1
 
-    # File exists but no real user input found (e.g. all user messages are tool_result) → log a warning to guard against silent failure
-    if injected == 0:
+    if full + short == 0:
         logger.warning(
             json.dumps(
                 {
@@ -880,7 +957,7 @@ def _inject_system_prompt(body: dict) -> tuple[bytes | None, int]:
             )
         )
 
-    return json.dumps(body).encode(), injected
+    return json.dumps(body).encode(), full, short
 
 
 def _extract_usage_from_sse(
