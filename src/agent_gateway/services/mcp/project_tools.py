@@ -1,4 +1,4 @@
-"""MCP project search/structure/exports tools."""
+"""MCP project search/structure tools."""
 
 from __future__ import annotations
 
@@ -204,64 +204,3 @@ def tool_project_structure(
         result["hint"] = "Result truncated; pass a subpath to narrow it down"
 
     return result
-
-
-def tool_project_exports(db_path: str, path: str) -> dict:
-    if not os.path.isfile(db_path):
-        return {"error": f"Database not found: {db_path}"}
-    with dbconn(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        is_dir = conn.execute(
-            "SELECT 1 FROM directories WHERE path = ?", (path,)
-        ).fetchone()
-        if is_dir:
-            files = conn.execute(
-                "SELECT path, name, ext, sym_count FROM files WHERE dir_path = ? ORDER BY path",
-                (path,),
-            ).fetchall()
-            result_files = []
-            for f in files:
-                syms = conn.execute(
-                    "SELECT name, kind, signature, start_line, end_line FROM symbols "
-                    "WHERE file_path = ? AND (visibility = 'public' OR visibility IS NULL) "
-                    "ORDER BY kind, name",
-                    (f["path"],),
-                ).fetchall()
-                result_files.append(
-                    {
-                        "path": f["path"],
-                        "symbols": [
-                            {
-                                "name": s["name"],
-                                "kind": s["kind"],
-                                "signature": s["signature"],
-                                "startLine": s["start_line"],
-                                "endLine": s["end_line"],
-                            }
-                            for s in syms
-                        ],
-                    }
-                )
-            return {"path": path, "isDirectory": True, "files": result_files}
-        else:
-            syms = conn.execute(
-                "SELECT name, kind, signature, visibility, start_line, end_line FROM symbols "
-                "WHERE file_path = ? ORDER BY kind, name",
-                (path,),
-            ).fetchall()
-            return {
-                "path": path,
-                "isDirectory": False,
-                "symbols": [
-                    {
-                        "name": s["name"],
-                        "kind": s["kind"],
-                        "signature": s["signature"],
-                        "startLine": s["start_line"],
-                        "endLine": s["end_line"],
-                        "visibility": s["visibility"],
-                    }
-                    for s in syms
-                ],
-                "total": len(syms),
-            }

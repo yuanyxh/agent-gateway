@@ -10,8 +10,6 @@ from __future__ import annotations
 from mcp.types import Tool
 
 from agent_gateway.services.mcp.server_search import (
-    DEFAULT_PROJECT_DEPENDENCIES_DIRECTION,
-    DEFAULT_PROJECT_DEPENDENCIES_LIMIT,
     DEFAULT_PROJECT_SEARCH_LIMIT,
     DEFAULT_PROJECT_STRUCTURE_LIMIT,
 )
@@ -48,16 +46,13 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "recall": "Trigger: user says look up/search/find that earlier one, or refers to history or existing information. Searches shared memory, knowledge base, and notes.",
     "catch_up": "Trigger: user says just now/last time/previously/recently, or asks what was done, the progress, or what remains unresolved. Do not substitute git log.",
     "forget": "Trigger: user asks to delete a memory, or a memory is wrong/outdated. Deletes it permanently.",
-    "project_search": "Prefer over reading whole files to locate symbols, files, and packages. Searches the project dependency graph. For file imports and importers, use project_dependencies.",
+    "project_search": "Prefer over reading whole files to locate symbols, files, and packages. Searches the project dependency graph.",
     "project_structure": "Prefer over ls/find traversal to understand the project layout.",
-    "project_exports": "Prefer over reading a whole file to get its public interface. For file imports and importers, use project_dependencies.",
-    "project_dependencies": "Trigger: user asks what depends on a file, what a change will affect, or before deleting/moving/renaming a file or changing a public signature. Returns outgoing imports and incoming importers (1 hop).",
-    "project_notes": "Like recall, but searches local project notes only.",
+    "project_notes": "Trigger: user asks to find a project's README, design doc, plan, or TODO without knowing the file name. Searches local project Markdown by meaning, not just exact keywords.",
     "tool_resource": "Load a file under references or a script under scripts when instructed.",
     "set_memory_processed": "Set or reset the processed bit of memories. Idempotent.",
     "websearch_engine": "Trigger: user says web search/search online/look up/latest info. Returns result links and, when fetch_top>0, Markdown text of top pages.",
     "read_url": "Trigger: user says read this link, check this URL, fetch this page, 看这个链接/读一下/抓取网页. when a link needs to be read, returns the page as Markdown.",
-    "summarize": "Trigger: user says summarize this text, sum it up, shorten it, 总结/概括/提炼要点. Returns a single plain-text summary.",
 }
 
 
@@ -283,53 +278,6 @@ def build_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="project_exports",
-            description=TOOL_DESCRIPTIONS["project_exports"],
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "dbPath": {
-                        "type": "string",
-                        "description": param_text("param.db_path"),
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": param_text("param.file_or_dir"),
-                    },
-                },
-                "required": ["dbPath", "path"],
-            },
-        ),
-        Tool(
-            name="project_dependencies",
-            description=TOOL_DESCRIPTIONS["project_dependencies"],
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "dbPath": {
-                        "type": "string",
-                        "description": param_text("param.db_path"),
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": param_text("param.file_or_dir"),
-                    },
-                    "direction": {
-                        "type": "string",
-                        "enum": ["outgoing", "incoming", "both"],
-                        "default": DEFAULT_PROJECT_DEPENDENCIES_DIRECTION,
-                        "description": param_text("param.dependency_direction"),
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": DEFAULT_PROJECT_DEPENDENCIES_LIMIT,
-                        "description": param_text("param.max_results"),
-                    },
-                },
-                "required": ["dbPath", "path"],
-            },
-        ),
-        Tool(
             name="project_notes",
             description=TOOL_DESCRIPTIONS["project_notes"],
             inputSchema={
@@ -425,29 +373,6 @@ def build_tools() -> list[Tool]:
                     },
                 },
                 "required": ["url"],
-            },
-        ),
-        Tool(
-            name="summarize",
-            description=TOOL_DESCRIPTIONS["summarize"],
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": param_text("param.summarize_text"),
-                    },
-                    "instruction": {
-                        "type": "string",
-                        "description": param_text("param.summarize_instruction"),
-                    },
-                    "max_tokens": {
-                        "type": "integer",
-                        "default": DEFAULT_SUMMARIZE_MAX_TOKENS,
-                        "description": param_text("param.summarize_max_tokens"),
-                    },
-                },
-                "required": ["text"],
             },
         ),
     ]

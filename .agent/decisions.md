@@ -25,6 +25,9 @@
 | 2026-10-29 | D3 | 规则注入改为确定性位置策略：第 1 条真实 user 注入 full 块，其余注入内置英文短提示；`fullEvery` 可周期刷新，`mode=full` 回退 | Agent | 代理每次基于客户端原始历史重算，位置规则使历史消息跨请求字节一致；压缩后新首条自动重建 full；185 例测试通过 | env `MODEL_PROXY_RULE_INJECTION={"mode":"full"}` |
 
 | 2026-10-29 | D3 | 按 agent-vibe 1.0.0 升级基座：拆分 `core.md`、补 `memory/INDEX` 与双钩子/PR 模板，迁入缺失的 concern/type 规则 | Agent | 种子升级协议；实例化校验报告 `core.md` 174 行超 120 预算、缺钩子与索引 | 恢复 `core.md` 单文件，移除新增规则与钩子 |
+| 2026-10-29 | D1 | 移除 MCP 工具 `project_dependencies`、`project_exports`、`summarize`；`summarize` 仅保留 REST `/api/summarize` | 用户 | 前两者低频且可被搜索/读取替代；`summarize` 模型可直答，宿主业务仍走 REST | 恢复工具 schema、handler 与对应模块（废纸篓有原文件） |
+| 2026-10-29 | D3 | `project_notes` 改为混合重排（语义 0.65 + 关键词 0.30 + 路径 0.05 + MMR 去重），并提供扫描后预热入口 | Agent | 冷启动首查 58.5s；重复文档占满结果；预热在 project_search/structure 与 `/api/project/notes/prewarm` 触发 | 恢复旧排序与移除预热调用 |
+| 2026-10-29 | D3 | `project_notes` 每次扫描清理不在当前扫描集合或项目根外的缓存行；连续短段落累积成块而非丢弃 | Agent | 项目迁移后旧绝对路径残留 133 文件/2728 分块（51%），规则清单类文档 0 分块 | 回退清理逻辑与旧分块器 |
 
 ## 记录规则
 

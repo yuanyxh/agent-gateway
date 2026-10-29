@@ -32,7 +32,6 @@ TOOL_ARG_DEFAULTS: dict[str, dict[str, int]] = {
     "recall": {"limit": 6},
     "project_search": {"limit": 15},
     "project_structure": {"limit": 15},
-    "project_dependencies": {"limit": 30},
     "project_notes": {"limit": 5},
     "websearch_engine": {"limit": 5, "fetch_top": 0, "max_chars": 6000},
     "read_url": {"max_chars": 0},

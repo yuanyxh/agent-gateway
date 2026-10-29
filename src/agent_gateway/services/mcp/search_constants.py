@@ -45,8 +45,6 @@ NOTE_PREVIEW_LEN = 300
 #: literal and drift.
 DEFAULT_PROJECT_SEARCH_LIMIT = arg_default("project_search", "limit")
 DEFAULT_PROJECT_STRUCTURE_LIMIT = arg_default("project_structure", "limit")
-DEFAULT_PROJECT_DEPENDENCIES_LIMIT = arg_default("project_dependencies", "limit")
-DEFAULT_PROJECT_DEPENDENCIES_DIRECTION = "outgoing"
 PROJECT_MARKER_FILES = frozenset(
     {
         # JS/TS

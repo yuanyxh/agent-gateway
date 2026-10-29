@@ -10,6 +10,10 @@ from agent_gateway.services.mcp.search_constants import (
     NOTE_CHUNK_MIN_SIZE,
     NOTE_CHUNK_OVERLAP,
     NOTE_EXCLUDE_DIRS,
+    PROJECT_MARKER_DIR_SUFFIXES,
+    PROJECT_MARKER_FILES,
+    PROJECT_MARKER_FILE_SUFFIXES,
+    PROJECT_MARKER_MAX_DEPTH,
     _HAS_PATHSPEC,
     logger,
 )
@@ -82,33 +86,93 @@ def _scan_md_files(project_path: str) -> list[dict]:
     return files
 
 
+def is_dev_project(project_path: str) -> bool:
+    """Shallow-scan for project marker files.
+
+    A pure document repo (only .md + .git) has none of these markers, so note
+    search uses keyword-only mode and does not create a vector cache there.
+    """
+    project_path = os.path.normpath(project_path)
+
+    def _scan(root: str, depth: int) -> bool:
+        if depth > PROJECT_MARKER_MAX_DEPTH:
+            return False
+        try:
+            with os.scandir(root) as it:
+                for entry in it:
+                    if entry.is_dir():
+                        if entry.name in NOTE_EXCLUDE_DIRS:
+                            continue
+                        if entry.name.endswith(PROJECT_MARKER_DIR_SUFFIXES):
+                            return True
+                        if _scan(entry.path, depth + 1):
+                            return True
+                    elif entry.is_file():
+                        if entry.name in PROJECT_MARKER_FILES:
+                            return True
+                        if entry.name.endswith(PROJECT_MARKER_FILE_SUFFIXES):
+                            return True
+        except OSError:
+            pass
+        return False
+
+    return _scan(project_path, 0)
+
+
 def _chunk_md_text(text: str, file_path: str) -> list[dict]:
-    """Split markdown text into chunks by paragraph, with max-size enforcement."""
-    chunks = []
+    """Split markdown text into chunks, merging short paragraphs.
+
+    Dropping every paragraph under NOTE_CHUNK_MIN_SIZE makes rule-list files
+    invisible: their content is a sequence of short bullets, so the whole file
+    yields zero chunks. Consecutive short paragraphs are accumulated instead.
+    """
+    chunks: list[dict] = []
     paragraphs = text.split("\n\n")
     line_count = 1
+    buffer: list[str] = []
+    buffer_start = 1
+    buffer_len = 0
+
+    def flush() -> None:
+        nonlocal buffer, buffer_len
+        if not buffer:
+            return
+        chunks.append(
+            {
+                "file_path": file_path,
+                "chunk_index": 0,
+                "chunk_text": "\n\n".join(buffer),
+                "line_start": buffer_start,
+            }
+        )
+        buffer = []
+        buffer_len = 0
 
     for para in paragraphs:
         stripped = para.strip()
-        if not stripped or len(stripped) < NOTE_CHUNK_MIN_SIZE:
-            line_count += para.count("\n") + 1
+        start_line = line_count
+        line_count += para.count("\n") + 1
+        if not stripped:
             continue
 
-        if len(stripped) <= NOTE_CHUNK_MAX_SIZE:
-            chunks.append(
-                {
-                    "file_path": file_path,
-                    "chunk_index": len(chunks),
-                    "chunk_text": stripped,
-                    "line_start": line_count,
-                }
-            )
-        else:
-            sub = _split_long_text(stripped, file_path, line_count)
-            chunks.extend(sub)
+        if len(stripped) > NOTE_CHUNK_MAX_SIZE:
+            flush()
+            chunks.extend(_split_long_text(stripped, file_path, start_line))
+            continue
 
-        line_count += para.count("\n") + 1
+        if buffer and buffer_len + len(stripped) + 2 > NOTE_CHUNK_MAX_SIZE:
+            flush()
+        if not buffer:
+            buffer_start = start_line
+        buffer.append(stripped)
+        buffer_len += len(stripped) + 2
+        if buffer_len >= NOTE_CHUNK_MIN_SIZE:
+            flush()
 
+    flush()
+
+    for idx, chunk in enumerate(chunks):
+        chunk["chunk_index"] = idx
     return chunks
 
 

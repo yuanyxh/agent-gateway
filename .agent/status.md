@@ -33,6 +33,7 @@
 - 2026-10-29 补 `set_memory_status` 生命周期测试（`tests/test_memory_status.py`，3 例）：恢复 active 清 `deleted_at` 与 supersede 字段、只清 retired 位保留 summarized 位；删除置 `deleted_at` 并置 retired 位
 - 2026-10-29 规则注入改确定性位置策略：首条真实 user 注入 full 块（`--rule_start`），其余注入内置英文短提示（`--short_rule_start`）；`MODEL_PROXY_RULE_INJECTION` 控制 `mode` 与 `fullEvery`；剥离兼容旧三横线块；已注入判定改为前缀匹配，避免正文提及标记时误跳过；新增 12 例测试
 - 2026-10-29 按 agent-vibe 1.0.0 升级基座：补 `seed_version` 与 `memory/INDEX.md`、`pre-commit`/`commit-msg`、PR 模板、core 标记；`core.md` 拆为 5 个主题规则，迁入 engineering / testing / vcs / design / collaboration / documentation / library 规则
+- 2026-10-29 工具面收敛：移除 MCP `project_dependencies` / `project_exports` / `summarize` 与对应 handler/schema/tests；`summarize` 仅保留 REST；`project_notes` 增加混合重排、MMR 去重、扫描后预热（`project_search`/`project_structure` 触发 + `/api/project/notes/prewarm`）；新增 3 例缓存清理与分块测试，测试 189 例通过；wheel 已部署复验（合成项目触发 `pruned 1 stale files`）
 
 ## 下一步
 
@@ -62,6 +63,7 @@
 | 2026-10-28 | 离线阈值实验（副本 mem0，4260 条） | 0.65/0.70/0.75/0.80/0.85 单条组占比 64.5%/71.1%/79.8%/88.0%/94.5% |
 | 2026-10-29 | `ruff format --check` / `ruff check` / `unittest discover` | 通过（155 文件 / 0 条 / 177 例，1 skipped） |
 | 2026-10-29 | `ruff format --check` / `ruff check` / `unittest discover` / `agent-gateway --check` | 通过（155 文件 / 0 条 / 188 例 1 skipped / check passed） |
+| 2026-10-29 | 工具面收敛后 `ruff format --check` / `ruff check` / `unittest discover` | 通过（154 文件 / 0 条 / 186 例，1 skipped） |
 
 ## 已知问题
 

@@ -63,16 +63,13 @@ from agent_gateway.services.mcp.server_tool_schema import (
     build_tools,
 )
 from agent_gateway.services.mcp.server_search import (
-    DEFAULT_PROJECT_DEPENDENCIES_DIRECTION,
-    DEFAULT_PROJECT_DEPENDENCIES_LIMIT,
     DEFAULT_PROJECT_SEARCH_LIMIT,
     DEFAULT_PROJECT_STRUCTURE_LIMIT,
     tool_project_search,
     tool_project_structure,
-    tool_project_exports,
-    tool_project_dependencies,
     _query_project_notes,
 )
+from agent_gateway.services.mcp.search_notes_cache import schedule_prewarm_for_db
 from agent_gateway.services.mcp.server_archive import archive_scheduler
 from agent_gateway.services.mcp.server_memory import (
     HANDLERS as MEMORY_HANDLERS,
@@ -91,7 +88,6 @@ from agent_gateway.services.mcp.server_state import (
 from agent_gateway.services.mcp.server_rest import (
     REST_ROUTES,
     read_args,
-    summarize_args,
 )
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
 from agent_gateway.services.mcp.server_constants import (
@@ -120,7 +116,6 @@ from agent_gateway.services.mcp.server_skills import (
     scan_skills,
 )
 from agent_gateway.services.read.read_service import read_url
-from agent_gateway.services.summarize import text as summarize_service
 from agent_gateway.services.search import web_search
 from agent_gateway.core.log_utils import setup_logging
 
@@ -252,6 +247,7 @@ async def _handle_project_search(arguments: dict) -> list[TextContent]:
             kind=arguments.get("kind", ""),
             limit=int_arg(arguments, "limit", DEFAULT_PROJECT_SEARCH_LIMIT),
         )
+        schedule_prewarm_for_db(arguments["dbPath"])
         return [TextContent(type="text", text=dumps(result))]
     except Exception:
         # Re-raise to handle_call_tool: returning {"error": ...} here makes the SDK treat
@@ -269,42 +265,12 @@ async def _handle_project_structure(arguments: dict) -> list[TextContent]:
             arguments.get("path", ""),
             int_arg(arguments, "limit", DEFAULT_PROJECT_STRUCTURE_LIMIT),
         )
+        schedule_prewarm_for_db(arguments["dbPath"])
         return [TextContent(type="text", text=dumps(result))]
     except Exception:
         # Re-raise to handle_call_tool: returning {"error": ...} here makes the SDK treat
         # it as success, so a real failure is read by the client as "found it, just no
         # results". Logging is done uniformly by the fallback layer.
-        raise
-
-
-@_register("project_exports")
-async def _handle_project_exports(arguments: dict) -> list[TextContent]:
-    try:
-        result = await asyncio.to_thread(
-            tool_project_exports, arguments["dbPath"], arguments["path"]
-        )
-        return [TextContent(type="text", text=dumps(result))]
-    except Exception:
-        # Re-raise to handle_call_tool: returning {"error": ...} here makes the SDK treat
-        # it as success, so a real failure is read by the client as "found it, just no
-        # results". Logging is done uniformly by the fallback layer.
-        raise
-
-
-@_register("project_dependencies")
-async def _handle_project_dependencies(arguments: dict) -> list[TextContent]:
-    try:
-        result = await asyncio.to_thread(
-            tool_project_dependencies,
-            arguments["dbPath"],
-            arguments["path"],
-            arguments.get("direction", DEFAULT_PROJECT_DEPENDENCIES_DIRECTION),
-            int_arg(arguments, "limit", DEFAULT_PROJECT_DEPENDENCIES_LIMIT),
-        )
-        return [TextContent(type="text", text=dumps(result))]
-    except Exception:
-        # Re-raise so the SDK marks the call as an error instead of returning a
-        # successful empty payload the client would read as "no dependencies".
         raise
 
 
@@ -447,15 +413,6 @@ async def _handle_websearch_engine(arguments: dict) -> list[TextContent]:
 async def _handle_read_url(arguments: dict) -> list[TextContent]:
     url, max_chars, use_proxy = read_args(arguments)
     result = await asyncio.to_thread(read_url, url, max_chars, use_proxy)
-    return [TextContent(type="text", text=dumps(result))]
-
-
-@_register("summarize")
-async def _handle_summarize(arguments: dict) -> list[TextContent]:
-    text, instruction, max_tokens = summarize_args(arguments)
-    result = await asyncio.to_thread(
-        summarize_service.summarize_text, text, instruction, max_tokens
-    )
     return [TextContent(type="text", text=dumps(result))]
 
 
@@ -697,26 +654,10 @@ async def serve():
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
-    async def api_project_exports(request):
+    async def api_project_notes_prewarm(request):
         body = await request.json()
-        try:
-            result = tool_project_exports(body.get("dbPath", ""), body.get("path", ""))
-            return JSONResponse(result)
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=500)
-
-    async def api_project_dependencies(request):
-        body = await request.json()
-        try:
-            result = tool_project_dependencies(
-                body.get("dbPath", ""),
-                body.get("path", ""),
-                body.get("direction", DEFAULT_PROJECT_DEPENDENCIES_DIRECTION),
-                int_arg(body, "limit", DEFAULT_PROJECT_DEPENDENCIES_LIMIT),
-            )
-            return JSONResponse(result)
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=500)
+        scheduled = schedule_prewarm_for_db(body.get("dbPath", ""))
+        return JSONResponse({"scheduled": scheduled})
 
     rest_app = Starlette(
         routes=[
@@ -746,11 +687,8 @@ async def serve():
                 methods=["POST"],
             ),
             Route(
-                "/api/project/exports", endpoint=api_project_exports, methods=["POST"]
-            ),
-            Route(
-                "/api/project/dependencies",
-                endpoint=api_project_dependencies,
+                "/api/project/notes/prewarm",
+                endpoint=api_project_notes_prewarm,
                 methods=["POST"],
             ),
         ]

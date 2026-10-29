@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 
 import numpy as np
 
@@ -16,7 +17,14 @@ from agent_gateway.services.mcp.search_constants import (
     _note_cache_lock,
     logger,
 )
-from agent_gateway.services.mcp.search_notes_io import _chunk_md_text, _scan_md_files
+from agent_gateway.services.mcp.search_notes_io import (
+    _chunk_md_text,
+    _scan_md_files,
+    is_dev_project,
+)
+
+_prewarm_lock = threading.Lock()
+_prewarm_inflight: set[str] = set()
 
 
 def _get_note_db(db_path: str) -> sqlite3.Connection:
@@ -48,6 +56,65 @@ def _embed_in_batches(emb, texts: list[str]) -> list:
     for i in range(0, len(texts), _EMBED_BATCH_SIZE):
         out.extend(emb.embed(texts[i : i + _EMBED_BATCH_SIZE]))
     return out
+
+
+def project_root_from_db_path(db_path: str) -> str | None:
+    """Return the project root for `<root>/.utility/deps.sqlite`, else None."""
+    norm = os.path.normpath(db_path)
+    if os.path.basename(norm) != "deps.sqlite":
+        return None
+    utility_dir = os.path.dirname(norm)
+    if os.path.basename(utility_dir) != ".utility":
+        return None
+    return os.path.dirname(utility_dir)
+
+
+def prewarm_project_notes(project_path: str) -> dict:
+    """Warm the note vector cache; non-dev projects and empty doc sets are skipped."""
+    project_path = os.path.normpath(project_path)
+    if not is_dev_project(project_path):
+        return {"ok": True, "skipped": "non-dev"}
+    if not _scan_md_files(project_path):
+        return {"ok": True, "skipped": "no-markdown"}
+
+    conn, db_path, total_chunks = _ensure_note_cache(project_path)
+    conn.close()
+    return {"ok": True, "chunks": total_chunks, "dbPath": db_path}
+
+
+def schedule_project_notes_prewarm(project_path: str) -> bool:
+    """Run `prewarm_project_notes` in a daemon thread; deduplicates per project."""
+    project_path = os.path.normpath(project_path)
+
+    with _prewarm_lock:
+        if project_path in _prewarm_inflight:
+            return False
+        _prewarm_inflight.add(project_path)
+
+    def _run() -> None:
+        try:
+            result = prewarm_project_notes(project_path)
+            logger.info(f"[project_notes] prewarm {project_path}: {result}")
+        except Exception as e:
+            logger.warning(f"[project_notes] prewarm failed for {project_path}: {e}")
+        finally:
+            with _prewarm_lock:
+                _prewarm_inflight.discard(project_path)
+
+    threading.Thread(
+        target=_run,
+        name="project-notes-prewarm",
+        daemon=True,
+    ).start()
+    return True
+
+
+def schedule_prewarm_for_db(db_path: str) -> bool:
+    """Schedule prewarm from a `.utility/deps.sqlite` path."""
+    project_path = project_root_from_db_path(db_path)
+    if not project_path:
+        return False
+    return schedule_project_notes_prewarm(project_path)
 
 
 def _ensure_note_cache(
@@ -88,6 +155,28 @@ def _ensure_note_cache(
             except OSError:
                 pass
             conn = _get_note_db(db_path)
+
+        # The cache is derived data owned by this project, so any row not backed by a
+        # currently scanned file is stale: deleted docs, newly ignored paths, or rows
+        # written before the project moved (absolute paths still point at the old root).
+        # Keeping them pollutes retrieval and can hold a majority of the chunks.
+        scanned_paths = {mf["path"] for mf in md_files}
+        stale_paths = [
+            p
+            for p in cached
+            if p not in scanned_paths or not p.startswith(project_path + os.sep)
+        ]
+        if stale_paths:
+            with conn:
+                conn.executemany(
+                    "DELETE FROM chunks WHERE file_path = ?",
+                    [(p,) for p in stale_paths],
+                )
+            for p in stale_paths:
+                cached.pop(p, None)
+            logger.info(
+                f"[project_notes] {project_path}: pruned {len(stale_paths)} stale files"
+            )
 
         changed = [
             mf

@@ -32,7 +32,7 @@ def read_args(arguments: dict) -> tuple[str, int, bool]:
 
 
 def summarize_args(arguments: dict) -> tuple[str, str, int]:
-    """Shared by the `summarize` MCP tool and `/api/summarize`."""
+    """Normalize `/api/summarize` arguments."""
     return (
         str(arguments.get("text", "")),
         str(arguments.get("instruction", "")),

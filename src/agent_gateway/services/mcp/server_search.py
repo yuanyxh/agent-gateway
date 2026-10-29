@@ -1,8 +1,8 @@
 """Project dependency-graph query + note semantic search (facade).
 
 Implementation lives in search_constants / search_symbols / search_vectors /
-search_notes_io / search_notes_cache / search_notes_query / project_tools /
-project_dependencies. This module only re-exports the public surface.
+search_notes_io / search_notes_cache / search_notes_query / project_tools.
+This module only re-exports the public surface.
 """
 
 from __future__ import annotations
@@ -21,14 +21,10 @@ from agent_gateway.core.tool_defaults import arg_default
 from agent_gateway.services.mcp.server_embed import _get_shared_embedder, embed_query
 
 from agent_gateway.services.mcp.search_constants import (
-    DEFAULT_PROJECT_DEPENDENCIES_DIRECTION,
-    DEFAULT_PROJECT_DEPENDENCIES_LIMIT,
     DEFAULT_PROJECT_SEARCH_LIMIT,
     DEFAULT_PROJECT_STRUCTURE_LIMIT,
 )
-from agent_gateway.services.mcp.project_dependencies import tool_project_dependencies
 from agent_gateway.services.mcp.project_tools import (
-    tool_project_exports,
     tool_project_search,
     tool_project_structure,
 )

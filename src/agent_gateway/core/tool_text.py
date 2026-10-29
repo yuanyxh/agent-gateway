@@ -38,11 +38,6 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     "param.file_path": "Optional. Restrict to a file path (fuzzy match)",
     "param.symbol_kind": "Optional. Restrict to a symbol kind (class/fun/val/...)",
     "param.subpath": "Optional subpath; returns its next level",
-    "param.file_or_dir": "File or directory path",
-    "param.dependency_direction": (
-        "outgoing (what this path imports), incoming (what imports it), or both; "
-        "default outgoing"
-    ),
     "param.notes_keyword": "Search keyword; natural language is supported",
     "param.project_dir": "Absolute path to the project directory",
     "param.parent_name": "Registered tool name, e.g. check/write/think",
@@ -56,9 +51,6 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     "param.engines": "Optional comma-separated engines; default is a language-aware cascade",
     "param.read_url": "Absolute http/https URL to read",
     "param.read_max_chars": "Max Markdown chars to return; 0 = unlimited (default)",
-    "param.summarize_text": "Text to summarize; up to 50,000 characters",
-    "param.summarize_instruction": "Optional instruction overriding the default summary style",
-    "param.summarize_max_tokens": "Max tokens for the summary; default 600, max 4000",
     "param.read_use_proxy": (
         "Allow third-party readers (defuddle.md, r.jina.ai) when local extraction "
         "fails or is a login shell; only for public, non-sensitive URLs"

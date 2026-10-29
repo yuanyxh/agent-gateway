@@ -10,54 +10,17 @@ import numpy as np
 from agent_gateway.services.mcp.server_embed import embed_query
 
 from agent_gateway.services.mcp.search_constants import (
-    NOTE_EXCLUDE_DIRS,
     NOTE_MAX_RESULTS,
     NOTE_PREVIEW_LEN,
     NOTE_SIMILARITY_THRESHOLD,
-    PROJECT_MARKER_DIR_SUFFIXES,
-    PROJECT_MARKER_FILES,
-    PROJECT_MARKER_FILE_SUFFIXES,
-    PROJECT_MARKER_MAX_DEPTH,
     logger,
 )
 from agent_gateway.services.mcp.search_notes_cache import _ensure_note_cache
-from agent_gateway.services.mcp.search_notes_io import _chunk_md_text, _scan_md_files
-
-
-def _is_dev_project(project_path: str) -> bool:
-    """Shallow-scan the target path for common project marker files — decides whether it
-    is a "dev project".
-
-    A pure document repo (e.g. notes: only .md + .git) has none of these markers → returns
-    False, so project_notes uses an in-memory-only keyword search for non-dev projects and
-    no longer creates the .utility cache. Note: .git/.gitignore are deliberately excluded
-    (document repos such as notes have them too) to avoid a false positive.
-    """
-    project_path = os.path.normpath(project_path)
-
-    def _scan(root: str, depth: int) -> bool:
-        if depth > PROJECT_MARKER_MAX_DEPTH:
-            return False
-        try:
-            with os.scandir(root) as it:
-                for entry in it:
-                    if entry.is_dir():
-                        if entry.name in NOTE_EXCLUDE_DIRS:
-                            continue
-                        if entry.name.endswith(PROJECT_MARKER_DIR_SUFFIXES):
-                            return True
-                        if _scan(entry.path, depth + 1):
-                            return True
-                    elif entry.is_file():
-                        if entry.name in PROJECT_MARKER_FILES:
-                            return True
-                        if entry.name.endswith(PROJECT_MARKER_FILE_SUFFIXES):
-                            return True
-        except OSError:
-            pass
-        return False
-
-    return _scan(project_path, 0)
+from agent_gateway.services.mcp.search_notes_io import (
+    _chunk_md_text,
+    _scan_md_files,
+    is_dev_project,
+)
 
 
 def _keyword_search_uncached(project_path: str, query: str, limit: int) -> dict:
@@ -109,7 +72,7 @@ def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
     limit = max(1, min(limit, NOTE_MAX_RESULTS))
 
     # Non-dev project (no marker files): no .utility cache persisted, in-memory-only keyword search
-    if not _is_dev_project(project_path):
+    if not is_dev_project(project_path):
         logger.info(
             f"[project_notes] non-dev project, uncached keyword search: {project_path}"
         )
@@ -135,17 +98,18 @@ def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
     if not rows:
         return {"results": [], "count": 0, "total_chunks": total_chunks}
 
-    # Try vector search first (via the shared query cache)
+    # Vector scores over cached chunks. Chunks without embeddings fall back to
+    # keyword-only scoring below.
     query_vec = embed_query(query)
-    vector_results: list[dict] = []
+    vector_scores: dict[tuple[str, int], float] = {}
+    vectors_by_key: dict[tuple[str, int], np.ndarray] = {}
 
     if query_vec is not None:
         try:
             qnorm = np.linalg.norm(query_vec)
             if qnorm > 1e-10:
                 query_vec = query_vec / qnorm
-
-                entries = []
+                keys: list[tuple[str, int]] = []
                 vectors = []
                 for r in rows:
                     blob = r["embedding"]
@@ -154,84 +118,82 @@ def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
                     try:
                         vec = np.frombuffer(blob, dtype=np.float32).copy()
                         norm = np.linalg.norm(vec)
-                        if norm > 1e-10:
-                            vectors.append(vec / norm)
-                        else:
-                            vectors.append(vec)
-                        entries.append(
-                            {
-                                "file_path": r["file_path"],
-                                "chunk_text": r["chunk_text"],
-                                "line_start": r["line_start"],
-                            }
-                        )
+                        normalized = vec / norm if norm > 1e-10 else vec
+                        vectors.append(normalized)
+                        keys.append((r["file_path"], r["chunk_index"]))
                     except Exception:
                         continue
-
                 if vectors:
                     matrix = np.array(vectors, dtype=np.float32)
                     sims = np.dot(matrix, query_vec)
-                    indices = np.argsort(-sims)
-                    for idx in indices:
-                        if sims[idx] < NOTE_SIMILARITY_THRESHOLD:
-                            break
-                        if len(vector_results) >= limit:
-                            break
-                        e = entries[idx]
-                        vector_results.append(
-                            {
-                                "file": os.path.relpath(e["file_path"], project_path),
-                                "line": e["line_start"],
-                                "content": e["chunk_text"][:NOTE_PREVIEW_LEN],
-                                "score": round(float(sims[idx]), 4),
-                            }
-                        )
-
-            if vector_results:
-                pass  # fall through to keyword merge below
+                    for key, sim, vec in zip(keys, sims, vectors):
+                        vector_scores[key] = float(sim)
+                        vectors_by_key[key] = vec
         except Exception as e:
             logger.warning(f"[project_notes] vector search failed: {e}")
 
-    # Keyword search (grep-lite) — always runs; exact matches are inserted ahead of vector results
+    # Hybrid rerank: semantic similarity, exact token coverage, and a small
+    # path boost. A chunk must clear the vector threshold or match a token;
+    # low-similarity vector hits are dropped instead of filling the limit.
     tokens = [t for t in query.split() if t]
-    keyword_results: list[dict] = []
-    seen_files: set[tuple[str, int]] = set()
+    needles = [t.lower() for t in tokens]
+    candidates: dict[tuple[str, int], dict] = {}
 
     for r in rows:
         text = r["chunk_text"]
-        if not tokens or not any(t.lower() in text.lower() for t in tokens):
-            continue
-        matched = sum(1 for t in tokens if t.lower() in text.lower())
+        lowered = text.lower()
+        matched = sum(1 for t in needles if t in lowered)
+        keyword_score = matched / max(len(needles), 1) if needles else 0.0
         key = (r["file_path"], r["chunk_index"])
-        if key in seen_files:
+        vector_score = vector_scores.get(key, 0.0)
+
+        if vector_score < NOTE_SIMILARITY_THRESHOLD and keyword_score <= 0:
             continue
-        seen_files.add(key)
-        keyword_results.append(
-            {
-                "file": os.path.relpath(r["file_path"], project_path),
-                "line": r["line_start"],
-                "content": text[:NOTE_PREVIEW_LEN],
-                "score": round(matched / max(len(tokens), 1), 4),
-            }
-        )
 
-    keyword_results.sort(key=lambda x: -x["score"])
-
-    if vector_results:
-        # Exact matches inserted ahead of vector results (vector search can rank poorly for CJK/cross-language queries)
-        seen_keys = {(r["file"], r["line"]) for r in vector_results}
-        exact_hits = [
-            r for r in keyword_results if (r["file"], r["line"]) not in seen_keys
-        ]
-        merged = exact_hits + vector_results
-        return {
-            "results": merged[:limit],
-            "count": len(merged[:limit]),
-            "total_chunks": total_chunks,
+        rel = os.path.relpath(r["file_path"], project_path)
+        path_hit = 1.0 if needles and any(t in rel.lower() for t in needles) else 0.0
+        final_score = 0.65 * vector_score + 0.30 * keyword_score + 0.05 * path_hit
+        candidates[key] = {
+            "file": rel,
+            "line": r["line_start"],
+            "content": text[:NOTE_PREVIEW_LEN],
+            "score": round(final_score, 4),
+            "_vector": vector_score,
+            "_vec": vectors_by_key.get(key),
         }
 
+    # MMR-style diversity pass: near-duplicate docs (e.g. copied language
+    # variants) otherwise fill the whole limit. Keep relevance dominant, but
+    # penalize chunks that are nearly identical to an already selected one.
+    remaining = sorted(candidates.values(), key=lambda x: (-x["score"], -x["_vector"]))
+    ordered: list[dict] = []
+    while remaining and len(ordered) < limit:
+        best_idx = 0
+        best_value = float("-inf")
+        for idx, item in enumerate(remaining):
+            vec = item["_vec"]
+            similarity = 0.0
+            if vec is not None and ordered:
+                similarity = max(
+                    (
+                        float(np.dot(vec, selected["_vec"]))
+                        for selected in ordered
+                        if selected["_vec"] is not None
+                    ),
+                    default=0.0,
+                )
+            value = 0.7 * item["score"] - 0.3 * similarity
+            if value > best_value:
+                best_value = value
+                best_idx = idx
+        ordered.append(remaining.pop(best_idx))
+
+    for item in ordered:
+        item.pop("_vector", None)
+        item.pop("_vec", None)
+
     return {
-        "results": keyword_results[:limit],
-        "count": len(keyword_results[:limit]),
+        "results": ordered[:limit],
+        "count": len(ordered[:limit]),
         "total_chunks": total_chunks,
     }
