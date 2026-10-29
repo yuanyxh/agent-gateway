@@ -1067,10 +1067,15 @@ def _extract_output_from_sse(sse_data: bytes, api_format: str = "anthropic") -> 
     return full_text[:2000] if full_text else ""
 
 
-def _extract_tool_name_from_sse(sse_data: bytes, api_format: str = "anthropic") -> str:
-    """Extract the tool name of tool_use/tool_calls from the SSE stream."""
+def _extract_tool_names_from_sse(
+    sse_data: bytes, api_format: str = "anthropic"
+) -> list[str]:
+    """Extract every tool_use/tool_calls name from the SSE stream, in call order."""
+    names: list[str] = []
+    seen_indices: set[int] = set()
+
     if api_format == "anthropic":
-        # Anthropic: content_block_start → content_block.name
+        # Anthropic: one content_block_start per tool_use block
         for line in sse_data.decode("utf-8", errors="replace").split("\n"):
             if not line.startswith("data: "):
                 continue
@@ -1084,29 +1089,40 @@ def _extract_tool_name_from_sse(sse_data: bytes, api_format: str = "anthropic") 
                     if isinstance(block, dict) and block.get("type") == "tool_use":
                         name = block.get("name", "")
                         if name:
-                            return name
+                            names.append(name)
             except json.JSONDecodeError:
                 continue
-    else:
-        # OpenAI: choices[0].delta.tool_calls[0].function.name
-        for line in sse_data.decode("utf-8", errors="replace").split("\n"):
-            if not line.startswith("data: "):
-                continue
-            data_str = line[6:].strip()
-            if data_str == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data_str)
-                choices = chunk.get("choices", [])
-                if choices:
-                    delta = choices[0].get("delta", {})
-                    tool_calls = delta.get("tool_calls", [])
-                    if tool_calls:
-                        for tc in tool_calls:
-                            fn = tc.get("function", {})
-                            name = fn.get("name", "")
-                            if name:
-                                return name
-            except json.JSONDecodeError:
-                continue
-    return ""
+        return names
+
+    # OpenAI: parallel calls are distinguished by tool_calls[].index; the name only
+    # appears in that call's first delta, so index-based dedup avoids counting a call
+    # once per chunk while still keeping two calls to the same tool.
+    for line in sse_data.decode("utf-8", errors="replace").split("\n"):
+        if not line.startswith("data: "):
+            continue
+        data_str = line[6:].strip()
+        if data_str == "[DONE]":
+            break
+        try:
+            chunk = json.loads(data_str)
+            for choice in chunk.get("choices") or []:
+                delta = choice.get("delta") or {}
+                for call in delta.get("tool_calls") or []:
+                    idx = call.get("index")
+                    if idx is not None and idx in seen_indices:
+                        continue
+                    name = (call.get("function") or {}).get("name", "")
+                    if not name:
+                        continue
+                    if idx is not None:
+                        seen_indices.add(idx)
+                    names.append(name)
+        except json.JSONDecodeError:
+            continue
+    return names
+
+
+def _extract_tool_name_from_sse(sse_data: bytes, api_format: str = "anthropic") -> str:
+    """First tool name of the SSE stream (compatibility helper)."""
+    names = _extract_tool_names_from_sse(sse_data, api_format=api_format)
+    return names[0] if names else ""

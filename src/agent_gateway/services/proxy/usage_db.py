@@ -45,6 +45,7 @@ def init_db():
             api_format TEXT,
             request_level TEXT DEFAULT 'core',
             tool_name TEXT,
+            tool_names TEXT,
             parent_id INTEGER,
             actual_user_input TEXT,
             error_message TEXT,
@@ -103,6 +104,11 @@ def init_db():
         conn.commit()
     if "error_message" not in columns:
         conn.execute("ALTER TABLE api_usage ADD COLUMN error_message TEXT")
+        conn.commit()
+    # Full tool list per response (JSON array). tool_name keeps the first name for
+    # compatibility; aggregate stats must use this column or they undercount parallel calls.
+    if "tool_names" not in columns:
+        conn.execute("ALTER TABLE api_usage ADD COLUMN tool_names TEXT")
         conn.commit()
 
     # Migration: tiered-routing diagnostic columns (route_tier tier / route_reason decision
@@ -199,6 +205,18 @@ def init_tool_output_db():
     # makes initialization raise directly and the proxy fails to start.
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tool_output_session ON tool_output_log(session_key)"
+    )
+    # One row per tool call. The same tool_result can remain the "latest round" across
+    # several requests, so it was recorded repeatedly; keep the first row and make future
+    # writes idempotent by tool_call_id (empty ids stay exempt from the unique index).
+    conn.execute(
+        "DELETE FROM tool_output_log WHERE tool_call_id != '' AND rowid NOT IN "
+        "(SELECT MIN(rowid) FROM tool_output_log "
+        "WHERE tool_call_id != '' GROUP BY tool_call_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_output_call_id "
+        "ON tool_output_log(tool_call_id) WHERE tool_call_id != ''"
     )
     conn.commit()
 

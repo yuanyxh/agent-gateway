@@ -28,6 +28,7 @@
 | 2026-10-29 | D1 | 移除 MCP 工具 `project_dependencies`、`project_exports`、`summarize`；`summarize` 仅保留 REST `/api/summarize` | 用户 | 前两者低频且可被搜索/读取替代；`summarize` 模型可直答，宿主业务仍走 REST | 恢复工具 schema、handler 与对应模块（废纸篓有原文件） |
 | 2026-10-29 | D3 | `project_notes` 改为混合重排（语义 0.65 + 关键词 0.30 + 路径 0.05 + MMR 去重），并提供扫描后预热入口 | Agent | 冷启动首查 58.5s；重复文档占满结果；预热在 project_search/structure 与 `/api/project/notes/prewarm` 触发 | 恢复旧排序与移除预热调用 |
 | 2026-10-29 | D3 | `project_notes` 每次扫描清理不在当前扫描集合或项目根外的缓存行；连续短段落累积成块而非丢弃 | Agent | 项目迁移后旧绝对路径残留 133 文件/2728 分块（51%），规则清单类文档 0 分块 | 回退清理逻辑与旧分块器 |
+| 2026-10-29 | D3 | `api_usage` 记录一次响应内全部工具（`tool_names` JSON），`tool_output_log` 按 `tool_call_id` 唯一，新增 `/usage/tools` 统计端点 | Agent | 原 `tool_name` 只记首个工具，非流式还回退到上一轮；近 5 天 1334/7127 次请求含多工具；同一调用最多重复 7 行 | 删除 `tool_names`/唯一索引与端点，恢复单工具统计 |
 
 ## 记录规则
 

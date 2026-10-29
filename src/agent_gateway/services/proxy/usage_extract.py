@@ -261,6 +261,32 @@ def extract_response_context(usage_data: dict) -> dict:
     }
 
 
+def extract_response_tool_names(body: dict, api_format: str = "anthropic") -> list[str]:
+    """Return every tool name invoked by one non-streaming response, in order.
+
+    A single response can contain several tool_use blocks (parallel calls). Reading only
+    the first one undercounts usage; reading the request body instead attributes the
+    previous turn's call to this response.
+    """
+    names: list[str] = []
+    if api_format == "openai":
+        for choice in body.get("choices") or []:
+            message = choice.get("message") or {}
+            for call in message.get("tool_calls") or []:
+                fn = call.get("function") or {}
+                name = fn.get("name", "")
+                if name:
+                    names.append(name)
+        return names
+
+    for block in body.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            name = block.get("name", "")
+            if name:
+                names.append(name)
+    return names
+
+
 def extract_tool_outputs(body: dict, api_format: str = "anthropic") -> list[dict]:
     """Extract all tool outputs of the latest round of tool_result from the request body.
 

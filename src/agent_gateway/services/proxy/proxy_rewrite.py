@@ -18,7 +18,7 @@ from agent_gateway.services.proxy.proxy_protocol import (
     OpenAIToAnthropicStream,
     ProtocolConverter,
     _extract_output_from_sse,
-    _extract_tool_name_from_sse,
+    _extract_tool_names_from_sse,
     _extract_usage_from_sse,
 )
 from agent_gateway.services.proxy.proxy_provider import (
@@ -30,6 +30,7 @@ from agent_gateway.services.proxy.proxy_response_note import (
     strip_notes_from_messages,
 )
 from agent_gateway.services.proxy.proxy_skill_dedup import dedup_tool_results
+from agent_gateway.services.proxy.usage_extract import extract_response_tool_names
 from agent_gateway.services.proxy.proxy_usage import (
     extract_tool_outputs,
     record_usage,
@@ -513,13 +514,25 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
                             if sse_bytes
                             else ""
                         )
-                        tool_name = (
-                            _extract_tool_name_from_sse(
-                                sse_bytes, api_format=out_format
-                            )
-                            if sse_bytes
-                            else ""
-                        )
+                        tool_names: list[str] = []
+                        if sse_bytes:
+                            if is_sse:
+                                tool_names = _extract_tool_names_from_sse(
+                                    sse_bytes, api_format=out_format
+                                )
+                            else:
+                                # Non-streaming conversion: collected_body is the converted
+                                # JSON body, so parse it with the client's format.
+                                try:
+                                    parsed_body = json.loads(
+                                        sse_bytes.decode("utf-8", errors="replace")
+                                    )
+                                except (json.JSONDecodeError, UnicodeDecodeError):
+                                    parsed_body = None
+                                if isinstance(parsed_body, dict):
+                                    tool_names = extract_response_tool_names(
+                                        parsed_body, api_format=out_format
+                                    )
                         # Extract error info (stream-interruption exception first, then the upstream error body)
                         error_message = stream_error
                         if not error_message and upstream_resp.status >= 400:
@@ -556,7 +569,7 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
                                 latency_ms,
                                 output_preview,
                                 error_message,
-                                tool_name_override=tool_name,
+                                tool_names_override=tool_names,
                                 api_format=state.api_format,
                                 tool_outputs=tool_outputs,
                             )

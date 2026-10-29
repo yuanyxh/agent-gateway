@@ -26,6 +26,7 @@ from agent_gateway.services.proxy.proxy_models import (
     handle_health,
     handle_usage_layers,
     handle_usage_summary,
+    handle_usage_tools,
 )
 from agent_gateway.services.proxy.proxy_state import handle_proxy
 # ---------------------------------------------------------------------------
@@ -85,6 +86,7 @@ def create_app() -> web.Application:
     app.on_cleanup.append(_close_session)
     app.router.add_route("*", "/health", handle_health)
     app.router.add_route("GET", "/usage/summary", handle_usage_summary)
+    app.router.add_route("GET", "/usage/tools", handle_usage_tools)
     app.router.add_route("GET", "/usage/layers", handle_usage_layers)
     # Three entries coexist: `/v1/*` is the protocol-native entry (the client need not configure
     # base_url to an unconventional prefix), `/open/*` is the legacy compatibility alias (users

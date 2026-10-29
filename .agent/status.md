@@ -34,6 +34,7 @@
 - 2026-10-29 规则注入改确定性位置策略：首条真实 user 注入 full 块（`--rule_start`），其余注入内置英文短提示（`--short_rule_start`）；`MODEL_PROXY_RULE_INJECTION` 控制 `mode` 与 `fullEvery`；剥离兼容旧三横线块；已注入判定改为前缀匹配，避免正文提及标记时误跳过；新增 12 例测试
 - 2026-10-29 按 agent-vibe 1.0.0 升级基座：补 `seed_version` 与 `memory/INDEX.md`、`pre-commit`/`commit-msg`、PR 模板、core 标记；`core.md` 拆为 5 个主题规则，迁入 engineering / testing / vcs / design / collaboration / documentation / library 规则
 - 2026-10-29 工具面收敛：移除 MCP `project_dependencies` / `project_exports` / `summarize` 与对应 handler/schema/tests；`summarize` 仅保留 REST；`project_notes` 增加混合重排、MMR 去重、扫描后预热（`project_search`/`project_structure` 触发 + `/api/project/notes/prewarm`）；新增 3 例缓存清理与分块测试，测试 189 例通过；wheel 已部署复验（合成项目触发 `pruned 1 stale files`）
+- 2026-10-29 工具统计修复：`api_usage` 新增 `tool_names`（每次响应全部工具，JSON 数组），流式收集全部 `content_block_start` / `tool_calls`，非流式从响应体解析；`tool_output_log` 按 `tool_call_id` 去重（真实副本 9168→8498 行）；新增 `GET /usage/tools`，旧行按单工具计入 `legacy_calls`；测试 197 例通过；已部署复验（代理 23:37 重启，新行 `["Bash","Bash","Bash"]`，线上 `tool_output_log` 8502=8502）
 
 ## 下一步
 

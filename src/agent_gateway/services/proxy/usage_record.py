@@ -17,6 +17,7 @@ from agent_gateway.services.proxy.usage_extract import (
     compute_session_key,
     extract_request_context,
     extract_response_context,
+    extract_response_tool_names,
 )
 from agent_gateway.services.proxy.usage_resolver import resolver
 
@@ -41,7 +42,7 @@ def record_tool_outputs(
     try:
         with dbconn(TOOL_OUTPUT_DB_PATH) as c:
             c.executemany(
-                "INSERT INTO tool_output_log "
+                "INSERT OR IGNORE INTO tool_output_log "
                 "(api_usage_id, timestamp, tool_name, tool_call_id, "
                 "output_text, output_text_raw, output_size, output_lines, "
                 "is_error, stop_reason, model, session_key) "
@@ -75,7 +76,7 @@ async def record_usage(
     latency_ms: int,
     output_preview: str = "",
     error_message: str = "",
-    tool_name_override: str = "",
+    tool_names_override: list[str] | None = None,
     api_format: str = "anthropic",
     tool_outputs: list[dict] | None = None,
 ):
@@ -107,21 +108,14 @@ async def record_usage(
     # Determine request_level
     request_level = "core" if stop_reason == "end_turn" else "process"
 
-    # Extract tool_name: SSE stream extraction takes priority > request-body assistant message fallback
-    tool_name = tool_name_override
-    if not tool_name and stop_reason == "tool_use":
-        # Extract the tool name from the request (fallback)
-        messages = request_body.get("messages", [])
-        for msg in reversed(messages):
-            if msg.get("role") == "assistant":
-                content = msg.get("content", [])
-                if isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "tool_use":
-                            tool_name = block.get("name", "")
-                            break
-                if tool_name:
-                    break
+    # Tool calls belong to this response: SSE passes them in via the override, while a
+    # non-streaming JSON body is parsed here. The old request-body fallback recorded the
+    # previous turn's call, so it was removed rather than kept as a last resort.
+    tool_names = list(tool_names_override or [])
+    if not tool_names:
+        tool_names = extract_response_tool_names(response_body, api_format=api_format)
+    tool_name = tool_names[0] if tool_names else ""
+    tool_names_json = json.dumps(tool_names, ensure_ascii=False) if tool_names else None
 
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -144,6 +138,7 @@ async def record_usage(
         "api_format": api_format,
         "request_level": request_level,
         "tool_name": tool_name,
+        "tool_names": tool_names_json,
         "parent_id": None,
         "error_message": error_message,
     }
@@ -156,8 +151,8 @@ async def record_usage(
                 "input_preview, actual_user_input, input_message_count, has_tool_result, output_preview, "
                 "output_type, stop_reason, response_valid, model, input_tokens, "
                 "output_tokens, cache_read_tokens, cache_write_tokens, "
-                "latency_ms, api_format, request_level, tool_name, parent_id, error_message) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "latency_ms, api_format, request_level, tool_name, tool_names, parent_id, error_message) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     record["timestamp"],
                     record["request_type"],
@@ -179,6 +174,7 @@ async def record_usage(
                     record["api_format"],
                     record["request_level"],
                     record["tool_name"],
+                    record["tool_names"],
                     record["parent_id"],
                     record["error_message"],
                 ),
@@ -194,6 +190,7 @@ async def record_usage(
                     "latency_ms": latency_ms,
                     "request_level": request_level,
                     "tool_name": tool_name,
+                    "tool_names": tool_names,
                 }
             )
         )
