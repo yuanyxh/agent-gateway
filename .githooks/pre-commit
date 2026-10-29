@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+RUFF=".venv/bin/ruff"
+if [ ! -x "$RUFF" ]; then
+  RUFF="ruff"
+fi
+
+"$RUFF" format --check src tests scripts
+"$RUFF" check src tests scripts

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+message_file="${1:?missing commit message file}"
+first_line="$(head -n 1 "$message_file")"
+
+case "$first_line" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+
+if ! printf '%s\n' "$first_line" | grep -Eq '^(feat|fix|refactor|test|docs|chore|perf|build)(\([^)]+\))?: .+'; then
+  echo "commit message must match type(scope): summary" >&2
+  echo "allowed types: feat fix refactor test docs chore perf build" >&2
+  exit 1
+fi
