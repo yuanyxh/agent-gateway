@@ -20,6 +20,10 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     "param.query": "Search query",
     "param.max_results": "Max results",
     "param.since_days": "Days back to look; default 3",
+    "param.offset": "Number of results to skip before returning; default 0",
+    "param.catch_up_max_chars": (
+        "Max JSON characters returned; default 24000, 0 = unlimited"
+    ),
     "param.memory_ids": "Memory IDs",
     "param.memory_id": "Memory ID to delete",
     "param.point_id": "Optional point ID",

@@ -8,9 +8,11 @@ successful read.
 """
 
 import gzip
+import ssl
 import sys
 import threading
 import unittest
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -392,6 +394,33 @@ class ReadServiceTest(LocalServerTest):
         self.assertEqual(
             [a["tier"] for a in result["attempts"]], ["local", "defuddle", "jina"]
         )
+
+    def test_http_404_is_terminal_and_skips_proxy(self):
+        def missing(url):
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+
+        with (
+            patch.object(read, "_fetch_local", missing),
+            patch.object(read, "_fetch_proxy") as proxy,
+        ):
+            result = read.read_url("https://example.com/missing", use_proxy=True)
+        proxy.assert_not_called()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "http_404")
+        self.assertEqual(result["attempts"][0]["error_code"], "http_404")
+        self.assertEqual(result["failure_kind"], "http_404")
+
+    def test_ssl_failure_reports_network_kind(self):
+        def broken(url):
+            raise urllib.error.URLError(ssl.SSLError("UNEXPECTED_EOF_WHILE_READING"))
+
+        with patch.object(read, "_fetch_local", broken):
+            result = read.read_url("https://example.com/ssl")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "all_tiers_failed")
+        self.assertEqual(result["failure_kind"], "network_ssl")
+        self.assertEqual(result["attempts"][0]["error_code"], "network_ssl")
+        self.assertIn("TLS", result["hint"])
 
     def test_thin_page_success_with_warning(self):
         body = "<html><body><p>short</p></body></html>"

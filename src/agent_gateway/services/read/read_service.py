@@ -12,6 +12,7 @@ silently returning decoded binary would be worse than a clear error.
 from __future__ import annotations
 
 import re
+import urllib.error
 import urllib.parse
 
 from agent_gateway.services.fetch import http
@@ -115,6 +116,7 @@ def _failure(
     message: str,
     attempts: list[dict],
     hint: str = "",
+    failure_kind: str = "",
 ) -> dict:
     payload = {
         "ok": False,
@@ -123,9 +125,46 @@ def _failure(
         "message": message,
         "attempts": attempts,
     }
+    if failure_kind:
+        payload["failure_kind"] = failure_kind
     if hint:
         payload["hint"] = hint
     return payload
+
+
+def _exception_code(exc: Exception) -> tuple[str, bool]:
+    """Return ``(error_code, terminal)`` for a failed fetch attempt.
+
+    A 404/410 means the URL is wrong, so trying proxy tiers cannot help.
+    SSL and generic network failures are retryable through the proxy cascade.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code in (404, 410):
+            return f"http_{exc.code}", True
+        return "http_error", False
+    text = f"{type(exc).__name__}: {exc}"
+    reason = getattr(exc, "reason", None)
+    if reason is not None:
+        text = f"{text} | {type(reason).__name__}: {reason}"
+    lowered = text.lower()
+    if "ssl" in lowered or "certificate" in lowered:
+        return "network_ssl", False
+    if "urlerror" in lowered or "timed out" in lowered:
+        return "network_error", False
+    if "pdf" in lowered:
+        return "unsupported_format", True
+    return "fetch_failed", False
+
+
+def _dominant_failure(attempts: list[dict]) -> str:
+    for code in ("network_ssl", "network_error", "fetch_failed"):
+        if any(a.get("error_code") == code for a in attempts):
+            return code
+    if any(a.get("status") == "empty" for a in attempts):
+        return "empty_content"
+    if any(a.get("status") == "shell" for a in attempts):
+        return "login_shell"
+    return "unknown"
 
 
 def normalize_max_chars(value: int) -> int:
@@ -211,13 +250,24 @@ def read_url(url: str, max_chars: int = 0, use_proxy: bool = False) -> dict:
     try:
         final_url, local_text = _fetch_local(fetch_url)
     except Exception as exc:
+        code, terminal = _exception_code(exc)
         attempts.append(
             {
                 "tier": "local",
                 "status": "failed",
+                "error_code": code,
                 "reason": f"{type(exc).__name__}: {exc}",
             }
         )
+        if terminal:
+            return _failure(
+                requested=requested,
+                error_code=code,
+                message=f"URL fetch stopped at the local tier: {code}",
+                attempts=attempts,
+                failure_kind=code,
+                hint="verify the URL; a 404/410 will not improve through proxy tiers",
+            )
     else:
         state = _assess(local_text)
         attempts.append({"tier": "local", "status": state, "chars": len(local_text)})
@@ -242,10 +292,12 @@ def read_url(url: str, max_chars: int = 0, use_proxy: bool = False) -> dict:
             try:
                 final_url, text = _fetch_proxy(fetch_url, base)
             except Exception as exc:
+                code, _terminal = _exception_code(exc)
                 attempts.append(
                     {
                         "tier": tier,
                         "status": "failed",
+                        "error_code": code,
                         "reason": f"{type(exc).__name__}: {exc}",
                     }
                 )
@@ -299,16 +351,23 @@ def read_url(url: str, max_chars: int = 0, use_proxy: bool = False) -> dict:
             attempts=attempts,
         )
 
-    hint = (
-        "the page may be JavaScript-rendered or login-protected; retry with use_proxy=true "
-        "only if the URL is public and non-sensitive"
-        if not use_proxy
-        else "all tiers failed; open the URL in a browser to verify it is reachable"
-    )
+    failure_kind = _dominant_failure(attempts)
+    if failure_kind == "network_ssl":
+        hint = "TLS certificate verification failed; verify the URL or its certificate"
+    elif failure_kind == "network_error":
+        hint = "the network request failed; check connectivity or retry later"
+    elif not use_proxy:
+        hint = (
+            "the page may be JavaScript-rendered or login-protected; retry with "
+            "use_proxy=true only if the URL is public and non-sensitive"
+        )
+    else:
+        hint = "all tiers failed; open the URL in a browser to verify it is reachable"
     return _failure(
         requested=requested,
         error_code="all_tiers_failed",
         message="no readable content was extracted",
         attempts=attempts,
+        failure_kind=failure_kind,
         hint=hint,
     )

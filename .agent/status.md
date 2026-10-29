@@ -35,11 +35,13 @@
 - 2026-10-29 按 agent-vibe 1.0.0 升级基座：补 `seed_version` 与 `memory/INDEX.md`、`pre-commit`/`commit-msg`、PR 模板、core 标记；`core.md` 拆为 5 个主题规则，迁入 engineering / testing / vcs / design / collaboration / documentation / library 规则
 - 2026-10-29 工具面收敛：移除 MCP `project_dependencies` / `project_exports` / `summarize` 与对应 handler/schema/tests；`summarize` 仅保留 REST；`project_notes` 增加混合重排、MMR 去重、扫描后预热（`project_search`/`project_structure` 触发 + `/api/project/notes/prewarm`）；新增 3 例缓存清理与分块测试，测试 189 例通过；wheel 已部署复验（合成项目触发 `pruned 1 stale files`）
 - 2026-10-29 工具统计修复：`api_usage` 新增 `tool_names`（每次响应全部工具，JSON 数组），流式收集全部 `content_block_start` / `tool_calls`，非流式从响应体解析；`tool_output_log` 按 `tool_call_id` 去重（真实副本 9168→8498 行）；新增 `GET /usage/tools`，旧行按单工具计入 `legacy_calls`；测试 197 例通过；已部署复验（代理 23:37 重启，新行 `["Bash","Bash","Bash"]`，线上 `tool_output_log` 8502=8502）
+- 2026-10-30 检索质量修复：`catch_up` 新增 `limit`/`offset`/`max_chars`（默认 50/0/24000），返回 `returned`/`truncated`/`next_offset`；`read_url` 对 400/404/410 直接终止，失败增加 `failure_kind`；`project_structure` 增加 `status`（ok/empty/path_not_found/not_scanned）；`project_search` 结果补充 `module`/`importedBy`/`importCount`，向量-only 结果降级为 `weak_match` 并按词法锚点过滤，中文向量-only 直接 `no_match`，旧符号表缺 `start_line` 时回退无行号查询；新增 13 例测试，全量 213 例通过
 
 ## 下一步
 
-1. 提交本仓改动（模块入口契约 + 迁入的检查脚本）
-2. utility 侧打包与整机回归通过后发版
+1. 用户确认后提交本仓检索质量改动
+2. 评估 `project_search` 中文/无词法锚点查询的 `weak_match` 阈值
+3. utility 侧打包与整机回归通过后发版
 
 ## 最近验证
 
@@ -65,9 +67,14 @@
 | 2026-10-29 | `ruff format --check` / `ruff check` / `unittest discover` | 通过（155 文件 / 0 条 / 177 例，1 skipped） |
 | 2026-10-29 | `ruff format --check` / `ruff check` / `unittest discover` / `agent-gateway --check` | 通过（155 文件 / 0 条 / 188 例 1 skipped / check passed） |
 | 2026-10-29 | 工具面收敛后 `ruff format --check` / `ruff check` / `unittest discover` | 通过（154 文件 / 0 条 / 186 例，1 skipped） |
+| 2026-10-30 | 检索质量修复后 `ruff format --check` / `ruff check` / `unittest discover` / `agent-gateway --check` | 通过（157 文件 / 0 条 / 213 例 1 skipped / check passed） |
+| 2026-10-30 | 线上 MCP 14 项目批量（86 次调用） | 86/86 通过 |
+| 2026-10-30 | 线上 MCP 负载（140 structure + 42 负例 + 25 catch/read） | 207/207 通过；p95 structure 58.8ms、负例 1623.7ms |
 
 ## 已知问题
 
 - `test_ast_imports` 中调用主项目二进制的用例被跳过：本仓没有 `utility` 可执行文件，属预期降级。
 - `pip-audit` 尚未安装，交付门暂未执行。
 - 冷层 774 条（created_at ≤ 2026-10-22）缺 `source_memory_ids`：热层 processed 在 10-23 批量迁移后丢失消费日期，历史来源不可恢复，决定不回填（见 decisions 2026-10-28）。消费方 `_mark_cold_stale` 对缺键与空列表行为一致，无功能影响。
+- Claude Code 侧 `Invalid request parameters`/`-32602` 是 MCP 服务进程替换后的客户端连接瞬态；重连逻辑在外部客户端，不在本仓，服务端 `/health` 已存在。
+- `project_search` 向量层绝对阈值仍为 0.35；中文向量-only 已直接 `no_match`，英文无词法锚点仍可能返回 `weak_match`，需人工复核。

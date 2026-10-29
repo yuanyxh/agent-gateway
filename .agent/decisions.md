@@ -29,6 +29,8 @@
 | 2026-10-29 | D3 | `project_notes` 改为混合重排（语义 0.65 + 关键词 0.30 + 路径 0.05 + MMR 去重），并提供扫描后预热入口 | Agent | 冷启动首查 58.5s；重复文档占满结果；预热在 project_search/structure 与 `/api/project/notes/prewarm` 触发 | 恢复旧排序与移除预热调用 |
 | 2026-10-29 | D3 | `project_notes` 每次扫描清理不在当前扫描集合或项目根外的缓存行；连续短段落累积成块而非丢弃 | Agent | 项目迁移后旧绝对路径残留 133 文件/2728 分块（51%），规则清单类文档 0 分块 | 回退清理逻辑与旧分块器 |
 | 2026-10-29 | D3 | `api_usage` 记录一次响应内全部工具（`tool_names` JSON），`tool_output_log` 按 `tool_call_id` 唯一，新增 `/usage/tools` 统计端点 | Agent | 原 `tool_name` 只记首个工具，非流式还回退到上一轮；近 5 天 1334/7127 次请求含多工具；同一调用最多重复 7 行 | 删除 `tool_names`/唯一索引与端点，恢复单工具统计 |
+| 2026-10-30 | D3 | `catch_up` 默认返回 50 条、24000 字符，支持 `limit`/`offset`/`max_chars`；`read_url` 对 400/404/410 终止并增加 `failure_kind`；`project_structure` 增加 `status`；`project_search` 增加 `module`/`importedBy`/`importCount` | Agent | 30 天 1135 次调用：`catch_up` 91.7% 超长转存（22.3 万–146 万字符），`read_url` 17.6% 失败，`project_structure` 6.7% 空结构被当成功，`project_search` 20.8% 回退且只有 55.4% 结果被下一轮引用 | 恢复旧 handler；新字段为 additive，删除即可回退 |
+| 2026-10-30 | D3 | `project_search` 仅有向量层结果时返回 `weak_match`，不再返回 `exact`；无词法锚点的候选被过滤并计入 `rejected`；中文向量-only 直接 `no_match`；旧 `symbols` 表缺 `start_line`/`end_line` 时回退到无行号查询 | Agent | 14 项目负例 10 个误命中；随机串分数 0.5036–0.5819，而相关 `ConversationFile` 仅 0.5308，单靠绝对阈值无法分离；词法锚点用标识符分词，单 token 查询整体匹配，中文直接 no_match；4 项目中文阈值扫描无可用分界，中文注释覆盖率 0.19%–3.87%，中文锚点 0/30 命中；`yuanyxh.github.io` 旧库报 `no such column: start_line` | 删除向量-only 分支、中文 no_match 与旧表回退，恢复原查询 |
 
 ## 记录规则
 

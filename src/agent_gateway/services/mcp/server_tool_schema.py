@@ -37,6 +37,8 @@ DEFAULT_WEBSEARCH_MAX_CHARS = max(
     1000, min(arg_default("websearch_engine", "max_chars"), 10000)
 )
 DEFAULT_READ_MAX_CHARS = max(0, arg_default("read_url", "max_chars"))
+DEFAULT_CATCH_UP_LIMIT = max(1, arg_default("catch_up", "limit"))
+DEFAULT_CATCH_UP_MAX_CHARS = max(0, arg_default("catch_up", "max_chars"))
 DEFAULT_SUMMARIZE_MAX_TOKENS = DEFAULT_MAX_TOKENS
 
 #: Fixed English tool descriptions; parameter guidance lives in `tool_text.PARAM_DESCRIPTIONS`.
@@ -165,6 +167,21 @@ def build_tools() -> list[Tool]:
                     "since_days": {
                         "type": "number",
                         "description": param_text("param.since_days"),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": DEFAULT_CATCH_UP_LIMIT,
+                        "description": param_text("param.max_results"),
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "default": 0,
+                        "description": param_text("param.offset"),
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "default": DEFAULT_CATCH_UP_MAX_CHARS,
+                        "description": param_text("param.catch_up_max_chars"),
                     },
                     "include_superseded": {
                         "type": "boolean",

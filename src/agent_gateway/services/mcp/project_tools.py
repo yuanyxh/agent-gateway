@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 
 
 from agent_gateway.core.db import conn as dbconn
-
 from agent_gateway.services.mcp.search_constants import (
     DEFAULT_PROJECT_SEARCH_LIMIT,
     DEFAULT_PROJECT_STRUCTURE_LIMIT,
@@ -20,6 +20,82 @@ from agent_gateway.services.mcp.search_symbols import (
     expand_query,
 )
 from agent_gateway.services.mcp.search_vectors import _search_vectors
+
+_WORD_SPLIT = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+")
+_CJK = re.compile(r"[一-鿿]")
+
+
+def _identifier_words(*values: str) -> set[str]:
+    words: set[str] = set()
+    for value in values:
+        if not value:
+            continue
+        for chunk in re.findall(r"[A-Za-z][A-Za-z0-9]*", str(value)):
+            for word in _WORD_SPLIT.findall(chunk):
+                lowered = word.lower()
+                if len(lowered) >= 3 and not lowered.isdigit():
+                    words.add(lowered)
+    return words
+
+
+def _query_terms(query: str) -> list[str]:
+    stripped = (query or "").strip()
+    if not stripped or _CJK.search(stripped):
+        return []
+    if not any(ch.isspace() for ch in stripped):
+        token = stripped.lower()
+        return [token] if len(token) >= 3 else []
+    return [
+        term
+        for term in re.split(r"[^a-z0-9_]+", stripped.lower())
+        if len(term) >= 3 and not term.isdigit()
+    ]
+
+
+def _has_lexical_overlap(result: dict, terms: list[str]) -> bool:
+    words = _identifier_words(
+        result.get("name"), result.get("signature"), result.get("file")
+    )
+    return any(term in words for term in terms)
+
+
+def _attach_search_context(db_path: str, results: list[dict]) -> None:
+    """Add module and importer context so callers do not need a follow-up grep."""
+    paths = sorted(
+        {
+            str(r.get("file"))
+            for r in results
+            if isinstance(r.get("file"), str) and r.get("file")
+        }
+    )
+    if not paths:
+        return
+    for result in results:
+        file_path = result.get("file")
+        if isinstance(file_path, str) and file_path:
+            result["module"] = os.path.dirname(file_path).replace(os.sep, "/") or "."
+    try:
+        with dbconn(db_path) as conn:
+            placeholders = ",".join("?" for _ in paths)
+            rows = conn.execute(
+                "SELECT to_path, from_path FROM imports "
+                f"WHERE is_external = 0 AND to_path IN ({placeholders})",
+                paths,
+            ).fetchall()
+    except sqlite3.Error:
+        return
+    importers: dict[str, list[str]] = {}
+    for to_path, from_path in rows:
+        if to_path and from_path:
+            importers.setdefault(str(to_path), []).append(str(from_path))
+    for result in results:
+        file_path = result.get("file")
+        if not isinstance(file_path, str) or not file_path:
+            continue
+        owners = sorted(set(importers.get(file_path, [])))
+        if owners:
+            result["importedBy"] = owners[:3]
+            result["importCount"] = len(owners)
 
 
 def tool_project_search(
@@ -50,6 +126,7 @@ def tool_project_search(
             key = (r["name"], r.get("file") or "")
             if key not in seen:
                 seen.add(key)
+                r["layer"] = layer
                 all_found.append(r)
 
     # Layer 1a: FTS5 symbol search (primary)
@@ -72,6 +149,51 @@ def tool_project_search(
         _add(_search_vectors(db_path, query), "vector")
 
     total = len(all_found)
+    if total:
+        _attach_search_context(db_path, all_found)
+
+    # Vector-only matches are weak evidence: do not promote them to exact, and
+    # reject candidates without a lexical anchor because the embedding model
+    # scores unrelated gibberish highly.
+    if total and all(r.get("layer") == "vector" for r in all_found):
+        if _CJK.search(query or ""):
+            return {
+                "status": "no_match",
+                "query": query,
+                "expandedQuery": expanded,
+                "layers": active_layers,
+                "results": [],
+                "total": 0,
+                "rejected": total,
+                "hint": (
+                    "Chinese vector-only matches are disabled; add an English "
+                    "keyword or a file name"
+                ),
+            }
+        terms = _query_terms(query)
+        filtered = [r for r in all_found if not terms or _has_lexical_overlap(r, terms)]
+        if not filtered:
+            return {
+                "status": "no_match",
+                "query": query,
+                "expandedQuery": expanded,
+                "layers": active_layers,
+                "results": [],
+                "total": 0,
+                "rejected": total,
+            }
+        payload = {
+            "status": "weak_match",
+            "query": query,
+            "expandedQuery": expanded,
+            "layers": active_layers,
+            "results": filtered[:limit],
+            "total": len(filtered),
+            "hint": "vector-only matches; verify before relying on them",
+        }
+        if len(filtered) < total:
+            payload["rejected"] = total - len(filtered)
+        return payload
 
     # ── Status determination ──
     # Prioritize symbol-level results for backward-compatible status
@@ -155,13 +277,21 @@ def tool_project_structure(
 ) -> dict:
     if not os.path.isfile(db_path):
         return {"error": f"Database not found: {db_path}"}
+    subpath = (subpath or "").strip().strip("/")
     with dbconn(db_path) as conn:
         conn.row_factory = sqlite3.Row
 
-        MAX_ITEMS = limit
+        MAX_ITEMS = max(1, int(limit))
+        scanned = conn.execute("SELECT 1 FROM directories LIMIT 1").fetchone()
+        if scanned is None:
+            scanned = conn.execute("SELECT 1 FROM files LIMIT 1").fetchone()
 
+        path_exists = None
         if subpath:
-            prefix = subpath.rstrip("/") + "/"
+            path_exists = conn.execute(
+                "SELECT 1 FROM directories WHERE path = ? LIMIT 1", (subpath,)
+            ).fetchone()
+            prefix = subpath + "/"
             dirs = conn.execute(
                 "SELECT path, module_name, file_count, has_package_manifest "
                 "FROM directories WHERE path LIKE ? AND path NOT LIKE ? "
@@ -185,6 +315,7 @@ def tool_project_structure(
             ).fetchall()
 
     result = {
+        "status": "ok",
         "directories": [
             {
                 "path": r["path"],
@@ -198,6 +329,17 @@ def tool_project_structure(
         "totalDirs": len(dirs),
         "totalFiles": len(files),
     }
+
+    if scanned is None:
+        result["status"] = "not_scanned"
+        result["hint"] = "The dependency database has no scanned files or directories"
+    elif not dirs and not files:
+        if subpath and path_exists is None:
+            result["status"] = "path_not_found"
+            result["hint"] = f"No scanned directory or file matches: {subpath}"
+        else:
+            result["status"] = "empty"
+            result["hint"] = "The selected directory has no scanned children or files"
 
     if len(dirs) > MAX_ITEMS or len(files) > MAX_ITEMS:
         result["truncated"] = True

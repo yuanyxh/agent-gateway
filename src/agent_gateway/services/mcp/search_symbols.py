@@ -64,18 +64,30 @@ def _search_symbols_like(
     """Layer 1b: LIKE fallback when FTS5 is unavailable."""
     with dbconn(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        sql = (
-            "SELECT name, kind, signature, file_path, visibility, start_line, end_line "
-            "FROM symbols WHERE (name LIKE ? OR signature LIKE ?)"
-        )
+        where = "(name LIKE ? OR signature LIKE ?)"
         params: list[str] = [f"%{query}%", f"%{query}%"]
         if file_path:
-            sql += " AND file_path LIKE ?"
+            where += " AND file_path LIKE ?"
             params.append(f"%{file_path}%")
         if kind:
-            sql += " AND kind = ?"
+            where += " AND kind = ?"
             params.append(kind)
-        sql += " LIMIT 30"
+        try:
+            rows = conn.execute(
+                "SELECT name, kind, signature, file_path, visibility, start_line, "
+                f"end_line FROM symbols WHERE {where} LIMIT 30",
+                params,
+            ).fetchall()
+            has_lines = True
+        except sqlite3.OperationalError as exc:
+            if "no such column" not in str(exc):
+                raise
+            rows = conn.execute(
+                "SELECT name, kind, signature, file_path, visibility "
+                f"FROM symbols WHERE {where} LIMIT 30",
+                params,
+            ).fetchall()
+            has_lines = False
         return [
             {
                 "name": r["name"],
@@ -83,10 +95,10 @@ def _search_symbols_like(
                 "signature": r["signature"],
                 "file": r["file_path"],
                 "visibility": r["visibility"],
-                "startLine": r["start_line"],
-                "endLine": r["end_line"],
+                "startLine": r["start_line"] if has_lines else None,
+                "endLine": r["end_line"] if has_lines else None,
             }
-            for r in conn.execute(sql, params).fetchall()
+            for r in rows
         ]
 
 

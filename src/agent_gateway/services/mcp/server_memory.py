@@ -86,7 +86,11 @@ from agent_gateway.services.mcp.server_state import (
     get_qdrant,
     set_hot_memory,
 )
-from agent_gateway.services.mcp.server_tool_schema import DEFAULT_RECALL_LIMIT
+from agent_gateway.services.mcp.server_tool_schema import (
+    DEFAULT_CATCH_UP_LIMIT,
+    DEFAULT_CATCH_UP_MAX_CHARS,
+    DEFAULT_RECALL_LIMIT,
+)
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
 
 logger = setup_logging("server")
@@ -1270,6 +1274,42 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     ]
 
 
+def _bound_catch_up_results(
+    results: list[dict], max_chars: int
+) -> tuple[list[dict], bool]:
+    """Keep the newest results within a character budget.
+
+    The first item is always returned; if it alone exceeds the budget, only its
+    content is truncated so pagination can still advance.
+    """
+    if max_chars <= 0:
+        return results, False
+    kept: list[dict] = []
+    used = 0
+    for item in results:
+        encoded = dumps(item)
+        if used + len(encoded) <= max_chars:
+            kept.append(item)
+            used += len(encoded)
+            continue
+        if not kept:
+            trimmed = dict(item)
+            content = trimmed.get("content")
+            if isinstance(content, str):
+                keep = len(content)
+                while keep > 0:
+                    trimmed["content"] = content[:keep]
+                    trimmed["content_truncated"] = True
+                    if len(dumps(trimmed)) <= max_chars:
+                        break
+                    keep //= 2
+                if len(dumps(trimmed)) > max_chars:
+                    trimmed["content"] = ""
+            kept.append(trimmed)
+        return kept, True
+    return kept, False
+
+
 @_register("catch_up")
 async def _handle_catch_up(arguments: dict) -> list[TextContent]:
     if not await ensure_hot_memory():
@@ -1286,6 +1326,11 @@ async def _handle_catch_up(arguments: dict) -> list[TextContent]:
         ]
     since_days = arguments.get("since_days", 3)
     include_superseded = bool(arguments.get("include_superseded", False))
+    limit = max(1, min(int_arg(arguments, "limit", DEFAULT_CATCH_UP_LIMIT), 500))
+    offset = max(0, int_arg(arguments, "offset", 0))
+    max_chars = int_arg(arguments, "max_chars", DEFAULT_CATCH_UP_MAX_CHARS)
+    if max_chars < 0:
+        max_chars = DEFAULT_CATCH_UP_MAX_CHARS
     try:
         data = get_hot_memory().get_all(
             filters={"user_id": DEFAULT_USER_ID}, top_k=5000
@@ -1310,14 +1355,27 @@ async def _handle_catch_up(arguments: dict) -> list[TextContent]:
         key=lambda x: datetime.fromisoformat(x.get("created_at", "")).timestamp(),
         reverse=True,
     )
-    return [
-        TextContent(
-            type="text",
-            text=dumps(
-                {"results": [_project_hot_result(m) for m in data], "count": len(data)}
-            ),
-        )
-    ]
+    total = len(data)
+    window = data[offset : offset + limit]
+    results, char_truncated = _bound_catch_up_results(
+        [_project_hot_result(m) for m in window], max_chars
+    )
+    payload = {
+        "results": results,
+        "count": total,
+        "returned": len(results),
+        "offset": offset,
+        "limit": limit,
+        "truncated": char_truncated or offset + len(results) < total,
+    }
+    if char_truncated:
+        payload["truncated_by"] = "chars"
+    elif offset + len(results) < total:
+        payload["truncated_by"] = "limit"
+    if offset + len(results) < total:
+        payload["has_more"] = True
+        payload["next_offset"] = offset + len(results)
+    return [TextContent(type="text", text=dumps(payload))]
 
 
 @_register("forget")
