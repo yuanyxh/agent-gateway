@@ -52,10 +52,11 @@ LEGACY_RULE_END_MARK = "---rule_end"
 #: purpose: it is a code constant, never a rendered template, so its bytes cannot
 #: drift between turns and break the cached prefix. It only points at the marker —
 #: restating rule content here would fork the single source (`System_Prompts.md`).
+#: Kept deliberately imperative: a soft reminder was ignored often enough to lose
+#: adherence, so the wording names the consequence of ignoring it.
 SHORT_RULE_TEXT = (
-    "A rules block delimited by --rule_start and --rule_end appears once in this "
-    "conversation, in its earliest user message. It remains in force for every turn. "
-    "Before replying or calling tools, recall that block and follow it strictly."
+    "Self-check: follow the --rule_start / --rule_end rules. "
+    "**Never ignore them; restart the step on violation.**"
 )
 
 
