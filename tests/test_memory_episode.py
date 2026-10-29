@@ -146,7 +146,7 @@ class EpisodeExpansionTest(unittest.TestCase):
     def test_ranks_expanded_rows_by_query_similarity(self):
         seed = {"id": "a", "score": 0.9, "episode_id": "ep_1", "layer": "hot"}
         points = [
-            _point("far", vector=[0.5, 0.9], data="far", status="active"),
+            _point("far", vector=[6.0, 8.0], data="far", status="active"),
             _point("near", vector=[0.99, 0.1], data="near", status="active"),
         ]
 
@@ -156,7 +156,23 @@ class EpisodeExpansionTest(unittest.TestCase):
             expanded = server_memory._expand_hot_episodes([seed], query_vec=[1.0, 0.0])
 
         self.assertEqual([row["id"] for row in expanded], ["near", "far"])
-        self.assertEqual(expanded[0]["score"], expanded[1]["score"])
+        self.assertAlmostEqual(expanded[0]["score"], 0.9 * 0.98)
+        self.assertAlmostEqual(expanded[1]["score"], 0.6)
+        self.assertEqual(expanded[1]["match_kind"], "expanded")
+
+    def test_drops_sibling_below_relevance_floor(self):
+        seed = {"id": "a", "score": 0.9, "episode_id": "ep_1", "layer": "hot"}
+        points = [
+            _point("far", vector=[5.0, 9.0], data="far", status="active"),
+            _point("near", vector=[0.99, 0.1], data="near", status="active"),
+        ]
+
+        with mock.patch.object(
+            server_memory, "get_hot_memory", return_value=FakeHotMemory(points)
+        ):
+            expanded = server_memory._expand_hot_episodes([seed], query_vec=[1.0, 0.0])
+
+        self.assertEqual([row["id"] for row in expanded], ["near"])
 
     def test_full_group_opens_new_episode(self):
         similar = [{"score": 0.99, "episode_id": "ep_full"}]
@@ -269,6 +285,22 @@ class ColdEpisodeExpansionTest(unittest.TestCase):
         self.assertEqual(expanded[0]["layer"], "cold")
         self.assertAlmostEqual(expanded[0]["score"], 0.8 * 0.98)
         self.assertEqual(expanded[0]["episode_id"], "ep_c")
+
+    def test_caps_expanded_score_at_actual_similarity(self):
+        seed = {"id": "c1", "score": 0.8, "episode_id": "ep_c", "layer": "cold"}
+        points = [
+            _point("c1", vector=[1.0, 0.0], content="seed"),
+            _point("c2", vector=[6.0, 8.0], content="sibling"),
+        ]
+
+        with mock.patch.object(
+            server_memory, "get_qdrant", return_value=FakeColdQdrant(points)
+        ):
+            expanded = server_memory._expand_cold_episodes([seed], query_vec=[1.0, 0.0])
+
+        self.assertEqual([row["id"] for row in expanded], ["c2"])
+        self.assertAlmostEqual(expanded[0]["score"], 0.6)
+        self.assertEqual(expanded[0]["match_kind"], "expanded")
 
     def test_skips_stale_and_archived(self):
         seed = {"id": "c1", "score": 1.0, "episode_id": "ep_c", "layer": "cold"}

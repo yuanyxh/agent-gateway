@@ -45,7 +45,7 @@ DEFAULT_SUMMARIZE_MAX_TOKENS = DEFAULT_MAX_TOKENS
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "remember": "Trigger: user says remember/record, a bug is fixed, an insight is learned, or an architecture design changes. Writes one fact to shared memory. Pass supersedes with the id of the memory this fact replaces; the old entry is retired, not deleted.",
     "remember_batch": "Batch version of remember; prefer it for multiple facts to cut calls.",
-    "recall": "Trigger: user says look up/search/find that earlier one, or refers to history or existing information. Searches shared memory, knowledge base, and notes.",
+    "recall": "Trigger: user says look up/search/find that earlier one, or refers to history or existing information. Searches shared memory, knowledge base, and notes. Results below the relevance floor are omitted; same-episode context is returned in related.",
     "catch_up": "Trigger: user says just now/last time/previously/recently, or asks what was done, the progress, or what remains unresolved. Do not substitute git log.",
     "forget": "Trigger: user asks to delete a memory, or a memory is wrong/outdated. Deletes it permanently.",
     "project_search": "Prefer over reading whole files to locate symbols, files, and packages. Searches the project dependency graph.",

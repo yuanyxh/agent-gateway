@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import sys
 import time
 import uuid
@@ -61,6 +62,10 @@ from agent_gateway.services.mcp.server_constants import (
     PROCESSED_FIELD,
     PROCESSED_MAX_BIT,
     PROCESSED_RETIRED_MASK,
+    RECALL_COLD_MIN_SCORE,
+    RECALL_EXPANDED_MIN_SCORE,
+    RECALL_HOT_MIN_SCORE,
+    RECALL_NOTES_MIN_COVERAGE,
     REVISION_FIELD,
     STATUS_ACTIVE,
     STATUS_DELETED,
@@ -231,6 +236,37 @@ async def ensure_hot_memory() -> bool:
     return False
 
 
+_CJK_CHAR_RE = re.compile(r"[一-鿿]")
+_ASCII_TERM_RE = re.compile(r"[a-z0-9][a-z0-9_.:/-]*")
+
+
+def _note_needles(query: str) -> list[str]:
+    """ASCII terms plus CJK bigrams; single CJK chars are too broad to anchor."""
+    needles: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        if value and value not in seen:
+            seen.add(value)
+            needles.append(value)
+
+    for raw in (query or "").lower().split():
+        for term in _ASCII_TERM_RE.findall(raw):
+            if len(term) >= 2:
+                add(term)
+        cjk = "".join(_CJK_CHAR_RE.findall(raw))
+        for index in range(len(cjk) - 1):
+            add(cjk[index : index + 2])
+    return needles
+
+
+def _notes_coverage(text: str, needles: list[str]) -> float:
+    if not needles:
+        return 0.0
+    lowered = text.lower()
+    return sum(1 for needle in needles if needle in lowered) / len(needles)
+
+
 def _notes_snippet(text: str, needle: str, max_lines: int = 3) -> str:
     """Take the first max_lines lines containing needle, in the same format as the
     original `grep -inF -m <max_lines>`.
@@ -250,7 +286,10 @@ def _notes_snippet(text: str, needle: str, max_lines: int = 3) -> str:
 
 
 def search_cold_layer(
-    query: str, limit: int = 5, include_archived: bool = False
+    query: str,
+    limit: int = 5,
+    include_archived: bool = False,
+    min_score: float = RECALL_COLD_MIN_SCORE,
 ) -> list[dict]:
     results = []
     qvec = embed_query(query) if get_qdrant() else None
@@ -272,8 +311,11 @@ def search_cold_layer(
                 query=vec,
                 limit=limit,
                 query_filter=qfilter,
+                score_threshold=min_score,
             )
             for h in resp.points:
+                if h.score is None or h.score < min_score:
+                    continue
                 results.append(
                     {
                         "id": h.id,
@@ -281,7 +323,7 @@ def search_cold_layer(
                         "source_file": h.payload.get("source_file", ""),
                         "created_at": h.payload.get("created_at", ""),
                         "type": h.payload.get("type", ""),
-                        "score": h.score,
+                        "score": float(h.score),
                         "layer": "cold",
                         "heat_score": h.payload.get("heat_score", DEFAULT_HEAT_SCORE),
                         "access_count": h.payload.get("access_count", 0),
@@ -292,11 +334,11 @@ def search_cold_layer(
                 _update_cold_heat(h.id)
         except Exception as e:
             logger.warning(f"Qdrant cold search failed: {e}")
-    tokens = [t for t in query.split() if t]
-    if not tokens:
-        tokens = [query]
-    needles = [t.lower() for t in tokens]
-    head = needles[0]
+    needles = _note_needles(query)
+    head = needles[0] if needles else ""
+    if not needles:
+        results.sort(key=_heat_sort_key, reverse=True)
+        return results[:limit]
 
     try:
         for root, dirs, files in os.walk(NOTES_DIR):
@@ -313,12 +355,8 @@ def search_cold_layer(
                         text = fh.read()
                 except OSError:
                     continue
-                # A hit on any term counts as a hit (equivalent to the original
-                # grep -iFq short-circuit semantics). The original implementation spawned
-                # a grep subprocess per file per term; measured on 454 files × N terms:
-                # 2.4s (N=1) / 4.5s (N=2) / 7.5s (N=4), recall's single biggest cost.
-                low = text.lower()
-                if not any(n in low for n in needles):
+                coverage = _notes_coverage(text, needles)
+                if coverage < RECALL_NOTES_MIN_COVERAGE:
                     continue
                 results.append(
                     {
@@ -327,7 +365,7 @@ def search_cold_layer(
                         "source_file": rel,
                         "created_at": "",
                         "type": "notes",
-                        "score": 0.5 + (len(tokens) / 100),
+                        "score": 0.5 + 0.1 * coverage,
                         "layer": "notes",
                         "heat_score": DEFAULT_HEAT_SCORE,
                     }
@@ -349,6 +387,7 @@ _HOT_RESULT_KEYS = (
     "attributed_to",
     "heat_score",
     "layer",
+    "match_kind",
 )
 _HOT_META_KEYS = (
     "tags",
@@ -394,9 +433,16 @@ def _dot(a, b) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
+def _cosine(a, b) -> float:
+    denominator = (_dot(a, a) ** 0.5) * (_dot(b, b) ** 0.5)
+    return float(_dot(a, b) / denominator) if denominator > 1e-10 else 0.0
+
+
 def _expand_hot_episodes(results: list[dict], query_vec=None) -> list[dict]:
-    """Pull same-group memories for the top hits, ranked by relevance to the query."""
-    seeds = [r for r in results if r.get("episode_id")][:EPISODE_EXPAND_TOP_N]
+    """Pull same-group memories; drop weak siblings and cap their score at actual relevance."""
+    seeds = [r for r in results if r.get("layer") == "hot" and r.get("episode_id")][
+        :EPISODE_EXPAND_TOP_N
+    ]
     if not seeds or not get_hot_memory():
         return []
     known = {r.get("id") for r in results}
@@ -431,23 +477,28 @@ def _expand_hot_episodes(results: list[dict], query_vec=None) -> list[dict]:
                 continue
             vector = _dense_vector(getattr(point, "vector", None))
             if query_vec is not None and vector:
-                score = _dot(query_vec, vector)
+                score = _cosine(query_vec, vector)
             else:
                 score = float(seed.get("score", 0))
+            if score < RECALL_EXPANDED_MIN_SCORE:
+                continue
             candidates.append((score, point, payload))
         candidates.sort(key=lambda c: -c[0])
         seed_score = float(seed.get("score", 0))
-        for _, point, payload in candidates[:EPISODE_EXPAND_PER_GROUP]:
+        for candidate_score, point, payload in candidates[:EPISODE_EXPAND_PER_GROUP]:
             known.add(point.id)
             expanded.append(
                 {
                     "id": point.id,
                     "layer": "hot",
                     "content": payload.get("data", ""),
-                    "score": seed_score * EPISODE_EXPAND_DECAY,
+                    "score": float(
+                        min(seed_score * EPISODE_EXPAND_DECAY, candidate_score)
+                    ),
                     "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
                     "episode_id": episode_id,
                     "expanded": True,
+                    "match_kind": "expanded",
                 }
             )
     return expanded
@@ -491,13 +542,15 @@ def _expand_cold_episodes(results: list[dict], query_vec=None) -> list[dict]:
                 continue
             vector = _dense_vector(getattr(point, "vector", None))
             if query_vec is not None and vector:
-                score = _dot(query_vec, vector)
+                score = _cosine(query_vec, vector)
             else:
                 score = float(seed.get("score", 0))
+            if score < RECALL_EXPANDED_MIN_SCORE:
+                continue
             candidates.append((score, point, payload))
         candidates.sort(key=lambda c: -c[0])
         seed_score = float(seed.get("score", 0))
-        for _, point, payload in candidates[:EPISODE_EXPAND_PER_GROUP]:
+        for candidate_score, point, payload in candidates[:EPISODE_EXPAND_PER_GROUP]:
             known.add(point.id)
             expanded.append(
                 {
@@ -506,10 +559,13 @@ def _expand_cold_episodes(results: list[dict], query_vec=None) -> list[dict]:
                     "content": payload.get("content", ""),
                     "source_file": payload.get("source_file", ""),
                     "created_at": payload.get("created_at", ""),
-                    "score": seed_score * EPISODE_EXPAND_DECAY,
+                    "score": float(
+                        min(seed_score * EPISODE_EXPAND_DECAY, candidate_score)
+                    ),
                     "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
                     "episode_id": episode_id,
                     "expanded": True,
+                    "match_kind": "expanded",
                 }
             )
     return expanded
@@ -1220,7 +1276,7 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
                 query,
                 filters={"user_id": DEFAULT_USER_ID},
                 top_k=max(limit * 3, limit + 5),
-                threshold=0.0,
+                threshold=RECALL_HOT_MIN_SCORE,
             )
             hot = hot_raw if isinstance(hot_raw, list) else hot_raw.get("results", [])
             for r in hot:
@@ -1234,44 +1290,66 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
                     continue
                 if status == STATUS_SUPERSEDED and not include_superseded:
                     continue
+                try:
+                    score = float(r.get("score"))
+                except (TypeError, ValueError):
+                    continue
+                if score < RECALL_HOT_MIN_SCORE:
+                    continue
+                r["score"] = score
                 r["layer"] = "hot"
                 r["content"] = r.get("memory", r.get("content", ""))
                 r["heat_score"] = meta.get("heat_score", DEFAULT_HEAT_SCORE)
+                r["match_kind"] = "direct"
                 results.append(_project_hot_result(r))
         except Exception as e:
             logger.warning(f"Hot search failed: {e}")
     cold = (
-        search_cold_layer(query, limit, include_archived=include_archived)
+        search_cold_layer(
+            query,
+            limit,
+            include_archived=include_archived,
+            min_score=RECALL_COLD_MIN_SCORE,
+        )
         if cold_enabled
         else []
     )
+    for item in cold:
+        item.setdefault("match_kind", "direct")
     results.extend(cold)
     results.sort(key=_heat_sort_key, reverse=True)
     query_vec = embed_query(query)
-    extended = _expand_hot_episodes(results[:limit], query_vec)
-    extended += _expand_cold_episodes(results[:limit], query_vec)
-    if extended:
-        results.extend(extended)
-        results.sort(key=_heat_sort_key, reverse=True)
-    # Per-layer counts must use the same basis as `count` — both taken from the
-    # truncated list. Previously they were counted over the full `results`, and the sum
-    # of the three could reach twice `count` (measured 10+1+9 for count=10), leading the
-    # caller to think it got all the hot-layer hits.
+    related = _expand_hot_episodes(results[:limit], query_vec)
+    related += _expand_cold_episodes(results[:limit], query_vec)
+    related.sort(key=_heat_sort_key, reverse=True)
     top = results[:limit]
-    return [
-        TextContent(
-            type="text",
-            text=dumps(
-                {
-                    "results": top,
-                    "count": len(top),
-                    "hot_count": sum(1 for r in top if r.get("layer") == "hot"),
-                    "cold_count": sum(1 for r in top if r.get("layer") == "cold"),
-                    "notes_count": sum(1 for r in top if r.get("layer") == "notes"),
-                }
-            ),
+    related = related[:limit]
+    has_semantic = any(r.get("layer") in ("hot", "cold") for r in top)
+    if has_semantic:
+        status = "ok"
+    elif top or related:
+        status = "weak_match"
+    else:
+        status = "no_match"
+    payload = {
+        "status": status,
+        "results": top,
+        "related": related,
+        "count": len(top),
+        "related_count": len(related),
+        "hot_count": sum(1 for r in top if r.get("layer") == "hot"),
+        "cold_count": sum(1 for r in top if r.get("layer") == "cold"),
+        "notes_count": sum(1 for r in top if r.get("layer") == "notes"),
+    }
+    if status == "weak_match":
+        payload["hint"] = (
+            "No semantic memory cleared the relevance floor; results are lexical or related context."
         )
-    ]
+    elif status == "no_match":
+        payload["hint"] = (
+            "No memory cleared the relevance floor; try a more specific topic."
+        )
+    return [TextContent(type="text", text=dumps(payload))]
 
 
 def _bound_catch_up_results(

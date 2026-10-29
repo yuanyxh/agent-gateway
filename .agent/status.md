@@ -36,6 +36,7 @@
 - 2026-10-29 工具面收敛：移除 MCP `project_dependencies` / `project_exports` / `summarize` 与对应 handler/schema/tests；`summarize` 仅保留 REST；`project_notes` 增加混合重排、MMR 去重、扫描后预热（`project_search`/`project_structure` 触发 + `/api/project/notes/prewarm`）；新增 3 例缓存清理与分块测试，测试 189 例通过；wheel 已部署复验（合成项目触发 `pruned 1 stale files`）
 - 2026-10-29 工具统计修复：`api_usage` 新增 `tool_names`（每次响应全部工具，JSON 数组），流式收集全部 `content_block_start` / `tool_calls`，非流式从响应体解析；`tool_output_log` 按 `tool_call_id` 去重（真实副本 9168→8498 行）；新增 `GET /usage/tools`，旧行按单工具计入 `legacy_calls`；测试 197 例通过；已部署复验（代理 23:37 重启，新行 `["Bash","Bash","Bash"]`，线上 `tool_output_log` 8502=8502）
 - 2026-10-30 检索质量修复：`catch_up` 新增 `limit`/`offset`/`max_chars`（默认 50/0/24000），返回 `returned`/`truncated`/`next_offset`；`read_url` 对 400/404/410 直接终止，失败增加 `failure_kind`；`project_structure` 增加 `status`（ok/empty/path_not_found/not_scanned）；`project_search` 结果补充 `module`/`importedBy`/`importCount`，向量-only 结果降级为 `weak_match` 并按词法锚点过滤，中文向量-only 直接 `no_match`，旧符号表缺 `start_line` 时回退无行号查询；新增 13 例测试，全量 213 例通过
+- 2026-10-30 recall 精度修复：热层 `threshold=0.68`、冷层 Qdrant `score_threshold=0.56`；episode 扩展按实际相似度过滤并取 `min(seed*0.98, actual)`，低于 0.56 丢弃；notes 改为 ASCII 词 + 中文 bigram 覆盖率 ≥60%；主结果只保留 direct，扩展进入 `related`，新增 `status`（ok/weak_match/no_match）与 `match_kind`；冷层/扩展分数统一转 Python `float`，修复部署后 `float32 is not JSON serializable`；新增 10 例测试，全量 223 例通过；重新部署后 141/141 成功，负例 `ok` 0，历史旧低分 36→0，旧 expanded 47→related 49
 
 ## 下一步
 
@@ -68,6 +69,8 @@
 | 2026-10-29 | `ruff format --check` / `ruff check` / `unittest discover` / `agent-gateway --check` | 通过（155 文件 / 0 条 / 188 例 1 skipped / check passed） |
 | 2026-10-29 | 工具面收敛后 `ruff format --check` / `ruff check` / `unittest discover` | 通过（154 文件 / 0 条 / 186 例，1 skipped） |
 | 2026-10-30 | 检索质量修复后 `ruff format --check` / `ruff check` / `unittest discover` / `agent-gateway --check` | 通过（157 文件 / 0 条 / 213 例 1 skipped / check passed） |
+| 2026-10-30 | recall 精度修复后 `ruff format --check` / `ruff check` / `unittest discover` / `agent-gateway --check` | 通过（158 文件 / 0 条 / 223 例 1 skipped / check passed） |
+| 2026-10-30 | 部署后 recall 批量（100 条部署前历史去重 + 20 正例 + 20 负例 + 1 条复测） | 141/141 成功；历史 82 ok/12 weak/6 no_match；正例 11 ok/9 weak；负例 14 no_match/6 weak/0 ok；旧低分 36→0；旧 expanded 47→related 49；p95 1350ms |
 | 2026-10-30 | 线上 MCP 14 项目批量（86 次调用） | 86/86 通过 |
 | 2026-10-30 | 线上 MCP 负载（140 structure + 42 负例 + 25 catch/read） | 207/207 通过；p95 structure 58.8ms、负例 1623.7ms |
 
@@ -78,3 +81,5 @@
 - 冷层 774 条（created_at ≤ 2026-10-22）缺 `source_memory_ids`：热层 processed 在 10-23 批量迁移后丢失消费日期，历史来源不可恢复，决定不回填（见 decisions 2026-10-28）。消费方 `_mark_cold_stale` 对缺键与空列表行为一致，无功能影响。
 - Claude Code 侧 `Invalid request parameters`/`-32602` 是 MCP 服务进程替换后的客户端连接瞬态；重连逻辑在外部客户端，不在本仓，服务端 `/health` 已存在。
 - `project_search` 向量层绝对阈值仍为 0.35；中文向量-only 已直接 `no_match`，英文无词法锚点仍可能返回 `weak_match`，需人工复核。
+- `recall` 的 0.68/0.56/60% 阈值来自历史分数分布、批量正负例与单测；不同 embedding 版本可能需要重新标定。
+- `recall` 的正例 `weak_match` 多为 notes-only；调用方应按 `status` 判断，不应把 notes 当语义记忆命中。
