@@ -32,8 +32,6 @@ NOTES_SEMANTIC_RATIO = 0.65
 #: Coverage is a share of query terms, not a similarity, so it does not move
 #: with the model.
 NOTES_COVERAGE = 0.50
-#: Project search floor is deliberately below any semantic floor.
-SEARCH_FLOOR = 0.35
 
 
 def _hot_samples(limit: int) -> list[tuple[str, str]]:
@@ -166,7 +164,6 @@ def write(tag: str, measured: dict[str, Any]) -> dict[str, float] | None:
         "hot": float(hot),
         "cold": float(cold),
         "expanded": float(cold),
-        "search": SEARCH_FLOOR,
         "notes_coverage": NOTES_COVERAGE,
         "notes_semantic": round(float(cold) * NOTES_SEMANTIC_RATIO, 3),
     }

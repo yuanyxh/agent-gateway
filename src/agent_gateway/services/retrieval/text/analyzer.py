@@ -52,10 +52,6 @@ _ANALYZERS: dict[str, TextAnalyzer] = {
 }
 
 
-def register_analyzer(analyzer: TextAnalyzer) -> None:
-    _ANALYZERS[analyzer.script] = analyzer
-
-
 def script_of(char: str) -> str | None:
     if CJK_RE.match(char):
         return CjkAnalyzer.script

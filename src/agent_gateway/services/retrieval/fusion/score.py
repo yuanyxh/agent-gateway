@@ -32,18 +32,12 @@ class HeatWeightedFusion:
         """Ordering key shared with post-fusion boosts, so a re-sort keeps it."""
         return heat_key(item, self._heat_max, self._base, self._weight)
 
-    def fuse(
-        self,
-        arms: list[ArmResult],
-        limit: int,
-        weights: dict[str, float] | None = None,
-    ) -> list[RetrievedItem]:
+    def fuse(self, arms: list[ArmResult], limit: int) -> list[RetrievedItem]:
         merged: dict[str, RetrievedItem] = {}
         for arm in arms:
-            factor = (weights or {}).get(arm.name, 1.0)
             for item in arm.items:
                 existing = merged.get(item.id)
-                if existing is None or item.score * factor > existing.score:
+                if existing is None or item.score > existing.score:
                     merged[item.id] = item
         ordered = sorted(merged.values(), key=self.rank_key, reverse=True)
         return ordered[:limit]
@@ -60,18 +54,12 @@ class MaxScoreFusion:
     def rank_key(self, item: RetrievedItem) -> float:
         return float(item.score)
 
-    def fuse(
-        self,
-        arms: list[ArmResult],
-        limit: int,
-        weights: dict[str, float] | None = None,
-    ) -> list[RetrievedItem]:
+    def fuse(self, arms: list[ArmResult], limit: int) -> list[RetrievedItem]:
         merged: dict[str, RetrievedItem] = {}
         for arm in arms:
-            factor = (weights or {}).get(arm.name, 1.0)
             for item in arm.items:
                 existing = merged.get(item.id)
-                if existing is None or item.score * factor > existing.score:
+                if existing is None or item.score > existing.score:
                     merged[item.id] = item
         return sorted(merged.values(), key=lambda i: i.score, reverse=True)[:limit]
 

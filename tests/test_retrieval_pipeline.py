@@ -18,9 +18,7 @@ from agent_gateway.services.retrieval.fusion.score import HeatWeightedFusion  # 
 from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate  # noqa: E402
 from agent_gateway.services.retrieval.gate import calibrate  # noqa: E402
 from agent_gateway.services.retrieval.gate.thresholds import floors_for  # noqa: E402
-from agent_gateway.services.retrieval.expand.query import expand_query  # noqa: E402
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage  # noqa: E402
-from agent_gateway.services.retrieval.protocol import Retriever  # noqa: E402
 from agent_gateway.services.retrieval.text.analyzer import (  # noqa: E402
     detect_language,
     split_terms,
@@ -65,20 +63,6 @@ class FakeArm:
         return ArmResult(name=self.name, items=list(self._items))
 
 
-class QueryExpansionTest(unittest.TestCase):
-    def test_bare_query_expands_to_itself(self):
-        subs = expand_query(Query(text="剪贴板"))
-
-        self.assertEqual(
-            [(s.text, s.weight, s.label) for s in subs], [("剪贴板", 1.0, "text")]
-        )
-
-    def test_query_is_not_split(self):
-        subs = expand_query(Query(text="剪贴板 热键"))
-
-        self.assertEqual([s.text for s in subs], ["剪贴板 热键"])
-
-
 class StageTest(unittest.TestCase):
     def _pipeline(self, stages):
         return Pipeline(
@@ -99,18 +83,6 @@ class StageTest(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in out["results"]], ["x"])
         self.assertEqual(seen, ["q"])
-
-    def test_stage_below_min_hits_falls_through(self):
-        seen: list[str] = []
-        thin = FakeArm("a", [item("weak", 0.6)], seen)
-        solid = FakeArm("b", [item("y", 0.9)], seen)
-        pipeline = self._pipeline(
-            [Stage("s1", [thin], min_hits=2), Stage("s2", [solid])]
-        )
-
-        out = pipeline.run("q", limit=5)
-
-        self.assertEqual([row["id"] for row in out["results"]], ["y"])
 
     def test_empty_stage_falls_through(self):
         seen: list[str] = []
@@ -170,7 +142,7 @@ class MaxScoreFusion:
 
     name = "max_score"
 
-    def fuse(self, arms, limit, weights=None):
+    def fuse(self, arms, limit):
         merged = {}
         for arm in arms:
             for row in arm.items:
@@ -234,7 +206,6 @@ class GateTest(unittest.TestCase):
             "hot": 0.61,
             "cold": 0.57,
             "expanded": 0.57,
-            "search": 0.35,
             "notes_coverage": 0.50,
             "notes_semantic": 0.37,
         }
@@ -275,10 +246,11 @@ class PipelineTest(unittest.TestCase):
                 raise RuntimeError("nope")
 
         pipeline = self._pipeline([Boom(), FakeArm("ok", [item("x", 0.7)])])
-        out = pipeline.run("q", limit=5)
+        with mock.patch.object(trace, "record") as recorder:
+            out = pipeline.run("q", limit=5)
 
         self.assertEqual(out["status"], "ok")
-        self.assertIn("nope", out["_arms"][0].error)
+        self.assertIn("nope", recorder.call_args[0][0]["arms"][0]["error"])
         self.assertEqual(out["results"][0]["id"], "x")
 
     def test_trace_payload_is_recorded(self):
@@ -292,13 +264,12 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(payload["arms"][0]["hits"][0]["id"], "x")
         self.assertTrue(out["trace_id"].startswith("rt_"))
 
-    def _fallback_pipeline(self, arms: list[FakeArm], enabled: bool = True) -> Pipeline:
+    def _fallback_pipeline(self, arms: list[FakeArm]) -> Pipeline:
         return Pipeline(
             name="test",
             arms=arms,
             fusion=MaxScoreFusion(),
             gate=LayerPresenceGate(),
-            lexical_only_as_fallback=enabled,
         )
 
     def test_lexical_results_dropped_when_semantic_layer_hits(self):
@@ -320,18 +291,6 @@ class PipelineTest(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in out["results"]], ["n"])
 
-    def test_switch_off_keeps_lexical_results(self):
-        arms = [
-            FakeArm("dense_hot", [item("h", 0.7, layer="hot")]),
-            FakeArm(
-                "lexical_notes", [item("n", 0.6, layer="notes")], fallback_only=True
-            ),
-        ]
-        with mock.patch.object(trace, "record"):
-            out = self._fallback_pipeline(arms, enabled=False).run("q", limit=5)
-
-        self.assertEqual([row["id"] for row in out["results"]], ["h", "n"])
-
     def test_result_shape_carries_score_kind(self):
         pipeline = self._pipeline([FakeArm("a", [item("x", 0.7)])])
         with mock.patch.object(trace, "record"):
@@ -350,8 +309,8 @@ class ConfigTest(unittest.TestCase):
             config.model_tag("jinaai/jina-embeddings-v2-base-zh"), "jinazh768"
         )
 
-    def test_arm_satisfies_retriever_protocol(self):
-        self.assertIsInstance(FakeArm("a", []), Retriever)
+    def test_arm_exposes_the_retriever_surface(self):
+        self.assertTrue(callable(FakeArm("a", []).retrieve))
 
 
 class TraceTest(unittest.TestCase):

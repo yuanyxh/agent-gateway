@@ -123,7 +123,6 @@ def write_floors(tag: str, chosen: dict[str, float]) -> Path | None:
         "hot": float(hot),
         "cold": float(cold),
         "expanded": float(cold),
-        "search": 0.35,
         "notes_coverage": 0.50,
         "notes_semantic": round(float(cold) * 0.65, 3),
     }

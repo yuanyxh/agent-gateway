@@ -12,8 +12,23 @@ from agent_gateway.services.mcp import server_memory, server_state  # noqa: E402
 from agent_gateway.services.mcp.server_constants import (  # noqa: E402
     EPISODE_EXPAND_PER_GROUP,
 )
+from agent_gateway.services.retrieval.arms import recall as recall_arms  # noqa: E402
+from agent_gateway.services.retrieval.types import RetrievedItem  # noqa: E402
 
 EPISODE_RE = r"^ep_\d{8}_[0-9a-f]{8}$"
+#: Pinned expansion floor so the assertions do not read the calibration file.
+EXPANDED_FLOOR = 0.56
+
+
+def _seed(id_: str, score: float, episode_id: str, layer: str = "hot") -> RetrievedItem:
+    return RetrievedItem(
+        id=id_,
+        kind="memory",
+        score=score,
+        score_kind="dense",
+        layer=layer,
+        extra={"episode_id": episode_id},
+    )
 
 
 class EpisodeIdTest(unittest.TestCase):
@@ -94,7 +109,7 @@ def _point(point_id, vector=None, **payload):
 
 class EpisodeExpansionTest(unittest.TestCase):
     def test_expands_same_group_once(self):
-        seed = {"id": "a", "score": 0.9, "episode_id": "ep_1", "layer": "hot"}
+        seed = _seed("a", 0.9, "ep_1")
         points = [
             _point("a", data="seed", status="active"),
             _point("b", data="sibling", status="active"),
@@ -103,13 +118,13 @@ class EpisodeExpansionTest(unittest.TestCase):
         with mock.patch.object(
             server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
-            expanded = server_memory._expand_hot_episodes([seed])
+            expanded = recall_arms._expand_hot([seed], None, EXPANDED_FLOOR)
 
-        self.assertEqual([row["id"] for row in expanded], ["b"])
-        self.assertAlmostEqual(expanded[0]["score"], 0.9 * 0.98)
-        self.assertTrue(expanded[0]["expanded"])
-        self.assertEqual(expanded[0]["episode_id"], "ep_1")
-        self.assertEqual(expanded[0]["content"], "sibling")
+        self.assertEqual([item.id for item in expanded], ["b"])
+        self.assertAlmostEqual(expanded[0].score, 0.9 * 0.98)
+        self.assertTrue(expanded[0].extra["expanded"])
+        self.assertEqual(expanded[0].extra["episode_id"], "ep_1")
+        self.assertEqual(expanded[0].content, "sibling")
 
     def test_no_episode_means_no_expansion(self):
         points = [_point("b", data="x", status="active")]
@@ -117,12 +132,14 @@ class EpisodeExpansionTest(unittest.TestCase):
         with mock.patch.object(
             server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
-            expanded = server_memory._expand_hot_episodes([{"id": "a", "score": 0.9}])
+            expanded = recall_arms._expand_hot(
+                [_seed("a", 0.9, "")], None, EXPANDED_FLOOR
+            )
 
         self.assertEqual(expanded, [])
 
     def test_skips_archived_and_inactive(self):
-        seed = {"id": "a", "score": 1.0, "episode_id": "ep_1", "layer": "hot"}
+        seed = _seed("a", 1.0, "ep_1")
         points = [
             _point("b", data="archived", status="active", archived=True),
             _point("c", data="old", status="superseded"),
@@ -131,23 +148,23 @@ class EpisodeExpansionTest(unittest.TestCase):
         with mock.patch.object(
             server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
-            expanded = server_memory._expand_hot_episodes([seed])
+            expanded = recall_arms._expand_hot([seed], None, EXPANDED_FLOOR)
 
         self.assertEqual(expanded, [])
 
     def test_caps_rows_per_group(self):
-        seed = {"id": "a", "score": 1.0, "episode_id": "ep_1", "layer": "hot"}
+        seed = _seed("a", 1.0, "ep_1")
         points = [_point(f"p{i}", data=str(i), status="active") for i in range(6)]
 
         with mock.patch.object(
             server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
-            expanded = server_memory._expand_hot_episodes([seed])
+            expanded = recall_arms._expand_hot([seed], None, EXPANDED_FLOOR)
 
         self.assertEqual(len(expanded), EPISODE_EXPAND_PER_GROUP)
 
     def test_ranks_expanded_rows_by_query_similarity(self):
-        seed = {"id": "a", "score": 0.9, "episode_id": "ep_1", "layer": "hot"}
+        seed = _seed("a", 0.9, "ep_1")
         points = [
             _point("far", vector=[6.0, 8.0], data="far", status="active"),
             _point("near", vector=[0.99, 0.1], data="near", status="active"),
@@ -156,15 +173,15 @@ class EpisodeExpansionTest(unittest.TestCase):
         with mock.patch.object(
             server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
-            expanded = server_memory._expand_hot_episodes([seed], query_vec=[1.0, 0.0])
+            expanded = recall_arms._expand_hot([seed], [1.0, 0.0], EXPANDED_FLOOR)
 
-        self.assertEqual([row["id"] for row in expanded], ["near", "far"])
-        self.assertAlmostEqual(expanded[0]["score"], 0.9 * 0.98)
-        self.assertAlmostEqual(expanded[1]["score"], 0.6)
-        self.assertEqual(expanded[1]["match_kind"], "expanded")
+        self.assertEqual([item.id for item in expanded], ["near", "far"])
+        self.assertAlmostEqual(expanded[0].score, 0.9 * 0.98)
+        self.assertAlmostEqual(expanded[1].score, 0.6)
+        self.assertEqual(expanded[1].match_kind, "expanded")
 
     def test_drops_sibling_below_relevance_floor(self):
-        seed = {"id": "a", "score": 0.9, "episode_id": "ep_1", "layer": "hot"}
+        seed = _seed("a", 0.9, "ep_1")
         points = [
             _point("far", vector=[5.0, 9.0], data="far", status="active"),
             _point("near", vector=[0.99, 0.1], data="near", status="active"),
@@ -173,9 +190,9 @@ class EpisodeExpansionTest(unittest.TestCase):
         with mock.patch.object(
             server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
-            expanded = server_memory._expand_hot_episodes([seed], query_vec=[1.0, 0.0])
+            expanded = recall_arms._expand_hot([seed], [1.0, 0.0], EXPANDED_FLOOR)
 
-        self.assertEqual([row["id"] for row in expanded], ["near"])
+        self.assertEqual([item.id for item in expanded], ["near"])
 
     def test_full_group_opens_new_episode(self):
         similar = [{"score": 0.99, "episode_id": "ep_full"}]
@@ -276,21 +293,21 @@ class FakeColdQdrant:
 
 class ColdEpisodeExpansionTest(unittest.TestCase):
     def test_expands_same_group(self):
-        seed = {"id": "c1", "score": 0.8, "episode_id": "ep_c", "layer": "cold"}
+        seed = _seed("c1", 0.8, "ep_c", layer="cold")
         points = [_point("c1", content="seed"), _point("c2", content="sibling")]
 
         with mock.patch.object(
             server_state, "get_qdrant", return_value=FakeColdQdrant(points)
         ):
-            expanded = server_memory._expand_cold_episodes([seed])
+            expanded = recall_arms._expand_cold([seed], None, EXPANDED_FLOOR)
 
-        self.assertEqual([row["id"] for row in expanded], ["c2"])
-        self.assertEqual(expanded[0]["layer"], "cold")
-        self.assertAlmostEqual(expanded[0]["score"], 0.8 * 0.98)
-        self.assertEqual(expanded[0]["episode_id"], "ep_c")
+        self.assertEqual([item.id for item in expanded], ["c2"])
+        self.assertEqual(expanded[0].layer, "cold")
+        self.assertAlmostEqual(expanded[0].score, 0.8 * 0.98)
+        self.assertEqual(expanded[0].extra["episode_id"], "ep_c")
 
     def test_caps_expanded_score_at_actual_similarity(self):
-        seed = {"id": "c1", "score": 0.8, "episode_id": "ep_c", "layer": "cold"}
+        seed = _seed("c1", 0.8, "ep_c", layer="cold")
         points = [
             _point("c1", vector=[1.0, 0.0], content="seed"),
             _point("c2", vector=[6.0, 8.0], content="sibling"),
@@ -299,14 +316,14 @@ class ColdEpisodeExpansionTest(unittest.TestCase):
         with mock.patch.object(
             server_state, "get_qdrant", return_value=FakeColdQdrant(points)
         ):
-            expanded = server_memory._expand_cold_episodes([seed], query_vec=[1.0, 0.0])
+            expanded = recall_arms._expand_cold([seed], [1.0, 0.0], EXPANDED_FLOOR)
 
-        self.assertEqual([row["id"] for row in expanded], ["c2"])
-        self.assertAlmostEqual(expanded[0]["score"], 0.6)
-        self.assertEqual(expanded[0]["match_kind"], "expanded")
+        self.assertEqual([item.id for item in expanded], ["c2"])
+        self.assertAlmostEqual(expanded[0].score, 0.6)
+        self.assertEqual(expanded[0].match_kind, "expanded")
 
     def test_skips_stale_and_archived(self):
-        seed = {"id": "c1", "score": 1.0, "episode_id": "ep_c", "layer": "cold"}
+        seed = _seed("c1", 1.0, "ep_c", layer="cold")
         points = [
             _point("c2", content="x", stale=True),
             _point("c3", content="y", archived=True),
@@ -315,17 +332,17 @@ class ColdEpisodeExpansionTest(unittest.TestCase):
         with mock.patch.object(
             server_state, "get_qdrant", return_value=FakeColdQdrant(points)
         ):
-            expanded = server_memory._expand_cold_episodes([seed])
+            expanded = recall_arms._expand_cold([seed], None, EXPANDED_FLOOR)
 
         self.assertEqual(expanded, [])
 
     def test_non_cold_seed_ignored(self):
-        seed = {"id": "h1", "score": 1.0, "episode_id": "ep_h", "layer": "hot"}
+        seed = _seed("h1", 1.0, "ep_h", layer="hot")
 
         with mock.patch.object(
             server_state, "get_qdrant", return_value=FakeColdQdrant([])
         ):
-            expanded = server_memory._expand_cold_episodes([seed])
+            expanded = recall_arms._expand_cold([seed], None, EXPANDED_FLOOR)
 
         self.assertEqual(expanded, [])
 

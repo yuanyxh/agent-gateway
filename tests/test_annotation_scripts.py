@@ -178,7 +178,6 @@ class WriteFloorsTest(unittest.TestCase):
                 "hot": 0.9,
                 "cold": 0.8,
                 "expanded": 0.8,
-                "search": 0.35,
                 "notes_coverage": 0.6,
                 "notes_semantic": 0.4,
             }
@@ -193,7 +192,7 @@ class WriteFloorsTest(unittest.TestCase):
         self.assertEqual(data["calib_test"]["hot"], 0.62)
         self.assertEqual(data["calib_test"]["cold"], 0.55)
         self.assertEqual(data["calib_test"]["expanded"], 0.55)
-        self.assertEqual(data["calib_test"]["search"], 0.35)
+        self.assertEqual(data["calib_test"]["notes_coverage"], 0.5)
 
     def test_unknown_key_refuses_to_write(self):
         table = {
@@ -201,7 +200,6 @@ class WriteFloorsTest(unittest.TestCase):
                 "hot": 0.9,
                 "cold": None,
                 "expanded": 0.8,
-                "search": 0.35,
                 "notes_coverage": 0.6,
                 "notes_semantic": 0.4,
             }

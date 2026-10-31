@@ -101,12 +101,6 @@ EPISODE_COLD_LOOKUP_LIMIT = 200
 # A summary barely related to any source memory starts its own group.
 EPISODE_COLD_MIN_SIMILARITY = 0.45
 
-# Recall relevance floors. Values come from historical score distributions:
-# hot p10=0.683, cold p25=0.552; the batch also exposed 0.62/0.55 false positives.
-RECALL_COLD_MIN_SCORE = 0.56
-RECALL_EXPANDED_MIN_SCORE = 0.56
-RECALL_NOTES_MIN_COVERAGE = 0.60
-
 # Retention: superseded entries are physically removed sooner than active ones.
 SUPERSEDED_RETENTION_DAYS = 30
 

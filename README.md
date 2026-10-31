@@ -27,8 +27,9 @@ agent-gateway --export-contracts             # write contracts/env.json
 ```
 
 - Config: `<UTILITY_DATA_DIR>/config.yaml` (the single source; env vars only override)
-- Retrieval floors: `<UTILITY_DATA_DIR>/retrieval_thresholds.json` — per-model override,
-  written by `scripts/calibrate_thresholds.py`; read on every call, so no restart
+- Retrieval floors: `<UTILITY_DATA_DIR>/retrieval_thresholds.json` — auto-calibrated on
+  first use of a model, re-read on every call, so no restart; `scripts/calibrate_thresholds.py`
+  can measure a hand-picked table instead
 - Runtime state: `<UTILITY_DATA_DIR>/runtime/<service>.json` (port + pid)
 - Services: MCP on `:9001`, token proxy on `:8613` (both auto-probe when configured port is 0)
 

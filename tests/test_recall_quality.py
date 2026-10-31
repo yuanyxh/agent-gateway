@@ -22,7 +22,7 @@ from agent_gateway.services.mcp import (  # noqa: E402
 )
 from agent_gateway.services.retrieval.arms import recall as recall_arms  # noqa: E402
 
-from agent_gateway.services.retrieval.types import RetrievedItem  # noqa: E402
+from agent_gateway.services.retrieval.types import Query, RetrievedItem  # noqa: E402
 
 #: Pinned values so the assertions do not depend on the active model's
 #: calibration file.
@@ -30,7 +30,6 @@ FLOORS = {
     "hot": 0.68,
     "cold": 0.56,
     "expanded": 0.56,
-    "search": 0.35,
     "notes_coverage": 0.60,
     "notes_semantic": 0.40,
 }
@@ -58,17 +57,13 @@ class NotesCoverageTest(unittest.TestCase):
                 "RSS 治理 日报 规则 改进", encoding="utf-8"
             )
             Path(root, "partial.md").write_text("RSS 日报", encoding="utf-8")
-            with (
-                mock.patch.object(recall_arms, "NOTES_DIR", root),
-                mock.patch.object(server_state, "get_qdrant", return_value=None),
-            ):
-                results = server_memory.search_cold_layer(
-                    "RSS 治理 日报 规则 改进", limit=5
-                )
+            with mock.patch.object(recall_arms, "NOTES_DIR", root):
+                arm = recall_arms.NotesArm(min_coverage=FLOORS["notes_coverage"])
+                result = arm.retrieve(Query(text="RSS 治理 日报 规则 改进"), limit=5)
 
-        self.assertEqual([row["id"] for row in results], ["notes:full.md"])
-        self.assertAlmostEqual(results[0]["score"], 0.6)
-        self.assertEqual(results[0]["heat_score"], 1.0)
+        self.assertEqual([item.id for item in result.items], ["notes:full.md"])
+        self.assertAlmostEqual(result.items[0].score, 0.6)
+        self.assertEqual(result.items[0].extra["heat_score"], 1.0)
 
 
 class FakeColdQdrant:
@@ -86,17 +81,14 @@ class ColdThresholdTest(unittest.TestCase):
         qdrant = FakeColdQdrant()
         query_vec = mock.Mock()
         query_vec.tolist.return_value = [1.0, 0.0]
-        with tempfile.TemporaryDirectory() as root:
-            with (
-                mock.patch.object(recall_arms, "NOTES_DIR", root),
-                mock.patch.object(server_state, "get_qdrant", return_value=qdrant),
-                mock.patch.object(server_embed, "embed_query", return_value=query_vec),
-            ):
-                server_memory.search_cold_layer("q", limit=3)
+        with (
+            mock.patch.object(server_state, "get_qdrant", return_value=qdrant),
+            mock.patch.object(server_embed, "embed_query", return_value=query_vec),
+        ):
+            arm = recall_arms.ColdMemoryArm(min_score=FLOORS["cold"])
+            arm.retrieve(Query(text="q"), limit=3)
 
-        self.assertEqual(
-            qdrant.kwargs["score_threshold"], server_memory.RECALL_COLD_MIN_SCORE
-        )
+        self.assertEqual(qdrant.kwargs["score_threshold"], FLOORS["cold"])
 
 
 class FakeColdPoint:
@@ -108,7 +100,7 @@ class FakeColdPoint:
 class ColdScoreSerializationTest(unittest.TestCase):
     def test_cold_score_and_cosine_are_python_floats(self):
         self.assertIsInstance(
-            server_memory._cosine(
+            recall_arms.cosine(
                 np.array([1.0, 0.0], dtype=np.float32),
                 np.array([6.0, 8.0], dtype=np.float32),
             ),
@@ -116,21 +108,20 @@ class ColdScoreSerializationTest(unittest.TestCase):
         )
         query_vec = mock.Mock()
         query_vec.tolist.return_value = [1.0, 0.0]
-        with tempfile.TemporaryDirectory() as root:
-            with (
-                mock.patch.object(recall_arms, "NOTES_DIR", root),
-                mock.patch.object(
-                    server_state,
-                    "get_qdrant",
-                    return_value=FakeColdQdrant([FakeColdPoint()]),
-                ),
-                mock.patch.object(server_embed, "embed_query", return_value=query_vec),
-                mock.patch.object(recall_arms, "update_cold_heat"),
-            ):
-                results = server_memory.search_cold_layer("q", limit=1)
+        with (
+            mock.patch.object(
+                server_state,
+                "get_qdrant",
+                return_value=FakeColdQdrant([FakeColdPoint()]),
+            ),
+            mock.patch.object(server_embed, "embed_query", return_value=query_vec),
+            mock.patch.object(recall_arms, "update_cold_heat"),
+        ):
+            arm = recall_arms.ColdMemoryArm(min_score=FLOORS["cold"])
+            result = arm.retrieve(Query(text="q"), limit=1)
 
-        self.assertIsInstance(results[0]["score"], float)
-        self.assertAlmostEqual(results[0]["score"], 0.8)
+        self.assertIsInstance(result.items[0].score, float)
+        self.assertAlmostEqual(result.items[0].score, 0.8)
 
 
 class NotesSemanticFilterTest(unittest.TestCase):

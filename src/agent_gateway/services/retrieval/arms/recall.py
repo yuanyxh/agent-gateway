@@ -29,9 +29,9 @@ from agent_gateway.services.mcp.server_constants import (
     HEAT_MAX,
     NOTE_EXTENSIONS,
     NOTES_DIR,
-    RECALL_EXPANDED_MIN_SCORE,
 )
 from agent_gateway.services.mcp import server_embed, server_state
+from agent_gateway.services.retrieval.gate.thresholds import floors_for
 from agent_gateway.services.retrieval.text.analyzer import split_terms
 from agent_gateway.services.retrieval.text.matching import (
     notes_coverage,
@@ -404,16 +404,27 @@ def expand_episodes(query: Query, items: list[RetrievedItem]) -> list[RetrievedI
     if not items:
         return []
     query_vec = server_embed.embed_query(query.text)
-    hot = _expand_hot(items, query_vec) if server_state.get_hot_memory() else []
-    cold = _expand_cold(items, query_vec) if server_state.get_qdrant() else []
+    min_score = floors_for(server_embed.EMBEDDER_SPEC.tag)["expanded"]
+    hot = (
+        _expand_hot(items, query_vec, min_score)
+        if server_state.get_hot_memory()
+        else []
+    )
+    cold = (
+        _expand_cold(items, query_vec, min_score) if server_state.get_qdrant() else []
+    )
     combined = hot + cold
     combined.sort(key=heat_key, reverse=True)
     return combined
 
 
 def _expand_hot(
-    items: list[RetrievedItem], query_vec: np.ndarray | None
+    items: list[RetrievedItem],
+    query_vec: np.ndarray | None,
+    min_score: float | None = None,
 ) -> list[RetrievedItem]:
+    if min_score is None:
+        min_score = floors_for(server_embed.EMBEDDER_SPEC.tag)["expanded"]
     seeds = [i for i in items if i.layer == "hot" and i.extra.get("episode_id")][
         :EPISODE_EXPAND_TOP_N
     ]
@@ -454,7 +465,7 @@ def _expand_hot(
                 if query_vec is not None and vector
                 else float(seed.score)
             )
-            if score < RECALL_EXPANDED_MIN_SCORE:
+            if score < min_score:
                 continue
             candidates.append((score, point, payload))
         candidates.sort(key=lambda c: -c[0])
@@ -482,8 +493,12 @@ def _expand_hot(
 
 
 def _expand_cold(
-    items: list[RetrievedItem], query_vec: np.ndarray | None
+    items: list[RetrievedItem],
+    query_vec: np.ndarray | None,
+    min_score: float | None = None,
 ) -> list[RetrievedItem]:
+    if min_score is None:
+        min_score = floors_for(server_embed.EMBEDDER_SPEC.tag)["expanded"]
     seeds = [i for i in items if i.layer == "cold" and i.extra.get("episode_id")][
         :EPISODE_EXPAND_TOP_N
     ]
@@ -524,7 +539,7 @@ def _expand_cold(
                 if query_vec is not None and vector
                 else float(seed.score)
             )
-            if score < RECALL_EXPANDED_MIN_SCORE:
+            if score < min_score:
                 continue
             candidates.append((score, point, payload))
         candidates.sort(key=lambda c: -c[0])

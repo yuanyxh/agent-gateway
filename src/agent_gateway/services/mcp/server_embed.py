@@ -2,7 +2,7 @@
 
 Split out of server.py (2026-08-30, refactor phase 4): fastembed configuration and
 the single embedder instance. Shared by the hot layer (server.py's
-MEM0_CONFIG/_patch_mem0_fastembed), the cold layer (search_cold_layer) and project
+MEM0_CONFIG/_patch_mem0_fastembed), the cold layer (ColdMemoryArm) and project
 vector search (server_search.py). Code moved as-is, no logic changes.
 
 Note: this module does not import mem0/qdrant — server.py's module-level side-effect
@@ -106,7 +106,7 @@ def describe_dim_mismatch(existing_dims: int | None, expected_dims: int) -> str 
     Why an explicit error is required: **collection dims are fixed at first creation**.
     After swapping the model (dims change) the old vectors are not comparable with the
     new query vectors, and Qdrant raises a dimension error on query — while
-    `search_cold_layer` swallows the exception into a single warning, presenting as
+    `ColdMemoryArm.retrieve` swallows the exception into a single warning, presenting as
     "cold-layer search silently fails, users just see fewer results". Calling it out at
     startup is far cheaper than tracing back from "the search results look wrong".
     """

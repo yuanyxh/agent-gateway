@@ -33,27 +33,12 @@ class Query:
     """A retrieval request.
 
     `text` is what the caller typed. `root_text` is the untranslated original
-    when the caller rewrote it; everything else only tunes how arms behave.
+    when the caller rewrote it.
     """
 
     text: str
     language: str = "unknown"
     root_text: str = ""
-    #: Retrieval hint from the caller: semantic / lexical / auto.
-    mode: str = "auto"
-
-
-@dataclass(frozen=True)
-class SubQuery:
-    """One query to run against a stage, with the weight its hits carry.
-
-    A plain query expands to a single sub-query with weight 1.0, so the default
-    path is unchanged.
-    """
-
-    text: str
-    weight: float = 1.0
-    label: str = ""
 
 
 @dataclass
@@ -101,7 +86,3 @@ class ArmResult:
 class GateVerdict:
     status: str = ""
     reason: str = ""
-    top1: float = 0.0
-    median: float = 0.0
-    margin: float = 0.0
-    lexical_anchor: bool = False

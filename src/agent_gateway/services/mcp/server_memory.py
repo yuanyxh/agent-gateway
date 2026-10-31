@@ -54,8 +54,6 @@ from agent_gateway.services.mcp.server_constants import (
     PROCESSED_FIELD,
     PROCESSED_MAX_BIT,
     PROCESSED_RETIRED_MASK,
-    RECALL_COLD_MIN_SCORE,
-    RECALL_NOTES_MIN_COVERAGE,
     REVISION_FIELD,
     STATUS_ACTIVE,
     STATUS_DELETED,
@@ -91,23 +89,19 @@ from agent_gateway.services.retrieval.arms.recall import (
     ColdMemoryArm,
     HotMemoryArm,
     NotesArm,
-    _expand_cold,
-    _expand_hot,
     expand_episodes,
 )
 from agent_gateway.services.retrieval.arms.recall import (  # noqa: F401
-    cosine as _cosine,
     dense_vector as _dense_vector,
     dot as _dot,
     project_hot_result as _project_hot_result,
-    update_cold_heat as _update_cold_heat,
 )
 from agent_gateway.services.retrieval.fusion.score import HeatWeightedFusion
 from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage
 from agent_gateway.services.retrieval.text.analyzer import detect_language, split_terms
-from agent_gateway.services.retrieval.types import Query, RetrievedItem
+from agent_gateway.services.retrieval.types import Query
 
 logger = setup_logging("server")
 
@@ -248,80 +242,6 @@ async def ensure_hot_memory() -> bool:
 
 
 _note_needles = split_terms
-
-
-def _legacy_to_item(row: dict, layer: str) -> RetrievedItem:
-    return RetrievedItem(
-        id=str(row.get("id", "")),
-        kind="memory",
-        score=float(row.get("score") or 0.0),
-        score_kind="dense",
-        content=row.get("content", ""),
-        layer=str(row.get("layer") or layer),
-        extra={
-            "heat_score": row.get("heat_score", DEFAULT_HEAT_SCORE),
-            "episode_id": row.get("episode_id", ""),
-        },
-    )
-
-
-def _item_to_legacy(item: RetrievedItem) -> dict:
-    out = {
-        "id": item.id,
-        "layer": item.layer,
-        "content": item.content,
-        "score": item.score,
-        "heat_score": item.extra.get("heat_score", DEFAULT_HEAT_SCORE),
-        "episode_id": item.extra.get("episode_id", ""),
-        "expanded": item.extra.get("expanded", False),
-        "match_kind": item.match_kind,
-    }
-    for key in ("source_file", "created_at"):
-        if key in item.extra:
-            out[key] = item.extra[key]
-    return out
-
-
-def _expand_hot_episodes(results: list[dict], query_vec=None) -> list[dict]:
-    """Dict-shaped wrapper kept for tests and legacy callers."""
-    items = [_legacy_to_item(r, "hot") for r in results]
-    return [_item_to_legacy(i) for i in _expand_hot(items, query_vec)]
-
-
-def _expand_cold_episodes(results: list[dict], query_vec=None) -> list[dict]:
-    items = [_legacy_to_item(r, "cold") for r in results]
-    return [_item_to_legacy(i) for i in _expand_cold(items, query_vec)]
-
-
-def _cold_and_notes_arms(
-    query: str, limit: int, include_archived: bool, min_score: float
-) -> list:
-    return [
-        ColdMemoryArm(min_score=min_score, include_archived=include_archived),
-        NotesArm(
-            min_coverage=RECALL_NOTES_MIN_COVERAGE,
-            min_semantic=floors_for(EMBEDDER_SPEC.tag)["notes_semantic"],
-        ),
-    ]
-
-
-def search_cold_layer(
-    query: str,
-    limit: int = 5,
-    include_archived: bool = False,
-    min_score: float = RECALL_COLD_MIN_SCORE,
-) -> list[dict]:
-    """Cold summaries plus notes keyword hits, ranked by heat-weighted score.
-
-    Thin wrapper over the cold/notes arms so existing callers keep the old shape.
-    """
-    q = Query(text=query)
-    arms = [
-        arm.retrieve(q, limit)
-        for arm in _cold_and_notes_arms(query, limit, include_archived, min_score)
-    ]
-    merged = HeatWeightedFusion(heat_max=HEAT_MAX).fuse(arms, limit)
-    return [_item_to_legacy(item) for item in merged]
 
 
 def _new_episode_id() -> str:
@@ -1022,8 +942,8 @@ def _build_recall_pipeline(
     include_archived: bool = False,
     include_superseded: bool = False,
 ) -> Pipeline:
-    # Every floor comes from the per-model table: a constant calibrated on one
-    # embedder silently discards another model's hits.
+    # Floors are measured for the active embedder; a constant calibrated on one
+    # model silently discards another model's hits.
     floors = floors_for(EMBEDDER_SPEC.tag)
     arms = []
     if hot_enabled:

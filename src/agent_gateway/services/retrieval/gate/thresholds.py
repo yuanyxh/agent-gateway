@@ -16,14 +16,13 @@ from agent_gateway.core.paths import gateway_home
 
 logger = setup_logging("server")
 
-FLOOR_KEYS = ("hot", "cold", "expanded", "search", "notes_coverage", "notes_semantic")
+FLOOR_KEYS = ("hot", "cold", "expanded", "notes_coverage", "notes_semantic")
 
 #: Used only before the first successful calibration of the active model.
 PROVISIONAL_FLOORS: dict[str, float] = {
     "hot": 0.55,
     "cold": 0.50,
     "expanded": 0.50,
-    "search": 0.35,
     "notes_coverage": 0.50,
     "notes_semantic": 0.35,
 }

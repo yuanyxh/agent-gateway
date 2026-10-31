@@ -258,7 +258,6 @@ async def _handle_project_search(arguments: dict) -> list[TextContent]:
             arms=[arm],
             fusion=MaxScoreFusion(),
             gate=LayerPresenceGate(semantic_layers=(SEARCH_LAYER,)),
-            lexical_only_as_fallback=False,
         )
         out = await asyncio.to_thread(
             pipeline.run,
@@ -266,7 +265,6 @@ async def _handle_project_search(arguments: dict) -> list[TextContent]:
             int_arg(arguments, "limit", DEFAULT_PROJECT_SEARCH_LIMIT),
             None,
             "project_search",
-            arguments["dbPath"],
         )
         # The arm's own status carries exact/ambiguous, which the shared gate
         # does not model; only the trace id is added on top.
@@ -328,10 +326,9 @@ async def _handle_project_notes(arguments: dict) -> list[TextContent]:
             arms=[arm],
             fusion=MaxScoreFusion(),
             gate=LayerPresenceGate(semantic_layers=(NOTES_LAYER,)),
-            lexical_only_as_fallback=False,
         )
         out = await asyncio.to_thread(
-            pipeline.run, query.strip(), limit, None, "project_notes", path
+            pipeline.run, query.strip(), limit, None, "project_notes"
         )
         # `file`/`line` stay at the top level: existing callers read those keys.
         results = [
