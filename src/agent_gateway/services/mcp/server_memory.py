@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import re
 import sys
 import time
 import uuid
@@ -40,31 +39,22 @@ from agent_gateway.services.mcp.server_constants import (
     DELETED_AT_FIELD,
     EPISODE_COLD_LOOKUP_LIMIT,
     EPISODE_COLD_MIN_SIMILARITY,
-    EPISODE_EXPAND_DECAY,
-    EPISODE_EXPAND_PER_GROUP,
-    EPISODE_EXPAND_TOP_N,
     EPISODE_FIELD,
     EPISODE_INHERIT_SIMILARITY,
     EPISODE_MAX_GROUP_SIZE,
     ERR_HOT_LAYER_NOT_READY,
     ERR_MEMORY_IDS_EMPTY,
     ERR_VALUE_INVALID,
-    EXCLUDE_DIRS,
-    HEAT_INCREMENT,
     HEAT_MAX,
     HOT_INIT_MAX_RETRIES,
     HOT_INIT_MAX_RUNTIME_FAILURES,
     HOT_INIT_RETRY_DELAY,
     HOT_INIT_RUNTIME_COOLDOWN,
     MEM0_QDRANT_PATH,
-    NOTE_EXTENSIONS,
-    NOTES_DIR,
     PROCESSED_FIELD,
     PROCESSED_MAX_BIT,
     PROCESSED_RETIRED_MASK,
     RECALL_COLD_MIN_SCORE,
-    RECALL_EXPANDED_MIN_SCORE,
-    RECALL_HOT_MIN_SCORE,
     RECALL_NOTES_MIN_COVERAGE,
     REVISION_FIELD,
     STATUS_ACTIVE,
@@ -81,10 +71,10 @@ from agent_gateway.services.mcp.server_constants import (
 )
 from agent_gateway.services.mcp.server_embed import (
     EMBEDDER_DIMS,
+    EMBEDDER_SPEC,
     EMBEDDER_MODEL,
     FASTEMBED_CACHE_DIR,
     _get_shared_embedder,
-    embed_query,
 )
 from agent_gateway.services.mcp.server_state import (
     get_hot_memory,
@@ -97,6 +87,31 @@ from agent_gateway.services.mcp.server_tool_schema import (
     DEFAULT_RECALL_LIMIT,
 )
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
+from agent_gateway.services.retrieval.arms.recall import (
+    ColdMemoryArm,
+    HotMemoryArm,
+    NotesArm,
+    _expand_cold,
+    _expand_hot,
+    expand_episodes,
+)
+from agent_gateway.services.retrieval.arms.recall import (  # noqa: F401
+    cosine as _cosine,
+    dense_vector as _dense_vector,
+    dot as _dot,
+    project_hot_result as _project_hot_result,
+    update_cold_heat as _update_cold_heat,
+)
+from agent_gateway.services.retrieval import config as retrieval_config
+from agent_gateway.services.retrieval.fusion.score import HeatWeightedFusion
+from agent_gateway.services.retrieval.gate.relevance import (
+    LayerPresenceGate,
+    RelativeRelevanceGate,
+)
+from agent_gateway.services.retrieval.gate.thresholds import floors_for
+from agent_gateway.services.retrieval.pipeline import Pipeline
+from agent_gateway.services.retrieval.text.analyzer import split_terms
+from agent_gateway.services.retrieval.types import Query, RetrievedItem
 
 logger = setup_logging("server")
 
@@ -236,53 +251,64 @@ async def ensure_hot_memory() -> bool:
     return False
 
 
-_CJK_CHAR_RE = re.compile(r"[一-鿿]")
-_ASCII_TERM_RE = re.compile(r"[a-z0-9][a-z0-9_.:/-]*")
+_note_needles = split_terms
 
 
-def _note_needles(query: str) -> list[str]:
-    """ASCII terms plus CJK bigrams; single CJK chars are too broad to anchor."""
-    needles: list[str] = []
-    seen: set[str] = set()
-
-    def add(value: str) -> None:
-        if value and value not in seen:
-            seen.add(value)
-            needles.append(value)
-
-    for raw in (query or "").lower().split():
-        for term in _ASCII_TERM_RE.findall(raw):
-            if len(term) >= 2:
-                add(term)
-        cjk = "".join(_CJK_CHAR_RE.findall(raw))
-        for index in range(len(cjk) - 1):
-            add(cjk[index : index + 2])
-    return needles
+def _legacy_to_item(row: dict, layer: str) -> RetrievedItem:
+    return RetrievedItem(
+        id=str(row.get("id", "")),
+        kind="memory",
+        score=float(row.get("score") or 0.0),
+        score_kind="dense",
+        content=row.get("content", ""),
+        layer=str(row.get("layer") or layer),
+        extra={
+            "heat_score": row.get("heat_score", DEFAULT_HEAT_SCORE),
+            "episode_id": row.get("episode_id", ""),
+        },
+    )
 
 
-def _notes_coverage(text: str, needles: list[str]) -> float:
-    if not needles:
-        return 0.0
-    lowered = text.lower()
-    return sum(1 for needle in needles if needle in lowered) / len(needles)
+def _item_to_legacy(item: RetrievedItem) -> dict:
+    out = {
+        "id": item.id,
+        "layer": item.layer,
+        "content": item.content,
+        "score": item.score,
+        "heat_score": item.extra.get("heat_score", DEFAULT_HEAT_SCORE),
+        "episode_id": item.extra.get("episode_id", ""),
+        "expanded": item.extra.get("expanded", False),
+        "match_kind": item.match_kind,
+    }
+    for key in ("source_file", "created_at"):
+        if key in item.extra:
+            out[key] = item.extra[key]
+    return out
 
 
-def _notes_snippet(text: str, needle: str, max_lines: int = 3) -> str:
-    """Take the first max_lines lines containing needle, in the same format as the
-    original `grep -inF -m <max_lines>`.
+def _expand_hot_episodes(results: list[dict], query_vec=None) -> list[dict]:
+    """Dict-shaped wrapper kept for tests and legacy callers."""
+    items = [_legacy_to_item(r, "hot") for r in results]
+    return [_item_to_legacy(i) for i in _expand_hot(items, query_vec)]
 
-    Output looks like `12:foo\\n45:bar` (line number:line content, joined by newlines);
-    returns an empty string when there is no hit.
-    """
-    if not needle:
-        return ""
-    hits: list[str] = []
-    for line_no, line in enumerate(text.splitlines(), 1):
-        if needle in line.lower():
-            hits.append(f"{line_no}:{line}")
-            if len(hits) >= max_lines:
-                break
-    return "\n".join(hits)
+
+def _expand_cold_episodes(results: list[dict], query_vec=None) -> list[dict]:
+    items = [_legacy_to_item(r, "cold") for r in results]
+    return [_item_to_legacy(i) for i in _expand_cold(items, query_vec)]
+
+
+def _cold_and_notes_arms(
+    query: str, limit: int, include_archived: bool, min_score: float
+) -> list:
+    return [
+        ColdMemoryArm(min_score=min_score, include_archived=include_archived),
+        NotesArm(
+            min_coverage=RECALL_NOTES_MIN_COVERAGE,
+            min_semantic=retrieval_config.notes_semantic_floor(
+                floors_for(EMBEDDER_SPEC.tag)["notes_semantic"]
+            ),
+        ),
+    ]
 
 
 def search_cold_layer(
@@ -291,322 +317,17 @@ def search_cold_layer(
     include_archived: bool = False,
     min_score: float = RECALL_COLD_MIN_SCORE,
 ) -> list[dict]:
-    results = []
-    qvec = embed_query(query) if get_qdrant() else None
-    if get_qdrant() and qvec is not None:
-        try:
-            vec = qvec.tolist()
-            # Stale = the summary was derived from a memory that has since been
-            # superseded; it must not be served even when archived entries are wanted.
-            must_not = [
-                FieldCondition(key=COLD_STALE_FIELD, match=MatchValue(value=True))
-            ]
-            if not include_archived:
-                must_not.append(
-                    FieldCondition(key="archived", match=MatchValue(value=True))
-                )
-            qfilter = Filter(must_not=must_not)
-            resp = get_qdrant().query_points(
-                collection_name=COLD_COLLECTION,
-                query=vec,
-                limit=limit,
-                query_filter=qfilter,
-                score_threshold=min_score,
-            )
-            for h in resp.points:
-                if h.score is None or h.score < min_score:
-                    continue
-                results.append(
-                    {
-                        "id": h.id,
-                        "content": h.payload.get("content", ""),
-                        "source_file": h.payload.get("source_file", ""),
-                        "created_at": h.payload.get("created_at", ""),
-                        "type": h.payload.get("type", ""),
-                        "score": float(h.score),
-                        "layer": "cold",
-                        "heat_score": h.payload.get("heat_score", DEFAULT_HEAT_SCORE),
-                        "access_count": h.payload.get("access_count", 0),
-                        "last_accessed_at": h.payload.get("last_accessed_at", ""),
-                        "episode_id": h.payload.get(EPISODE_FIELD, ""),
-                    }
-                )
-                _update_cold_heat(h.id)
-        except Exception as e:
-            logger.warning(f"Qdrant cold search failed: {e}")
-    needles = _note_needles(query)
-    head = needles[0] if needles else ""
-    if not needles:
-        results.sort(key=_heat_sort_key, reverse=True)
-        return results[:limit]
+    """Cold summaries plus notes keyword hits, ranked by heat-weighted score.
 
-    try:
-        for root, dirs, files in os.walk(NOTES_DIR):
-            dirs[:] = [
-                d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".")
-            ]
-            for f in files:
-                if not f.lower().endswith(NOTE_EXTENSIONS):
-                    continue
-                path = os.path.join(root, f)
-                rel = os.path.relpath(path, NOTES_DIR)
-                try:
-                    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                        text = fh.read()
-                except OSError:
-                    continue
-                coverage = _notes_coverage(text, needles)
-                if coverage < RECALL_NOTES_MIN_COVERAGE:
-                    continue
-                results.append(
-                    {
-                        "id": f"notes:{rel}",
-                        "content": _notes_snippet(text, head) or rel,
-                        "source_file": rel,
-                        "created_at": "",
-                        "type": "notes",
-                        "score": 0.5 + 0.1 * coverage,
-                        "layer": "notes",
-                        "heat_score": DEFAULT_HEAT_SCORE,
-                    }
-                )
-    except Exception as e:
-        logger.warning(f"Notes search failed: {e}")
-    results.sort(key=_heat_sort_key, reverse=True)
-    return results[:limit]
-
-
-_HOT_RESULT_KEYS = (
-    "id",
-    "layer",
-    "content",
-    "score",
-    "created_at",
-    "updated_at",
-    "agent_id",
-    "attributed_to",
-    "heat_score",
-    "layer",
-    "match_kind",
-)
-_HOT_META_KEYS = (
-    "tags",
-    "confidence",
-    "last_accessed_at",
-    "access_count",
-    "disputed",
-    "disputed_by",
-    "dispute_reason",
-    STATUS_FIELD,
-    SUPERSEDED_BY_FIELD,
-    SUPERSEDED_AT_FIELD,
-    REVISION_FIELD,
-)
-
-
-def _project_hot_result(r: dict) -> dict:
-    """Hot-layer result → model-facing shape. When `content` is missing, normalize it
-    from `memory` — `get_all`'s raw result only has `memory`, and trimming strictly by
-    the whitelist would trim the body away."""
-    out = {k: r[k] for k in _HOT_RESULT_KEYS if k in r}
-    if "content" not in out:
-        out["content"] = r.get("memory", "")
-    meta = r.get("metadata")
-    if isinstance(meta, dict):
-        kept = {k: meta[k] for k in _HOT_META_KEYS if k in meta}
-        if kept:
-            out["metadata"] = kept
-        episode = str(meta.get(EPISODE_FIELD) or "").strip()
-        if episode:
-            out["episode_id"] = episode
-    return out
-
-
-def _dense_vector(raw) -> list[float] | None:
-    """Qdrant keeps the dense vector under ''; the BM25 one is a sparse dict."""
-    if isinstance(raw, dict):
-        raw = raw.get("") or raw.get("dense")
-    return raw or None
-
-
-def _dot(a, b) -> float:
-    return sum(x * y for x, y in zip(a, b))
-
-
-def _cosine(a, b) -> float:
-    denominator = (_dot(a, a) ** 0.5) * (_dot(b, b) ** 0.5)
-    return float(_dot(a, b) / denominator) if denominator > 1e-10 else 0.0
-
-
-def _expand_hot_episodes(results: list[dict], query_vec=None) -> list[dict]:
-    """Pull same-group memories; drop weak siblings and cap their score at actual relevance."""
-    seeds = [r for r in results if r.get("layer") == "hot" and r.get("episode_id")][
-        :EPISODE_EXPAND_TOP_N
+    Thin wrapper over the cold/notes arms so existing callers keep the old shape.
+    """
+    q = Query(text=query)
+    arms = [
+        arm.retrieve(q, limit)
+        for arm in _cold_and_notes_arms(query, limit, include_archived, min_score)
     ]
-    if not seeds or not get_hot_memory():
-        return []
-    known = {r.get("id") for r in results}
-    vector_store = get_hot_memory().vector_store
-    expanded = []
-    for seed in seeds:
-        episode_id = str(seed.get("episode_id") or "")
-        try:
-            points, _ = vector_store.client.scroll(
-                collection_name=vector_store.collection_name,
-                scroll_filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key=EPISODE_FIELD,
-                            match=MatchValue(value=episode_id),
-                        )
-                    ]
-                ),
-                limit=EPISODE_EXPAND_PER_GROUP + len(known),
-                with_payload=True,
-                with_vectors=query_vec is not None,
-            )
-        except Exception as e:
-            logger.warning(f"Episode expansion failed: {e}")
-            continue
-        candidates = []
-        for point in points:
-            payload = point.payload or {}
-            if point.id in known or payload.get("archived"):
-                continue
-            if _memory_status(payload) != STATUS_ACTIVE:
-                continue
-            vector = _dense_vector(getattr(point, "vector", None))
-            if query_vec is not None and vector:
-                score = _cosine(query_vec, vector)
-            else:
-                score = float(seed.get("score", 0))
-            if score < RECALL_EXPANDED_MIN_SCORE:
-                continue
-            candidates.append((score, point, payload))
-        candidates.sort(key=lambda c: -c[0])
-        seed_score = float(seed.get("score", 0))
-        for candidate_score, point, payload in candidates[:EPISODE_EXPAND_PER_GROUP]:
-            known.add(point.id)
-            expanded.append(
-                {
-                    "id": point.id,
-                    "layer": "hot",
-                    "content": payload.get("data", ""),
-                    "score": float(
-                        min(seed_score * EPISODE_EXPAND_DECAY, candidate_score)
-                    ),
-                    "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
-                    "episode_id": episode_id,
-                    "expanded": True,
-                    "match_kind": "expanded",
-                }
-            )
-    return expanded
-
-
-def _expand_cold_episodes(results: list[dict], query_vec=None) -> list[dict]:
-    """Pull same-group cold summaries for the top cold hits."""
-    seeds = [r for r in results if r.get("layer") == "cold" and r.get("episode_id")][
-        :EPISODE_EXPAND_TOP_N
-    ]
-    if not seeds or not get_qdrant():
-        return []
-    known = {r.get("id") for r in results}
-    expanded = []
-    for seed in seeds:
-        episode_id = str(seed.get("episode_id") or "")
-        try:
-            points, _ = get_qdrant().scroll(
-                collection_name=COLD_COLLECTION,
-                scroll_filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key=EPISODE_FIELD,
-                            match=MatchValue(value=episode_id),
-                        )
-                    ]
-                ),
-                limit=EPISODE_EXPAND_PER_GROUP + len(known),
-                with_payload=True,
-                with_vectors=query_vec is not None,
-            )
-        except Exception as e:
-            logger.warning(f"Cold episode expansion failed: {e}")
-            continue
-        candidates = []
-        for point in points:
-            payload = point.payload or {}
-            if point.id in known or payload.get("archived"):
-                continue
-            if payload.get(COLD_STALE_FIELD):
-                continue
-            vector = _dense_vector(getattr(point, "vector", None))
-            if query_vec is not None and vector:
-                score = _cosine(query_vec, vector)
-            else:
-                score = float(seed.get("score", 0))
-            if score < RECALL_EXPANDED_MIN_SCORE:
-                continue
-            candidates.append((score, point, payload))
-        candidates.sort(key=lambda c: -c[0])
-        seed_score = float(seed.get("score", 0))
-        for candidate_score, point, payload in candidates[:EPISODE_EXPAND_PER_GROUP]:
-            known.add(point.id)
-            expanded.append(
-                {
-                    "id": point.id,
-                    "layer": "cold",
-                    "content": payload.get("content", ""),
-                    "source_file": payload.get("source_file", ""),
-                    "created_at": payload.get("created_at", ""),
-                    "score": float(
-                        min(seed_score * EPISODE_EXPAND_DECAY, candidate_score)
-                    ),
-                    "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
-                    "episode_id": episode_id,
-                    "expanded": True,
-                    "match_kind": "expanded",
-                }
-            )
-    return expanded
-
-
-def _heat_sort_key(item: dict) -> float:
-    score = item.get("score", 0)
-    heat = item.get("heat_score", (item.get("metadata") or {}).get("heat_score", 0.5))
-    if isinstance(heat, (int, float)):
-        heat = float(heat)
-    else:
-        heat = 0.5
-    return score * (0.8 + 0.2 * min(heat, HEAT_MAX))
-
-
-def _update_cold_heat(point_id: str) -> None:
-    if not get_qdrant():
-        return
-    try:
-        now_iso = datetime.now().isoformat()
-        existing = get_qdrant().retrieve(
-            collection_name=COLD_COLLECTION, ids=[point_id], with_payload=True
-        )
-        if not existing:
-            return
-        payload = existing[0].payload or {}
-        access_count = payload.get("access_count", 0) + 1
-        heat_score = min(
-            HEAT_MAX, payload.get("heat_score", DEFAULT_HEAT_SCORE) + HEAT_INCREMENT
-        )
-        get_qdrant().set_payload(
-            collection_name=COLD_COLLECTION,
-            payload={
-                "access_count": access_count,
-                "last_accessed_at": now_iso,
-                "heat_score": heat_score,
-            },
-            points=[point_id],
-        )
-    except Exception:
-        pass
+    merged = HeatWeightedFusion(heat_max=HEAT_MAX).fuse(arms, limit)
+    return [_item_to_legacy(item) for item in merged]
 
 
 def _new_episode_id() -> str:
@@ -1263,83 +984,26 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     # hot_count is 0). Init failure does not terminate — the cold layer and notes do not
     # depend on the hot layer, so recall should degrade rather than fail.
     await ensure_hot_memory()
-    results = []
-    if hot_enabled and get_hot_memory():
-        try:
-            # No rerank passed: MEM0_CONFIG does not configure a reranker, so mem0's
-            # internal `if rerank and self.reranker` is always false — passing it is a
-            # no-op that only adds confusion.
-            # Over-fetch: lifecycle filtering happens in Python so legacy entries
-            # without a status field still count as active. A plain top_k would
-            # silently shrink the hot-layer result count after the first supersede.
-            hot_raw = get_hot_memory().search(
-                query,
-                filters={"user_id": DEFAULT_USER_ID},
-                top_k=max(limit * 3, limit + 5),
-                threshold=RECALL_HOT_MIN_SCORE,
-            )
-            hot = hot_raw if isinstance(hot_raw, list) else hot_raw.get("results", [])
-            for r in hot:
-                if isinstance(r, str):
-                    continue
-                meta = r.get("metadata") or {}
-                if not include_archived and meta.get("archived"):
-                    continue
-                status = _memory_status(meta)
-                if status == STATUS_DELETED:
-                    continue
-                if status == STATUS_SUPERSEDED and not include_superseded:
-                    continue
-                try:
-                    score = float(r.get("score"))
-                except (TypeError, ValueError):
-                    continue
-                if score < RECALL_HOT_MIN_SCORE:
-                    continue
-                r["score"] = score
-                r["layer"] = "hot"
-                r["content"] = r.get("memory", r.get("content", ""))
-                r["heat_score"] = meta.get("heat_score", DEFAULT_HEAT_SCORE)
-                r["match_kind"] = "direct"
-                results.append(_project_hot_result(r))
-        except Exception as e:
-            logger.warning(f"Hot search failed: {e}")
-    cold = (
-        search_cold_layer(
-            query,
-            limit,
-            include_archived=include_archived,
-            min_score=RECALL_COLD_MIN_SCORE,
-        )
-        if cold_enabled
-        else []
+    pipeline = _build_recall_pipeline(
+        hot_enabled=hot_enabled,
+        cold_enabled=cold_enabled,
+        include_archived=include_archived,
+        include_superseded=include_superseded,
     )
-    for item in cold:
-        item.setdefault("match_kind", "direct")
-    results.extend(cold)
-    results.sort(key=_heat_sort_key, reverse=True)
-    query_vec = embed_query(query)
-    related = _expand_hot_episodes(results[:limit], query_vec)
-    related += _expand_cold_episodes(results[:limit], query_vec)
-    related.sort(key=_heat_sort_key, reverse=True)
-    top = results[:limit]
-    related = related[:limit]
-    has_semantic = any(r.get("layer") in ("hot", "cold") for r in top)
-    if has_semantic:
-        status = "ok"
-    elif top or related:
-        status = "weak_match"
-    else:
-        status = "no_match"
+    out = pipeline.run(query, limit, tool="recall")
+    top = out["results"]
+    related = out["related"]
+    status = out["status"]
     payload = {
         "status": status,
         "results": top,
         "related": related,
-        "count": len(top),
-        "related_count": len(related),
+        "count": out["count"],
+        "related_count": out["related_count"],
         "hot_count": sum(1 for r in top if r.get("layer") == "hot"),
         "cold_count": sum(1 for r in top if r.get("layer") == "cold"),
         "notes_count": sum(1 for r in top if r.get("layer") == "notes"),
+        "trace_id": out["trace_id"],
     }
     if status == "weak_match":
         payload["hint"] = (
@@ -1350,6 +1014,57 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
             "No memory cleared the relevance floor; try a more specific topic."
         )
     return [TextContent(type="text", text=dumps(payload))]
+
+
+def _build_recall_pipeline(
+    *,
+    hot_enabled: bool = True,
+    cold_enabled: bool = True,
+    include_archived: bool = False,
+    include_superseded: bool = False,
+) -> Pipeline:
+    # Every floor comes from the per-model table: a constant calibrated on one
+    # embedder silently discards another model's hits.
+    floors = floors_for(EMBEDDER_SPEC.tag)
+    arms = []
+    if hot_enabled:
+        arms.append(
+            HotMemoryArm(
+                min_score=floors["hot"],
+                include_archived=include_archived,
+                include_superseded=include_superseded,
+            )
+        )
+    if cold_enabled:
+        arms.append(
+            ColdMemoryArm(
+                min_score=floors["cold"],
+                include_archived=include_archived,
+            )
+        )
+    arms.append(
+        NotesArm(
+            min_coverage=floors["notes_coverage"],
+            min_semantic=retrieval_config.notes_semantic_floor(
+                floors["notes_semantic"]
+            ),
+        )
+    )
+    return Pipeline(
+        name="recall",
+        arms=arms,
+        fusion=HeatWeightedFusion(heat_max=HEAT_MAX),
+        gate=_build_recall_gate(),
+        expander=expand_episodes,
+        lexical_only_as_fallback=True,
+    )
+
+
+def _build_recall_gate():
+    if retrieval_config.gate_mode() != "relative":
+        return LayerPresenceGate()
+    floors = floors_for(EMBEDDER_SPEC.tag)
+    return RelativeRelevanceGate(floor=floors["cold"], min_margin=0.06)
 
 
 def _bound_catch_up_results(

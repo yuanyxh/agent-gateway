@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from agent_gateway.services.retrieval.config import index_name, model_tag
 from agent_gateway.core.config import (
     ai_api_key,
     note_exclude_dirs,
@@ -35,7 +36,11 @@ from agent_gateway.core.memory_lifecycle import (
     SUPERSES_FIELD as SUPERSES_FIELD,
 )
 
-COLD_COLLECTION = "knowledge_base"
+#: Index names carry the model tag so two models never share a collection.
+MODEL_TAG = model_tag(
+    os.environ.get("EMBEDDER_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+)
+COLD_COLLECTION = index_name("knowledge_base", MODEL_TAG)
 
 # Paths and note-scan settings shared by server.py (cold client, lock cleanup)
 # and server_memory.py (hot-layer config, notes search).
@@ -44,7 +49,7 @@ if not QDRANT_PATH:
     raise RuntimeError(
         "QDRANT_PATH is required; Swift injects it for app-launched processes"
     )
-MEM0_QDRANT_PATH = os.path.join(QDRANT_PATH, "mem0")
+MEM0_QDRANT_PATH = os.path.join(QDRANT_PATH, index_name("mem0", MODEL_TAG))
 
 NOTES_DIR = notes_dir()
 EXCLUDE_DIRS = note_exclude_dirs()
@@ -98,7 +103,6 @@ EPISODE_COLD_MIN_SIMILARITY = 0.45
 
 # Recall relevance floors. Values come from historical score distributions:
 # hot p10=0.683, cold p25=0.552; the batch also exposed 0.62/0.55 false positives.
-RECALL_HOT_MIN_SCORE = 0.68
 RECALL_COLD_MIN_SCORE = 0.56
 RECALL_EXPANDED_MIN_SCORE = 0.56
 RECALL_NOTES_MIN_COVERAGE = 0.60

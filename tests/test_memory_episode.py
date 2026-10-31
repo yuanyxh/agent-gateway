@@ -8,7 +8,10 @@ from unittest import mock
 os.environ.setdefault("QDRANT_PATH", tempfile.mkdtemp(prefix="agent-gateway-test-"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agent_gateway.services.mcp import server_memory  # noqa: E402
+from agent_gateway.services.mcp import server_memory, server_state  # noqa: E402
+from agent_gateway.services.mcp.server_constants import (  # noqa: E402
+    EPISODE_EXPAND_PER_GROUP,
+)
 
 EPISODE_RE = r"^ep_\d{8}_[0-9a-f]{8}$"
 
@@ -98,7 +101,7 @@ class EpisodeExpansionTest(unittest.TestCase):
         ]
 
         with mock.patch.object(
-            server_memory, "get_hot_memory", return_value=FakeHotMemory(points)
+            server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
             expanded = server_memory._expand_hot_episodes([seed])
 
@@ -112,7 +115,7 @@ class EpisodeExpansionTest(unittest.TestCase):
         points = [_point("b", data="x", status="active")]
 
         with mock.patch.object(
-            server_memory, "get_hot_memory", return_value=FakeHotMemory(points)
+            server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
             expanded = server_memory._expand_hot_episodes([{"id": "a", "score": 0.9}])
 
@@ -126,7 +129,7 @@ class EpisodeExpansionTest(unittest.TestCase):
         ]
 
         with mock.patch.object(
-            server_memory, "get_hot_memory", return_value=FakeHotMemory(points)
+            server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
             expanded = server_memory._expand_hot_episodes([seed])
 
@@ -137,11 +140,11 @@ class EpisodeExpansionTest(unittest.TestCase):
         points = [_point(f"p{i}", data=str(i), status="active") for i in range(6)]
 
         with mock.patch.object(
-            server_memory, "get_hot_memory", return_value=FakeHotMemory(points)
+            server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
             expanded = server_memory._expand_hot_episodes([seed])
 
-        self.assertEqual(len(expanded), server_memory.EPISODE_EXPAND_PER_GROUP)
+        self.assertEqual(len(expanded), EPISODE_EXPAND_PER_GROUP)
 
     def test_ranks_expanded_rows_by_query_similarity(self):
         seed = {"id": "a", "score": 0.9, "episode_id": "ep_1", "layer": "hot"}
@@ -151,7 +154,7 @@ class EpisodeExpansionTest(unittest.TestCase):
         ]
 
         with mock.patch.object(
-            server_memory, "get_hot_memory", return_value=FakeHotMemory(points)
+            server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
             expanded = server_memory._expand_hot_episodes([seed], query_vec=[1.0, 0.0])
 
@@ -168,7 +171,7 @@ class EpisodeExpansionTest(unittest.TestCase):
         ]
 
         with mock.patch.object(
-            server_memory, "get_hot_memory", return_value=FakeHotMemory(points)
+            server_state, "get_hot_memory", return_value=FakeHotMemory(points)
         ):
             expanded = server_memory._expand_hot_episodes([seed], query_vec=[1.0, 0.0])
 
@@ -178,7 +181,7 @@ class EpisodeExpansionTest(unittest.TestCase):
         similar = [{"score": 0.99, "episode_id": "ep_full"}]
 
         with (
-            mock.patch.object(server_memory, "get_hot_memory", return_value=None),
+            mock.patch.object(server_state, "get_hot_memory", return_value=None),
             mock.patch.object(
                 server_memory,
                 "_episode_size",
@@ -193,7 +196,7 @@ class EpisodeExpansionTest(unittest.TestCase):
         similar = [{"score": 0.99, "episode_id": "ep_open"}]
 
         with (
-            mock.patch.object(server_memory, "get_hot_memory", return_value=None),
+            mock.patch.object(server_state, "get_hot_memory", return_value=None),
             mock.patch.object(
                 server_memory,
                 "_episode_size",
@@ -277,7 +280,7 @@ class ColdEpisodeExpansionTest(unittest.TestCase):
         points = [_point("c1", content="seed"), _point("c2", content="sibling")]
 
         with mock.patch.object(
-            server_memory, "get_qdrant", return_value=FakeColdQdrant(points)
+            server_state, "get_qdrant", return_value=FakeColdQdrant(points)
         ):
             expanded = server_memory._expand_cold_episodes([seed])
 
@@ -294,7 +297,7 @@ class ColdEpisodeExpansionTest(unittest.TestCase):
         ]
 
         with mock.patch.object(
-            server_memory, "get_qdrant", return_value=FakeColdQdrant(points)
+            server_state, "get_qdrant", return_value=FakeColdQdrant(points)
         ):
             expanded = server_memory._expand_cold_episodes([seed], query_vec=[1.0, 0.0])
 
@@ -310,7 +313,7 @@ class ColdEpisodeExpansionTest(unittest.TestCase):
         ]
 
         with mock.patch.object(
-            server_memory, "get_qdrant", return_value=FakeColdQdrant(points)
+            server_state, "get_qdrant", return_value=FakeColdQdrant(points)
         ):
             expanded = server_memory._expand_cold_episodes([seed])
 
@@ -320,7 +323,7 @@ class ColdEpisodeExpansionTest(unittest.TestCase):
         seed = {"id": "h1", "score": 1.0, "episode_id": "ep_h", "layer": "hot"}
 
         with mock.patch.object(
-            server_memory, "get_qdrant", return_value=FakeColdQdrant([])
+            server_state, "get_qdrant", return_value=FakeColdQdrant([])
         ):
             expanded = server_memory._expand_cold_episodes([seed])
 

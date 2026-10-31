@@ -10,6 +10,7 @@ import numpy as np
 from agent_gateway.core.db import conn as dbconn
 from agent_gateway.services.mcp.server_embed import _get_shared_embedder, embed_query
 
+from agent_gateway.services.mcp.server_constants import MODEL_TAG
 from agent_gateway.services.mcp.search_constants import (
     _EMBED_BATCH_SIZE,
     _MAX_VECTOR_CACHE,
@@ -36,7 +37,7 @@ def _symbol_cache_key(
     if any field participating in the embedding text changes, the key changes and it is
     recomputed naturally — the key is the input, so there is no stale read.
     """
-    raw = "\x1f".join((file_path, name, kind, signature, doc))
+    raw = "\x1f".join((MODEL_TAG, file_path, name, kind, signature, doc))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 

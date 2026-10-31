@@ -20,6 +20,7 @@ import numpy as np
 from fastembed import TextEmbedding
 
 from agent_gateway.core.log_utils import setup_logging
+from agent_gateway.services.retrieval.config import model_spec
 
 # ---------------------------------------------------------------------------
 # Configuration (same as pre-split server.py; injected by Swift MCPProcessManager via env)
@@ -94,6 +95,9 @@ def resolve_embedder_dims(
 #: Vector dims of the current embedder (resolved from model metadata, see `resolve_embedder_dims`).
 EMBEDDER_DIMS = resolve_embedder_dims(EMBEDDER_MODEL)
 
+#: Model descriptor: id, tag and the query/doc prefixes the model expects.
+EMBEDDER_SPEC = model_spec(EMBEDDER_MODEL, EMBEDDER_DIMS)
+
 
 def describe_dim_mismatch(existing_dims: int | None, expected_dims: int) -> str | None:
     """Remediation advice when the collection dims disagree with the current embedder
@@ -143,6 +147,19 @@ def _get_shared_embedder():
     return _shared_embedder
 
 
+def embed_texts(texts: list[str]) -> list[np.ndarray]:
+    """Embed passages (document side); empty input or no embedder returns []."""
+    if not texts:
+        return []
+    emb = _get_shared_embedder()
+    if emb is None:
+        return []
+    return [
+        np.asarray(vec, dtype=np.float32)
+        for vec in emb.embed([EMBEDDER_SPEC.encode_doc(text) for text in texts])
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Query vector cache
 # ---------------------------------------------------------------------------
@@ -178,7 +195,9 @@ def embed_query(text: str) -> np.ndarray | None:
                 _query_cache.move_to_end(text)
                 return hit
 
-    vec = np.asarray(list(emb.embed([text]))[0], dtype=np.float32)
+    vec = np.asarray(
+        list(emb.embed([EMBEDDER_SPEC.encode_query(text)]))[0], dtype=np.float32
+    )
 
     if _QUERY_CACHE_SIZE > 0:
         with _query_cache_lock:

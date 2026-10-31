@@ -10,6 +10,10 @@
 | --- | --- | --- |
 | G2 宿主接入 | wheel 分发与模块启动已在 utility 侧验证；等本仓改动提交 | — |
 | 记忆 episode_id 分组 | 阶段 1/2/3 完成；cold 扩展与新写入分组已实现，待打包部署 | — |
+| 检索层重构 | 通用协议 + 管线落地，recall 已迁移；250 例通过；固定快照 100/100 一致；线上 143 条 0 错误；开关实测默认关闭最优 | — |
+| 评测集标注 | **已停用**：query 由历史会话关键词提取，与用户当时意图不对应（用户判定），基于 query 的相关性标注不成立；改用真实使用 case 驱动排查 | — |
+| 换模型 jina-zh | 热层/冷层已重建，阈值 per-model 标定并在线上生效（hot 0.62 / cold 0.55）；可采信的结论只有不相关率：minilm 40.5% → jina 12.5%（249 条同批、不依赖意图判断） | — |
+| notes 层降噪 | 语义复核（minilm 0.40 / jina 0.35）+ **仅作兜底**：hot/cold 有命中时 notes 不进主结果；抽样 100 条 notes 占比 26.2%→8.5%，空返回不增 | — |
 
 ## 已完成
 
@@ -37,6 +41,9 @@
 - 2026-10-29 工具统计修复：`api_usage` 新增 `tool_names`（每次响应全部工具，JSON 数组），流式收集全部 `content_block_start` / `tool_calls`，非流式从响应体解析；`tool_output_log` 按 `tool_call_id` 去重（真实副本 9168→8498 行）；新增 `GET /usage/tools`，旧行按单工具计入 `legacy_calls`；测试 197 例通过；已部署复验（代理 23:37 重启，新行 `["Bash","Bash","Bash"]`，线上 `tool_output_log` 8502=8502）
 - 2026-10-30 检索质量修复：`catch_up` 新增 `limit`/`offset`/`max_chars`（默认 50/0/24000），返回 `returned`/`truncated`/`next_offset`；`read_url` 对 400/404/410 直接终止，失败增加 `failure_kind`；`project_structure` 增加 `status`（ok/empty/path_not_found/not_scanned）；`project_search` 结果补充 `module`/`importedBy`/`importCount`，向量-only 结果降级为 `weak_match` 并按词法锚点过滤，中文向量-only 直接 `no_match`，旧符号表缺 `start_line` 时回退无行号查询；新增 13 例测试，全量 213 例通过
 - 2026-10-30 recall 精度修复：热层 `threshold=0.68`、冷层 Qdrant `score_threshold=0.56`；episode 扩展按实际相似度过滤并取 `min(seed*0.98, actual)`，低于 0.56 丢弃；notes 改为 ASCII 词 + 中文 bigram 覆盖率 ≥60%；主结果只保留 direct，扩展进入 `related`，新增 `status`（ok/weak_match/no_match）与 `match_kind`；冷层/扩展分数统一转 Python `float`，修复部署后 `float32 is not JSON serializable`；新增 10 例测试，全量 223 例通过；重新部署后 141/141 成功，负例 `ok` 0，历史旧低分 36→0，旧 expanded 47→related 49
+- 2026-10-30 检索层重构（P1-P3）：新增 `services/retrieval/`（types/protocol/registry/pipeline/text/fusion/gate/trace/observe/config）；recall 迁到三臂（dense_hot / dense_cold / lexical_notes）+ HeatWeightedFusion + LayerPresenceGate，行为保持等价；project_search/project_notes 加 trace 装饰器；新增 `GET /api/retrieval/stats`；模型描述与阈值按 model_tag 分档（jinazh768 未标定即报错）；多子查询、RRF、相对门控由 `RETRIEVAL_REWRITERS` / `RETRIEVAL_GATE` 开关控制，默认关闭；新增 21 例检索层测试，全量 244 例通过
+- 2026-10-30 检索层方案收敛：删除未实现/实测否决的组件 —— `expand/term_split.py`（bigram 拆词无效果，延迟 5.7 倍）、`registry.py`（无调用方）、`protocol.Router`/`QueryRewriter`/`Reranker`、`types.RouteDecision`/`PipelineResult`、`Pipeline.reranker`/`corrector`/`rewriters`、`Query.sub_queries`；reranker 实测（jina-reranker-v2）内存 +3.4GB 且排序劣于 embedding，corrector 实测（LLM 改写）4 条 no_match 救活 0 条且改坏 2 条；notes 改为按需执行，普通查询延迟 945ms→132-209ms；全量 265 例通过
+- 2026-10-30 换模型 jina-zh 并修热层空结果：`HotMemoryArm` 改用 `score_details.semantic_score`（mem0 混合分与余弦阈值不可比）；`_build_recall_pipeline` 全部阈值改读 per-model 表（原先 hot/cold 用常量，换模型无法标定）；新增 `POST /api/retrieval/rebuild`、`/api/retrieval/diagnose`；三臂阈值标定并把实测值写进 `FLOORS["jinazh768"]`、清空 `SEEDED_TAGS`；新增 `scripts/export_judge_batch.py`；盲标 249 条 × 3 轮，全量 261 例通过
 
 ## 下一步
 
@@ -73,6 +80,11 @@
 | 2026-10-30 | 部署后 recall 批量（100 条部署前历史去重 + 20 正例 + 20 负例 + 1 条复测） | 141/141 成功；历史 82 ok/12 weak/6 no_match；正例 11 ok/9 weak；负例 14 no_match/6 weak/0 ok；旧低分 36→0；旧 expanded 47→related 49；p95 1350ms |
 | 2026-10-30 | 线上 MCP 14 项目批量（86 次调用） | 86/86 通过 |
 | 2026-10-30 | 线上 MCP 负载（140 structure + 42 负例 + 25 catch/read） | 207/207 通过；p95 structure 58.8ms、负例 1623.7ms |
+| 2026-10-30 | 检索层重构后 `ruff format --check` / `ruff check` / `unittest discover` / `agent-gateway --check` | 通过（179 文件 / 0 条 / 244 例 1 skipped / check passed） |
+| 2026-10-30 | 固定 Qdrant 快照下新旧实现 recall 对比（100 条） | 完全一致 100/100（status + ids + related） |
+| 2026-10-30 | 开关组合评测（固定快照，正例 20 + 负例 20） | base/split/relative 负例 ok 均为 0；term_split 曾把负例 weak 从 6 提到 14，改为词法臂用原句后归零 |
+| 2026-10-30 | 标注集导出（368 条 recall query，分层按语言） | 0 错误、平均 245ms；每 query 5 条结果，定位带短 id 保证唯一 |
+| 2026-10-30 | 基线评测（368 条标注 → 249 条 gold → 244 条 specific） | Recall@5 1.0 / MRR@10 0.887 / nDCG@10 0.878 / precision@5 0.421 / top1 相关率 0.393 / 平均相关 0.88 条 |
 
 ## 已知问题
 

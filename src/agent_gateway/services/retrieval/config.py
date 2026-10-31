@@ -1,0 +1,71 @@
+"""Profile switches.
+
+New stages default to off so the migrated pipeline is behaviour-identical until
+a profile is enabled explicitly.
+"""
+
+from __future__ import annotations
+
+import os
+
+from agent_gateway.core import config_loader
+from agent_gateway.services.retrieval.types import ModelSpec
+
+_MODEL_TAGS = {
+    "sentence-transformers/all-MiniLM-L6-v2": "minilm384",
+    "jinaai/jina-embeddings-v2-base-zh": "jinazh768",
+}
+
+
+#: Tag of the model whose index names predate versioning; it keeps the bare names.
+LEGACY_TAG = "minilm384"
+
+
+def index_name(base: str, tag: str) -> str:
+    """Collection / table name for a model: the legacy tag keeps the bare name."""
+    return base if tag == LEGACY_TAG else f"{base}_{tag}"
+
+
+def model_tag(model_id: str) -> str:
+    """Short tag used for index names and threshold tables."""
+    known = _MODEL_TAGS.get(model_id)
+    if known:
+        return known
+    return "".join(ch for ch in model_id.split("/")[-1] if ch.isalnum()).lower()[:16]
+
+
+def model_spec(model_id: str, dims: int) -> ModelSpec:
+    return ModelSpec(
+        id=model_id,
+        tag=model_tag(model_id),
+        dims=dims,
+        query_prefix=os.environ.get("EMBEDDER_QUERY_PREFIX", ""),
+        doc_prefix=os.environ.get("EMBEDDER_DOC_PREFIX", ""),
+    )
+
+
+def _setting(env_key: str, yaml_key: str, default: str) -> str:
+    """Env wins, then config.yaml, then default."""
+    raw = os.environ.get(env_key)
+    if raw is not None:
+        return raw.strip()
+    node = config_loader.value(yaml_key, default)
+    if isinstance(node, list):
+        return ",".join(str(item) for item in node)
+    return str(node).strip() if node is not None else default
+
+
+def gate_mode(profile: str = "") -> str:
+    return _setting("RETRIEVAL_GATE", "retrieval.gate", "layer") or "layer"
+
+
+def notes_semantic_floor(default: float) -> float:
+    """Semantic re-check floor for lexical note hits; 0 disables the check."""
+    raw = _setting("RETRIEVAL_NOTES_SEMANTIC", "retrieval.notesSemantic", "")
+    if raw in ("", str(default)):
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return max(0.0, value)

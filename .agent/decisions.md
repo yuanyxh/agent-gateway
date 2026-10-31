@@ -33,6 +33,14 @@
 | 2026-10-30 | D3 | `project_search` 仅有向量层结果时返回 `weak_match`，不再返回 `exact`；无词法锚点的候选被过滤并计入 `rejected`；中文向量-only 直接 `no_match`；旧 `symbols` 表缺 `start_line`/`end_line` 时回退到无行号查询 | Agent | 14 项目负例 10 个误命中；随机串分数 0.5036–0.5819，而相关 `ConversationFile` 仅 0.5308，单靠绝对阈值无法分离；词法锚点用标识符分词，单 token 查询整体匹配，中文直接 no_match；4 项目中文阈值扫描无可用分界，中文注释覆盖率 0.19%–3.87%，中文锚点 0/30 命中；`yuanyxh.github.io` 旧库报 `no such column: start_line` | 删除向量-only 分支、中文 no_match 与旧表回退，恢复原查询 |
 | 2026-10-30 | D3 | `recall` 加相关性下限（hot 0.68 / cold 0.56 / expanded 0.56），episode 扩展分数改为 `min(seed*0.98, actual)`，notes 改为 ASCII 词 + 中文 bigram 覆盖率 ≥60%；主结果只含 direct，扩展放入 `related`，响应增加 `status` 与 `match_kind` | Agent | 随机串 query 仍返回 0.554–0.564 的不相关热层记忆；107 次历史 recall 中 19 次（17.8%）含 expanded，最多 6/10；扩展输出继承 seed×0.98，弱 sibling 获得强相关外观；notes 任一词命中导致旧 RSS 日报等宽泛命中；140 次部署后批量中 0.62/0.55 仍让 3 条负例返回 `ok`（hot 0.64–0.676、cold 0.550–0.555），离线重放 0.68/0.56 后负例 `ok` 为 0；最终部署复验 141/141 成功、负例 ok 0、旧低分 36→0 | 恢复 `threshold=0.0`、原扩展分数与 `results` 合并；`related`/`status` 为 additive，删除字段即可回退 |
 
+| 2026-10-30 | D3 | 检索层收敛为协议 + 管线：`Retriever`/`Fusion`/`Gate`/`Reranker`/`Rewriter` 五个 Protocol，profile 由 `RETRIEVAL_REWRITERS`/`RETRIEVAL_GATE` 控制，新阶段默认关闭；阈值按 `model_tag` 分档，未标定即抛错；project_search/project_notes 先接 trace 不改算法 | Agent | recall 的阈值、分层与扩展散在 4 个模块，改一处无法证明整体变好；等价迁移先行可把『重构引入偏差』与『算法改进』分开验证 | `retrieval.enabled` 关闭即回旧路径；旧实现留在函数级包装 |
+
+| 2026-10-30 | D3 | 检索层新阶段默认关闭；词法臂（notes）始终用原始查询，子查询只作用于 dense 臂；相对门控只对 semantic 层（hot/cold）生效，notes-only 只能 weak_match | Agent | 固定快照实测：term_split 让 6 条负例从 no_match 升为 weak_match（notes 覆盖率被短词放大），改为词法臂用原句后归零；relative 门控若把 notes 计入 top1/margin，20 条负例中 6 条被判 ok | 关闭开关即回旧行为；开关经 `retrieval.rewriters` / `retrieval.gate` 配置 |
+
+| 2026-10-30 | D3 | 评测金标用「导出 Markdown 供人工判定」而非自动推断引用关系；定位列附加结果 id 前 8 位保证唯一；未判定行视为忽略，允许半份标注直接产出 gold | Agent | 「下一轮是否引用」受模型措辞影响不可靠；同一文件的多个分块 locator 相同，不加 id 会把两个分块合并成一条判定 | 删除 scripts 三个脚本即回退 |
+
+| 2026-10-30 | D3 | notes 词法命中增加语义复核：命中片段重新 embedding 与 query 比余弦，低于 0.40 丢弃；只复核 coverage 前 6 条 | Agent | 标注 1496 条结果：lexical 层 742 条中仅 19 条相关（2.6%）；覆盖率分布与相关性完全重叠（不相关也有 coverage=1.0），提高覆盖率阈值无效；语义复核 0.40 可保留 70% 有用项、过滤 73% 噪声（覆盖率 0.8 只能保留 45%/过滤 61%）；12 条候选耗 450ms，6 条约 220ms | `RETRIEVAL_NOTES_SEMANTIC=0` 关闭 |
+
 ## 记录规则
 
 - D1、D2 必须由用户决定，记录用户原话要点。

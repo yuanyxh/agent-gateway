@@ -55,8 +55,8 @@ LEGACY_RULE_END_MARK = "---rule_end"
 #: Kept deliberately imperative: a soft reminder was ignored often enough to lose
 #: adherence, so the wording names the consequence of ignoring it.
 SHORT_RULE_TEXT = (
-    "Self-check: follow the --rule_start / --rule_end rules. "
-    "**Never ignore them; restart the step on violation.**"
+    "**Strictly comply** with the --rule_start / --rule_end rules.\n"
+    "Self-check: **never ignore them**; violations must be **stopped and redone**."
 )
 
 

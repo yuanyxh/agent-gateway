@@ -10,12 +10,14 @@ import numpy as np
 from agent_gateway.services.mcp.server_embed import embed_query
 
 from agent_gateway.services.mcp.search_constants import (
+    NOTE_KEYWORD_FLOOR,
     NOTE_MAX_RESULTS,
     NOTE_PREVIEW_LEN,
     NOTE_SIMILARITY_THRESHOLD,
     logger,
 )
 from agent_gateway.services.mcp.search_notes_cache import _ensure_note_cache
+from agent_gateway.services.retrieval.text.analyzer import split_terms
 from agent_gateway.services.mcp.search_notes_io import (
     _chunk_md_text,
     _scan_md_files,
@@ -68,7 +70,11 @@ def _keyword_search_uncached(project_path: str, query: str, limit: int) -> dict:
 
 
 def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
-    """Semantic search over project .md files using cached vectors."""
+    """Semantic search over project .md files using cached vectors.
+
+    Tracing moved to the pipeline that now drives this arm, so the decorator
+    here would record the same call twice.
+    """
     limit = max(1, min(limit, NOTE_MAX_RESULTS))
 
     # Non-dev project (no marker files): no .utility cache persisted, in-memory-only keyword search
@@ -135,8 +141,15 @@ def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
     # Hybrid rerank: semantic similarity, exact token coverage, and a small
     # path boost. A chunk must clear the vector threshold or match a token;
     # low-similarity vector hits are dropped instead of filling the limit.
-    tokens = [t for t in query.split() if t]
-    needles = [t.lower() for t in tokens]
+    # CJK queries carry no whitespace, so a raw split leaves one needle equal to
+    # the whole query and the keyword layer never fires. Content matching reuses
+    # the recall analyzer (CJK bigrams); path matching keeps the raw tokens so
+    # two-character bigrams do not match every directory name.
+    path_tokens = [t for t in query.split() if t]
+    needles = [t.lower() for t in split_terms(query)] or [
+        t.lower() for t in path_tokens
+    ]
+    path_needles = [t.lower() for t in path_tokens] or needles
     candidates: dict[tuple[str, int], dict] = {}
 
     for r in rows:
@@ -147,11 +160,16 @@ def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
         key = (r["file_path"], r["chunk_index"])
         vector_score = vector_scores.get(key, 0.0)
 
-        if vector_score < NOTE_SIMILARITY_THRESHOLD and keyword_score <= 0:
+        if (
+            vector_score < NOTE_SIMILARITY_THRESHOLD
+            and keyword_score < NOTE_KEYWORD_FLOOR
+        ):
             continue
 
         rel = os.path.relpath(r["file_path"], project_path)
-        path_hit = 1.0 if needles and any(t in rel.lower() for t in needles) else 0.0
+        path_hit = (
+            1.0 if path_needles and any(t in rel.lower() for t in path_needles) else 0.0
+        )
         final_score = 0.65 * vector_score + 0.30 * keyword_score + 0.05 * path_hit
         candidates[key] = {
             "file": rel,

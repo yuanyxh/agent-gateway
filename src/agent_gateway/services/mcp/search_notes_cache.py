@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import time
 
 import numpy as np
 
@@ -25,6 +26,13 @@ from agent_gateway.services.mcp.search_notes_io import (
 
 _prewarm_lock = threading.Lock()
 _prewarm_inflight: set[str] = set()
+
+#: Prewarm runs on a daemon thread after every search call and cannot be cancelled
+#: once started, so a first-time project would otherwise pin one core for minutes
+#: on each burst of tool calls. Throttle per project and cap one run's workload.
+_PREWARM_MIN_INTERVAL_SECONDS = 600
+_PREWARM_MAX_FILES_PER_RUN = 200
+_last_prewarm: dict[str, float] = {}
 
 
 def _get_note_db(db_path: str) -> sqlite3.Connection:
@@ -77,7 +85,11 @@ def prewarm_project_notes(project_path: str) -> dict:
     if not _scan_md_files(project_path):
         return {"ok": True, "skipped": "no-markdown"}
 
-    conn, db_path, total_chunks = _ensure_note_cache(project_path)
+    # Capped on purpose: anything left over stays uncached (its mtime/size still
+    # differ) and is picked up by the next prewarm or a real query.
+    conn, db_path, total_chunks = _ensure_note_cache(
+        project_path, max_files=_PREWARM_MAX_FILES_PER_RUN
+    )
     conn.close()
     return {"ok": True, "chunks": total_chunks, "dbPath": db_path}
 
@@ -89,7 +101,12 @@ def schedule_project_notes_prewarm(project_path: str) -> bool:
     with _prewarm_lock:
         if project_path in _prewarm_inflight:
             return False
+        now = time.monotonic()
+        last = _last_prewarm.get(project_path)
+        if last is not None and now - last < _PREWARM_MIN_INTERVAL_SECONDS:
+            return False
         _prewarm_inflight.add(project_path)
+        _last_prewarm[project_path] = now
 
     def _run() -> None:
         try:
@@ -119,8 +136,13 @@ def schedule_prewarm_for_db(db_path: str) -> bool:
 
 def _ensure_note_cache(
     project_path: str,
+    max_files: int | None = None,
 ) -> tuple[sqlite3.Connection, str, int]:
-    """Incremental cache update: scan .md files, diff mtime/size, embed only changed."""
+    """Incremental cache update: scan .md files, diff mtime/size, embed only changed.
+
+    ``max_files`` caps how many changed files are embedded in this call; files
+    beyond the cap keep their old rows and are retried on the next call.
+    """
     project_path = os.path.normpath(project_path)
     cache_dir = os.path.join(project_path, ".utility")
     os.makedirs(cache_dir, exist_ok=True)
@@ -185,6 +207,12 @@ def _ensure_note_cache(
             or cached[mf["path"]]["mtime"] != mf["mtime"]
             or cached[mf["path"]]["size"] != mf["size"]
         ]
+        if max_files is not None and len(changed) > max_files:
+            logger.info(
+                f"[project_notes] {project_path}: capping this run at {max_files} "
+                f"of {len(changed)} changed files"
+            )
+            changed = changed[:max_files]
 
         if changed:
             logger.info(

@@ -36,6 +36,9 @@ NOTE_CHUNK_MIN_SIZE = 50
 NOTE_CHUNK_MAX_SIZE = 512
 NOTE_CHUNK_OVERLAP = 48
 NOTE_SIMILARITY_THRESHOLD = 0.35
+#: CJK bigram coverage needed to keep a chunk whose vector score is below the
+#: floor. Any single bigram matches something, so "> 0" admits noise.
+NOTE_KEYWORD_FLOOR = 0.4
 NOTE_MAX_CHUNKS_PER_PROJECT = 50000
 NOTE_MAX_RESULTS = 20
 NOTE_PREVIEW_LEN = 300

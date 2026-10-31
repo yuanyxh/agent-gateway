@@ -52,6 +52,7 @@ from starlette.routing import Mount, Route
 from agent_gateway.services.mcp.server_embed import (
     EMBEDDER_DIMS,
     FASTEMBED_CACHE_DIR,
+    EMBEDDER_MODEL,
     _get_shared_embedder,
     describe_dim_mismatch,
 )
@@ -67,7 +68,6 @@ from agent_gateway.services.mcp.server_search import (
     DEFAULT_PROJECT_STRUCTURE_LIMIT,
     tool_project_search,
     tool_project_structure,
-    _query_project_notes,
 )
 from agent_gateway.services.mcp.search_notes_cache import schedule_prewarm_for_db
 from agent_gateway.services.mcp.server_archive import archive_scheduler
@@ -85,6 +85,15 @@ from agent_gateway.services.mcp.server_state import (
     get_qdrant,
     set_qdrant,
 )
+from agent_gateway.services.retrieval import rebuild
+from agent_gateway.services.retrieval import trace as retrieval_trace
+from agent_gateway.services.retrieval.arms.project_notes import LAYER as NOTES_LAYER
+from agent_gateway.services.retrieval.arms.project_notes import ProjectNotesArm
+from agent_gateway.services.retrieval.arms.project_search import LAYER as SEARCH_LAYER
+from agent_gateway.services.retrieval.arms.project_search import ProjectSearchArm
+from agent_gateway.services.retrieval.fusion.score import MaxScoreFusion
+from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate
+from agent_gateway.services.retrieval.pipeline import Pipeline
 from agent_gateway.services.mcp.server_rest import (
     REST_ROUTES,
     read_args,
@@ -239,14 +248,29 @@ def _register(name: str):
 @_register("project_search")
 async def _handle_project_search(arguments: dict) -> list[TextContent]:
     try:
-        result = await asyncio.to_thread(
-            tool_project_search,
+        arm = ProjectSearchArm(
             arguments["dbPath"],
-            arguments["query"],
-            file_path=arguments.get("file_path", ""),
-            kind=arguments.get("kind", ""),
-            limit=int_arg(arguments, "limit", DEFAULT_PROJECT_SEARCH_LIMIT),
+            arguments.get("file_path", ""),
+            arguments.get("kind", ""),
         )
+        pipeline = Pipeline(
+            name="project_search",
+            arms=[arm],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(semantic_layers=(SEARCH_LAYER,)),
+            lexical_only_as_fallback=False,
+        )
+        out = await asyncio.to_thread(
+            pipeline.run,
+            arguments["query"],
+            int_arg(arguments, "limit", DEFAULT_PROJECT_SEARCH_LIMIT),
+            None,
+            "project_search",
+            arguments["dbPath"],
+        )
+        # The arm's own status carries exact/ambiguous, which the shared gate
+        # does not model; only the trace id is added on top.
+        result = {**arm.payload, "trace_id": out["trace_id"]}
         schedule_prewarm_for_db(arguments["dbPath"])
         return [TextContent(type="text", text=dumps(result))]
     except Exception:
@@ -296,11 +320,42 @@ async def _handle_project_notes(arguments: dict) -> list[TextContent]:
                 )
             ]
 
-        # Run on a background thread to avoid blocking the event loop (ONNX embedding is CPU-intensive)
-        result = await asyncio.to_thread(
-            _query_project_notes, path, query.strip(), limit
+        # Runs through the shared pipeline so the gate and trace apply here too;
+        # the thread hop keeps ONNX embedding off the event loop.
+        arm = ProjectNotesArm(path)
+        pipeline = Pipeline(
+            name="project_notes",
+            arms=[arm],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(semantic_layers=(NOTES_LAYER,)),
+            lexical_only_as_fallback=False,
         )
-        return [TextContent(type="text", text=dumps(result))]
+        out = await asyncio.to_thread(
+            pipeline.run, query.strip(), limit, None, "project_notes", path
+        )
+        # `file`/`line` stay at the top level: existing callers read those keys.
+        results = [
+            {
+                "file": (row.get("locator") or {}).get("file", ""),
+                "line": (row.get("locator") or {}).get("line", 0),
+                "content": row.get("content", ""),
+                "score": row.get("score", 0.0),
+            }
+            for row in out["results"]
+        ]
+        return [
+            TextContent(
+                type="text",
+                text=dumps(
+                    {
+                        "results": results,
+                        "count": len(results),
+                        "total_chunks": arm.total_chunks,
+                        "status": out["status"],
+                    }
+                ),
+            )
+        ]
 
     except Exception:
         # Same as above: logging and isError are handled uniformly by handle_call_tool's fallback layer
@@ -659,6 +714,113 @@ async def serve():
         scheduled = schedule_prewarm_for_db(body.get("dbPath", ""))
         return JSONResponse({"scheduled": scheduled})
 
+    async def api_retrieval_rebuild(request):
+        body = await request.json()
+        target = str(body.get("target") or "all")
+        model_id = str(body.get("model") or EMBEDDER_MODEL)
+        hot = get_hot_memory()
+        started = rebuild.start(
+            target,
+            model_id,
+            get_qdrant(),
+            hot.vector_store if hot is not None else None,
+            QDRANT_PATH,
+            FASTEMBED_CACHE_DIR,
+        )
+        return JSONResponse({"started": started, "status": rebuild.status()})
+
+    async def api_retrieval_rebuild_status(request):
+        return JSONResponse(rebuild.status())
+
+    async def api_retrieval_stats(request):
+        limit = int(request.query_params.get("limit", "50"))
+        return JSONResponse(
+            {"stats": retrieval_trace.stats(), "recent": retrieval_trace.recent(limit)}
+        )
+
+    async def api_retrieval_diagnose(request):
+        """Probe each hot-layer search stage to locate an empty-result cause."""
+        from agent_gateway.services.mcp import server_embed
+
+        body = await request.json()
+        query = str(body.get("query") or "")
+        hot = get_hot_memory()
+        out: dict = {"query": query, "hot_ready": hot is not None}
+        if hot is None:
+            return JSONResponse(out)
+        store = hot.vector_store
+        out["collection"] = getattr(store, "collection_name", "")
+        try:
+            info = store.client.get_collection(store.collection_name)
+            out["points"] = int(info.points_count or 0)
+        except Exception as e:
+            out["collection_error"] = f"{type(e).__name__}: {e}"
+        vec = server_embed.embed_query(query)
+        out["embed_len"] = None if vec is None else len(vec)
+        if vec is not None:
+            try:
+                raw = store.search(
+                    query,
+                    vec.tolist() if hasattr(vec, "tolist") else vec,
+                    top_k=10,
+                    filters={"user_id": DEFAULT_USER_ID},
+                )
+                out["store_search"] = {
+                    "hits": len(raw),
+                    "scores": [round(float(h.score), 4) for h in raw[:5]],
+                }
+            except Exception as e:
+                out["store_search"] = f"{type(e).__name__}: {e}"
+            try:
+                kw = store.keyword_search(
+                    query, top_k=10, filters={"user_id": DEFAULT_USER_ID}
+                )
+                out["keyword"] = {
+                    "enabled": kw is not None,
+                    "hits": 0 if kw is None else len(kw),
+                }
+            except Exception as e:
+                out["keyword"] = f"{type(e).__name__}: {e}"
+        try:
+            res = hot.search(
+                query,
+                filters={"user_id": DEFAULT_USER_ID},
+                top_k=10,
+                threshold=0.0,
+                explain=True,
+            )
+            rows = (res or {}).get("results") or []
+            out["mem0_search"] = len(rows)
+            # Hybrid score and semantic score diverge once BM25 is active; showing
+            # both is what separates "no hit" from "hit filtered by the wrong one".
+            out["rows"] = [
+                {
+                    "score": round(float(r.get("score") or 0), 4),
+                    "semantic": round(
+                        float(
+                            (r.get("score_details") or {}).get("semantic_score") or 0
+                        ),
+                        4,
+                    ),
+                    "archived": (r.get("metadata") or {}).get("archived"),
+                    "status": (r.get("metadata") or {}).get("status"),
+                }
+                for r in rows[:5]
+            ]
+        except Exception as e:
+            out["mem0_search"] = f"{type(e).__name__}: {e}"
+        try:
+            from agent_gateway.services.retrieval.gate.thresholds import (
+                floors_for,
+                override_path,
+            )
+
+            out["floors_path"] = str(override_path())
+            out["floors"] = floors_for(server_embed.EMBEDDER_SPEC.tag)
+        except Exception as e:
+            out["floors"] = f"{type(e).__name__}: {e}"
+        return JSONResponse(out)
+
     rest_app = Starlette(
         routes=[
             *REST_ROUTES,
@@ -689,6 +851,26 @@ async def serve():
             Route(
                 "/api/project/notes/prewarm",
                 endpoint=api_project_notes_prewarm,
+                methods=["POST"],
+            ),
+            Route(
+                "/api/retrieval/stats",
+                endpoint=api_retrieval_stats,
+                methods=["GET"],
+            ),
+            Route(
+                "/api/retrieval/rebuild",
+                endpoint=api_retrieval_rebuild,
+                methods=["POST"],
+            ),
+            Route(
+                "/api/retrieval/rebuild/status",
+                endpoint=api_retrieval_rebuild_status,
+                methods=["GET"],
+            ),
+            Route(
+                "/api/retrieval/diagnose",
+                endpoint=api_retrieval_diagnose,
                 methods=["POST"],
             ),
         ]
