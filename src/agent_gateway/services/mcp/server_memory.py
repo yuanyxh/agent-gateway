@@ -109,8 +109,10 @@ from agent_gateway.services.retrieval.gate.relevance import (
     RelativeRelevanceGate,
 )
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
-from agent_gateway.services.retrieval.pipeline import Pipeline
-from agent_gateway.services.retrieval.text.analyzer import split_terms
+from agent_gateway.services.retrieval.arms.path_filter import PATH_RE, PathOnlyArm
+from agent_gateway.services.retrieval.pipeline import Pipeline, Stage
+from agent_gateway.services.retrieval.router import Router
+from agent_gateway.services.retrieval.text.analyzer import detect_language, split_terms
 from agent_gateway.services.retrieval.types import Query, RetrievedItem
 
 logger = setup_logging("server")
@@ -990,7 +992,20 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         include_archived=include_archived,
         include_superseded=include_superseded,
     )
-    out = pipeline.run(query, limit, tool="recall")
+    # Callers that know more than a string can say so: keywords get their own
+    # weighted pass, and an intent label selects a different stage chain.
+    keywords = arguments.get("keywords") or []
+    if isinstance(keywords, str):
+        keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+    request = Query(
+        text=query,
+        language=detect_language(query),
+        root_text=query,
+        intent=str(arguments.get("intent") or ""),
+        keywords=list(keywords),
+        keyword_weight=float(arguments.get("keyword_weight") or 2.0),
+    )
+    out = pipeline.run_query(request, limit, tool="recall")
     top = out["results"]
     related = out["related"]
     status = out["status"]
@@ -1050,6 +1065,28 @@ def _build_recall_pipeline(
             ),
         )
     )
+    semantic = [a for a in arms if not getattr(a, "fallback_only", False)]
+    lexical = [a for a in arms if getattr(a, "fallback_only", False)]
+    base_stages = [Stage(name="semantic", arms=semantic)]
+    if lexical:
+        base_stages.append(Stage(name="fallback", arms=lexical))
+    # A path intent gets one cheap, precise stage in front: memories that quote a
+    # real path answer "where is it" better than a cosine neighbour does. Empty
+    # path stage falls through to the normal chain untouched.
+    path_stages = [
+        Stage(
+            name="path",
+            arms=[PathOnlyArm(arm) for arm in semantic],
+            # A path-bearing memory only answers the question if it also shares
+            # terms with the query; otherwise let the semantic chain run.
+            accept=_path_overlap,
+        ),
+        *base_stages,
+    ]
+    router = Router(
+        default=lambda _q: base_stages,
+        by_intent={"FIND_FILE_PATH": lambda _q: path_stages},
+    )
     return Pipeline(
         name="recall",
         arms=arms,
@@ -1057,7 +1094,26 @@ def _build_recall_pipeline(
         gate=_build_recall_gate(),
         expander=expand_episodes,
         lexical_only_as_fallback=True,
+        router=router,
     )
+
+
+def _path_overlap(query: Query, items: list[RetrievedItem]) -> bool:
+    """True when a query term appears inside a path the hit actually quotes.
+
+    Sharing a term with the surrounding prose is not enough: a long memory
+    mentions the query's words anyway, so that test accepted everything and the
+    path stage swallowed queries it had no business answering.
+    """
+    terms = split_terms(query.text)
+    if not terms:
+        return False
+    for item in items:
+        for path in PATH_RE.findall(item.content or ""):
+            lowered = path.lower()
+            if any(term in lowered for term in terms):
+                return True
+    return False
 
 
 def _build_recall_gate():

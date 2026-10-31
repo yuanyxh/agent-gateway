@@ -1,23 +1,51 @@
-"""Single retrieval pipeline: retrieve, fuse, gate, expand, trace."""
+"""Single retrieval pipeline: plan, retrieve, fuse, gate, expand, trace."""
 
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from agent_gateway.services.retrieval import trace as trace_mod
+from agent_gateway.services.retrieval.boost import keyword_boost
+from agent_gateway.services.retrieval.expand.query import expand_query
 from agent_gateway.services.retrieval.text.analyzer import detect_language
 from agent_gateway.services.retrieval.types import (
     ArmResult,
     Query,
     RetrievedItem,
+    SubQuery,
 )
 
 Expander = Callable[[Query, list[RetrievedItem]], list[RetrievedItem]]
 
 
+@dataclass
+class Stage:
+    """One tier of a plan. Its arms run together; the plan stops when it accepts.
+
+    Tiers express progressive fallback: a cheap precise stage first, then
+    looser ones. Without `accept` any hit ends the walk, which lets a loose
+    stage's noise mask a precise stage below it — `accept` is what makes a tier
+    answer "is this good enough to stop?" rather than "is this non-empty?".
+    """
+
+    name: str
+    arms: list[Any] = field(default_factory=list)
+    #: (query, stage items) -> True to stop here, False to fall through.
+    accept: Callable[[Query, list["RetrievedItem"]], bool] | None = None
+
+    def __bool__(self) -> bool:
+        return bool(self.arms)
+
+    def accepts(self, query: Query, items: list["RetrievedItem"]) -> bool:
+        if not items:
+            return False
+        return self.accept is None or self.accept(query, items)
+
+
 class Pipeline:
-    """Composable retrieval profile: arms in, ranked items out."""
+    """Composable retrieval profile: stages in, ranked items out."""
 
     def __init__(
         self,
@@ -28,6 +56,10 @@ class Pipeline:
         expander: Expander | None = None,
         per_arm_limit: int = 10,
         lexical_only_as_fallback: bool = False,
+        stages: list[Stage] | None = None,
+        query_expander: Callable[[Query], list[SubQuery]] | None = None,
+        router: Any = None,
+        booster: Callable[[Query, list[RetrievedItem]], None] | None = None,
     ):
         self.name = name
         self.arms = arms
@@ -36,6 +68,27 @@ class Pipeline:
         self.expander = expander
         self.per_arm_limit = per_arm_limit
         self.lexical_only_as_fallback = lexical_only_as_fallback
+        self.query_expander = query_expander or expand_query
+        self.stages = stages if stages is not None else self._compile(arms)
+        #: Optional intent router; when set it overrides the fixed stage chain.
+        self.router = router
+        #: Keywords reorder fused hits; they never fetch new candidates.
+        self.booster = booster if booster is not None else keyword_boost
+
+    def _compile(self, arms: list[Any]) -> list[Stage]:
+        """Translate the legacy arm list into tiers.
+
+        `lexical_only_as_fallback` used to be a boolean switch inside the loop;
+        it becomes two tiers, which is what it always meant.
+        """
+        if not self.lexical_only_as_fallback:
+            return [Stage(name="primary", arms=list(arms))]
+        primary = [a for a in arms if not getattr(a, "fallback_only", False)]
+        fallback = [a for a in arms if getattr(a, "fallback_only", False)]
+        stages = [Stage(name="primary", arms=primary)]
+        if fallback:
+            stages.append(Stage(name="fallback", arms=fallback))
+        return stages
 
     def _run_arm(
         self,
@@ -64,23 +117,34 @@ class Pipeline:
     def _retrieve(
         self, query: Query, limit: int, filters: dict[str, Any] | None
     ) -> list[ArmResult]:
-        """Run every primary arm, then the fallback arms only if none had hits.
+        """Walk the tiers; the first tier that yields stops the walk.
 
-        Fallback arms pay a full notes walk plus re-embedding, and measured 36.4%
-        of their rows were unrelated against 1.5% for hot, so they stay out of the
-        way unless nothing semantic matched.
+        A stage only runs when every earlier stage came back empty, so a loose
+        stage can never dilute a precise hit. Caller keywords become weighted
+        sub-queries inside each stage: their hits keep the weight in the score.
         """
         arm_limit = self.per_arm_limit or limit
-        primary = [a for a in self.arms if not getattr(a, "fallback_only", False)]
-        fallback = [a for a in self.arms if getattr(a, "fallback_only", False)]
-        if not self.lexical_only_as_fallback:
-            primary, fallback = list(self.arms), []
-        results = [self._run_arm(arm, query, arm_limit, filters) for arm in primary]
-        if fallback and not any(result.items for result in results):
-            results += [
-                self._run_arm(arm, query, arm_limit, filters) for arm in fallback
-            ]
-        return results
+        subqueries = self.query_expander(query) or [
+            SubQuery(text=query.text, weight=1.0, label="text")
+        ]
+        stages = self.router.stages_for(query) if self.router else self.stages
+        for stage in stages:
+            results: list[ArmResult] = []
+            for sub in subqueries:
+                sub_query = Query(
+                    text=sub.text,
+                    language=query.language,
+                    root_text=sub.text,
+                    intent=query.intent,
+                    mode=query.mode,
+                )
+                for arm in stage.arms:
+                    result = self._run_arm(arm, sub_query, arm_limit, filters)
+                    results.append(_weighted(result, sub))
+            stage_items = [item for result in results for item in result.items]
+            if stage.accepts(query, stage_items):
+                return results
+        return []
 
     def run(
         self,
@@ -91,9 +155,32 @@ class Pipeline:
         scope: str = "",
         debug: bool = False,
     ) -> dict[str, Any]:
+        """Convenience entry for callers with only a string."""
+        query = Query(text=text, language=detect_language(text), root_text=text)
+        return self.run_query(query, limit, filters, tool, scope, debug)
+
+    def run_query(
+        self,
+        query: Query,
+        limit: int = 5,
+        filters: dict[str, Any] | None = None,
+        tool: str = "",
+        scope: str = "",
+        debug: bool = False,
+    ) -> dict[str, Any]:
         started = time.perf_counter()
         latency: dict[str, float] = {}
-        query = Query(text=text, language=detect_language(text), root_text=text)
+        if not query.language or query.language == "unknown":
+            query = Query(
+                text=query.text,
+                language=detect_language(query.text),
+                root_text=query.root_text or query.text,
+                intent=query.intent,
+                keywords=list(query.keywords),
+                keyword_weight=query.keyword_weight,
+                groups=query.groups,
+                mode=query.mode,
+            )
 
         retrieve_started = time.perf_counter()
         arms = self._retrieve(query, limit, filters)
@@ -101,6 +188,9 @@ class Pipeline:
 
         fuse_started = time.perf_counter()
         items = self.fusion.fuse(arms, limit * 2)
+        if self.booster is not None:
+            self.booster(query, items)
+            items.sort(key=lambda i: i.score, reverse=True)
         latency["fuse"] = round((time.perf_counter() - fuse_started) * 1000, 2)
 
         related = self.expander(query, items[:limit]) if self.expander else []
@@ -182,3 +272,22 @@ class Pipeline:
             "related_count": len(related),
             "latency_ms": latency,
         }
+
+
+def _weighted(result: ArmResult, sub: SubQuery) -> ArmResult:
+    """Scale a sub-query's hits so primary terms outrank the raw text.
+
+    The arm suffix keeps the trace readable: `dense_hot@keyword` says which
+    expansion produced the row.
+    """
+    if sub.weight == 1.0 or not result.items:
+        return result
+    name = f"{result.name}@{sub.label}" if sub.label else result.name
+    return ArmResult(
+        name=name,
+        items=[
+            replace(item, score=float(item.score) * sub.weight) for item in result.items
+        ],
+        elapsed_ms=result.elapsed_ms,
+        error=result.error,
+    )

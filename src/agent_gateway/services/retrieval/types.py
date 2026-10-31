@@ -30,11 +30,39 @@ class ModelSpec:
 
 @dataclass
 class Query:
-    """A retrieval request."""
+    """A retrieval request.
+
+    `text` is what the caller typed. Everything else is optional context a
+    caller that knows more can supply: an intent label selects a strategy chain,
+    keywords carry the caller's own emphasis, and groups split a query into
+    independently scored term sets.
+    """
 
     text: str
     language: str = "unknown"
     root_text: str = ""
+    #: Strategy selector, e.g. FIND_FILE_PATH. Empty means "no hint".
+    intent: str = ""
+    #: Terms the caller considers primary; scored above the raw text.
+    keywords: list[str] = field(default_factory=list)
+    keyword_weight: float = 2.0
+    #: Independent term sets; each yields its own hit list before merging.
+    groups: list[list[str]] = field(default_factory=list)
+    #: Retrieval hint from the caller: semantic / lexical / auto.
+    mode: str = "auto"
+
+
+@dataclass(frozen=True)
+class SubQuery:
+    """One query to run against a stage, with the weight its hits carry.
+
+    A plain query expands to a single sub-query with weight 1.0, so the default
+    path is unchanged.
+    """
+
+    text: str
+    weight: float = 1.0
+    label: str = ""
 
 
 @dataclass

@@ -29,6 +29,15 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     "param.point_id": "Optional point ID",
     "param.layer": "Layer to delete from; default hot",
     "param.layers": "Layers to search: hot, cold, or both; default both",
+    "param.intent": (
+        "Optional retrieval intent; FIND_FILE_PATH prioritises memories that "
+        "quote a real path"
+    ),
+    "param.keywords": (
+        "Optional primary terms; each is searched separately and scored with "
+        "keyword_weight"
+    ),
+    "param.keyword_weight": "Score multiplier for keywords; default 2.0",
     "param.include_superseded": (
         "Include memories retired by a newer revision (history); deleted memories "
         "are never returned"

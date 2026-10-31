@@ -23,7 +23,9 @@ from agent_gateway.services.retrieval.gate.thresholds import (  # noqa: E402
     UncalibratedThresholds,
     floors_for,
 )
-from agent_gateway.services.retrieval.pipeline import Pipeline  # noqa: E402
+from agent_gateway.services.retrieval.expand.query import expand_query  # noqa: E402
+from agent_gateway.services.retrieval.pipeline import Pipeline, Stage  # noqa: E402
+from agent_gateway.services.retrieval.router import Router  # noqa: E402
 from agent_gateway.services.retrieval.protocol import Retriever  # noqa: E402
 from agent_gateway.services.retrieval.text.analyzer import (  # noqa: E402
     detect_language,
@@ -67,6 +69,128 @@ class FakeArm:
     def retrieve(self, query: Query, limit: int, filters=None) -> ArmResult:
         self.seen.append(query.text)
         return ArmResult(name=self.name, items=list(self._items))
+
+
+class QueryExpansionTest(unittest.TestCase):
+    def test_bare_query_expands_to_itself(self):
+        subs = expand_query(Query(text="剪贴板"))
+
+        self.assertEqual(
+            [(s.text, s.weight, s.label) for s in subs], [("剪贴板", 1.0, "text")]
+        )
+
+    def test_keywords_do_not_become_sub_queries(self):
+        """Keyword-as-query admitted unrelated memories; it is a boost now."""
+        subs = expand_query(Query(text="剪贴板 热键", keywords=["热键"]))
+
+        self.assertEqual([s.text for s in subs], ["剪贴板 热键"])
+
+    def test_groups_expand_one_sub_query_each(self):
+        subs = expand_query(Query(text="q", groups=[["剪贴板"], ["热键", "注册"]]))
+
+        self.assertEqual([s.text for s in subs], ["q", "剪贴板", "热键 注册"])
+
+
+class StageTest(unittest.TestCase):
+    def _pipeline(self, stages):
+        return Pipeline(
+            name="test",
+            arms=[],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+            stages=stages,
+        )
+
+    def test_first_yielding_stage_stops_the_walk(self):
+        seen: list[str] = []
+        first = FakeArm("a", [item("x", 0.7)], seen)
+        second = FakeArm("b", [item("y", 0.9)], seen)
+        pipeline = self._pipeline([Stage("s1", [first]), Stage("s2", [second])])
+
+        out = pipeline.run("q", limit=5)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["x"])
+        self.assertEqual(seen, ["q"])
+
+    def test_empty_stage_falls_through(self):
+        seen: list[str] = []
+        first = FakeArm("a", [], seen)
+        second = FakeArm("b", [item("y", 0.9)], seen)
+        pipeline = self._pipeline([Stage("s1", [first]), Stage("s2", [second])])
+
+        out = pipeline.run("q", limit=5)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["y"])
+        self.assertEqual(seen, ["q", "q"])
+
+    def test_keyword_boost_reranks_without_fetching(self):
+        seen: list[str] = []
+
+        class FixedArm:
+            name = "w"
+
+            def retrieve(self, query, limit, filters=None):
+                seen.append(query.text)
+                return ArmResult(
+                    name=self.name,
+                    items=[
+                        item("plain", 0.50, content="面板注册说明"),
+                        item("kw", 0.45, content="热键注册说明"),
+                    ],
+                )
+
+        pipeline = Pipeline(
+            name="test",
+            arms=[FixedArm()],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+        )
+        out = pipeline.run_query(
+            Query(text="面板注册", keywords=["热键"], keyword_weight=2.0), limit=5
+        )
+
+        self.assertEqual(seen, ["面板注册"])
+        self.assertEqual(out["results"][0]["id"], "kw")
+
+
+class RouterTest(unittest.TestCase):
+    def test_known_intent_uses_its_chain(self):
+        path_arm = FakeArm("path", [item("f", 0.9)])
+        default_arm = FakeArm("def", [item("d", 0.5)])
+        router = Router(
+            default=lambda q: [Stage("default", [default_arm])],
+            by_intent={"find_file_path": lambda q: [Stage("path", [path_arm])]},
+        )
+        pipeline = Pipeline(
+            name="test",
+            arms=[],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+            router=router,
+        )
+
+        out = pipeline.run_query(Query(text="q", intent="find_file_path"), limit=5)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["f"])
+
+    def test_unknown_intent_falls_back(self):
+        path_arm = FakeArm("path", [item("f", 0.9)])
+        default_arm = FakeArm("def", [item("d", 0.5)])
+        router = Router(
+            default=lambda q: [Stage("default", [default_arm])],
+            by_intent={"find_file_path": lambda q: [Stage("path", [path_arm])]},
+        )
+        pipeline = Pipeline(
+            name="test",
+            arms=[],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+            router=router,
+        )
+
+        out = pipeline.run_query(Query(text="q", intent="whatever"), limit=5)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["d"])
 
 
 class AnalyzerTest(unittest.TestCase):

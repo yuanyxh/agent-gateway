@@ -154,6 +154,22 @@ def build_tools() -> list[Tool]:
                         "items": {"type": "string", "enum": ["hot", "cold"]},
                         "description": param_text("param.layers"),
                     },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["", "FIND_FILE_PATH"],
+                        "default": "",
+                        "description": param_text("param.intent"),
+                    },
+                    "keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": param_text("param.keywords"),
+                    },
+                    "keyword_weight": {
+                        "type": "number",
+                        "default": 2.0,
+                        "description": param_text("param.keyword_weight"),
+                    },
                 },
                 "required": ["query"],
             },
