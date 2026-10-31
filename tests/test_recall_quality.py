@@ -21,13 +21,19 @@ from agent_gateway.services.mcp import (  # noqa: E402
     server_state,
 )
 from agent_gateway.services.retrieval.arms import recall as recall_arms  # noqa: E402
-from agent_gateway.services.retrieval.gate.thresholds import (  # noqa: E402
-    FLOORS as MINILM_FLOORS,
-)
+
 from agent_gateway.services.retrieval.types import RetrievedItem  # noqa: E402
 
-#: Pin the pipeline to one model's table so the assertions do not depend on env.
-FLOORS = dict(MINILM_FLOORS["minilm384"])
+#: Pinned values so the assertions do not depend on the active model's
+#: calibration file.
+FLOORS = {
+    "hot": 0.68,
+    "cold": 0.56,
+    "expanded": 0.56,
+    "search": 0.35,
+    "notes_coverage": 0.60,
+    "notes_semantic": 0.40,
+}
 
 
 class NoteNeedleTest(unittest.TestCase):

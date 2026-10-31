@@ -109,32 +109,27 @@ def best(rows: list[dict]) -> dict:
 
 
 def write_floors(tag: str, chosen: dict[str, float]) -> Path | None:
-    """Merge measured floors into the override file; None when a floor is unknown.
-
-    Unmeasured keys inherit the built-in table for `tag`, so a fresh data dir
-    (no override file yet) can still be calibrated.
-    """
+    """Write measured floors with the same derivations auto-calibration uses."""
     from agent_gateway.services.retrieval.gate.thresholds import (
         FLOOR_KEYS,
-        FLOORS,
         override_path,
     )
 
+    hot = chosen.get("hot")
+    cold = chosen.get("cold")
+    if hot is None or cold is None:
+        return None
+    entry = {
+        "hot": float(hot),
+        "cold": float(cold),
+        "expanded": float(cold),
+        "search": 0.35,
+        "notes_coverage": 0.50,
+        "notes_semantic": round(float(cold) * 0.65, 3),
+    }
     path = override_path()
     data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    entry = {**(FLOORS.get(tag) or {}), **(data.get(tag) or {})}
-    entry.update(
-        {
-            "cold": chosen.get("cold", entry.get("cold")),
-            "hot": chosen.get("hot", entry.get("hot")),
-            "expanded": chosen.get("cold", entry.get("expanded")),
-        }
-    )
-    for key in FLOOR_KEYS:
-        entry.setdefault(key, None)
-    if any(entry.get(key) is None for key in FLOOR_KEYS):
-        return None
-    data[tag] = entry
+    data[tag] = {key: entry[key] for key in FLOOR_KEYS}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return path

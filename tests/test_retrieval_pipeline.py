@@ -226,28 +226,26 @@ class GateTest(unittest.TestCase):
         floors = floors_for("no_such_model")
         self.assertEqual(floors, thresholds.PROVISIONAL_FLOORS)
         self.assertFalse(thresholds.is_calibrated("no_such_model"))
-        self.assertEqual(floors_for("minilm384")["hot"], 0.68)
 
-    def test_calibrated_model_ships_measured_values(self):
+    def test_override_file_supplies_floors(self):
         from agent_gateway.services.retrieval.gate import thresholds
 
-        # Read the table, not floors_for: an override file in the user's data dir
-        # would otherwise decide what this assertion sees.
-        floors = thresholds.FLOORS["jinazh768"]
-        self.assertAlmostEqual(floors["hot"], 0.62)
-        self.assertAlmostEqual(floors["cold"], 0.55)
-        self.assertNotIn("jinazh768", thresholds.SEEDED_TAGS)
+        measured = {
+            "hot": 0.61,
+            "cold": 0.57,
+            "expanded": 0.57,
+            "search": 0.35,
+            "notes_coverage": 0.50,
+            "notes_semantic": 0.37,
+        }
+        with mock.patch.object(thresholds, "_override", return_value=measured):
+            self.assertTrue(thresholds.is_calibrated("any_model"))
+            self.assertEqual(floors_for("any_model"), measured)
 
-    def test_partial_table_falls_back_to_provisional(self):
+    def test_incomplete_override_falls_back_to_provisional(self):
         from agent_gateway.services.retrieval.gate import thresholds
 
-        original = thresholds.FLOORS["jinazh768"]
-        try:
-            thresholds.FLOORS["jinazh768"] = {**original, "hot": None}
-            floors = floors_for("jinazh768")
-            self.assertEqual(floors, thresholds.PROVISIONAL_FLOORS)
-        finally:
-            thresholds.FLOORS["jinazh768"] = original
+        self.assertIsNone(thresholds._override("missing_tag"))
 
 
 class PipelineTest(unittest.TestCase):

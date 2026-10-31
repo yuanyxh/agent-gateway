@@ -169,10 +169,7 @@ class WriteFloorsTest(unittest.TestCase):
         from agent_gateway.services.retrieval.gate import thresholds
 
         path = Path(root, "retrieval_thresholds.json")
-        with (
-            mock.patch.object(thresholds, "override_path", return_value=path),
-            mock.patch.dict(thresholds.FLOORS, table, clear=False),
-        ):
+        with mock.patch.object(thresholds, "override_path", return_value=path):
             return calibrate_mod.write_floors(tag, chosen), path
 
     def test_fresh_dir_inherits_unmeasured_keys(self):

@@ -1,7 +1,9 @@
 """Relevance floors per embedding model.
 
-Floors are model-specific: swapping the embedder changes the score distribution,
-so an uncalibrated model must fail loudly instead of silently reusing old values.
+Floors are measured, not shipped: the auto-calibration task samples the store
+when a model is first used and writes `retrieval_thresholds.json` in the data
+dir. Until that file exists the provisional values below keep recall answering
+instead of failing every call.
 """
 
 from __future__ import annotations
@@ -16,31 +18,7 @@ logger = setup_logging("server")
 
 FLOOR_KEYS = ("hot", "cold", "expanded", "search", "notes_coverage", "notes_semantic")
 
-FLOORS: dict[str, dict[str, float | None]] = {
-    "minilm384": {
-        "hot": 0.68,
-        "cold": 0.56,
-        "expanded": 0.56,
-        "search": 0.35,
-        "notes_coverage": 0.60,
-        "notes_semantic": 0.40,
-    },
-    # Measured on 249 annotated queries: these keep 96.4% of queries non-empty
-    # while raising precision@5 from 0.397 (minilm) to 0.662.
-    "jinazh768": {
-        "hot": 0.62,
-        "cold": 0.55,
-        "expanded": 0.55,
-        "search": 0.35,
-        "notes_coverage": 0.50,
-        "notes_semantic": 0.35,
-    },
-}
-
-
-#: Used only between startup and the first successful auto-calibration. Not a
-#: model-agnostic guess: it keeps recall working instead of failing every call
-#: while the new embedder is still being measured.
+#: Used only before the first successful calibration of the active model.
 PROVISIONAL_FLOORS: dict[str, float] = {
     "hot": 0.55,
     "cold": 0.50,
@@ -50,17 +28,11 @@ PROVISIONAL_FLOORS: dict[str, float] = {
     "notes_semantic": 0.35,
 }
 
-#: Tags whose floors are copied from another model and need real measurements.
-SEEDED_TAGS: set[str] = set()
 _warned: set[str] = set()
 
 
-class UncalibratedThresholds(RuntimeError):
-    """Raised when a model has no calibrated floors yet."""
-
-
 def override_path() -> Path:
-    """Calibrated floors live in the data dir so tuning needs no code change."""
+    """Calibrated floors live in the data dir, written by auto-calibration."""
     return gateway_home() / "retrieval_thresholds.json"
 
 
@@ -75,39 +47,20 @@ def _override(tag: str) -> dict[str, float] | None:
     entry = data.get(tag)
     if not isinstance(entry, dict):
         return None
-    if tag in SEEDED_TAGS and tag not in _warned:
-        _warned.add(tag)
-        logger.warning(
-            f"[thresholds] {tag} still uses seeded floors; run "
-            f"scripts/calibrate_thresholds.py to measure them"
-        )
-    missing = [key for key in FLOOR_KEYS if entry.get(key) is None]
-    if missing:
+    if any(entry.get(key) is None for key in FLOOR_KEYS):
         return None
-    return {key: float(entry[key]) for key in FLOOR_KEYS if key in entry}
+    return {key: float(entry[key]) for key in FLOOR_KEYS}
 
 
 def is_calibrated(tag: str) -> bool:
-    """True when this tag has floors from an override file or the built-in table."""
-    if _override(tag) is not None:
-        return True
-    entry = FLOORS.get(tag)
-    return entry is not None and not any(entry.get(k) is None for k in FLOOR_KEYS)
+    return _override(tag) is not None
 
 
 def floors_for(tag: str) -> dict[str, float]:
-    """Floors for a model; provisional values until auto-calibration lands.
-
-    `PROVISIONAL_FLOORS` keeps recall answering during the first minutes of an
-    unfamiliar model instead of failing every call. Once the calibration task
-    writes the override file this returns measured numbers.
-    """
+    """Floors for a model; provisional values until calibration lands."""
     tuned = _override(tag)
     if tuned is not None:
         return tuned
-    entry = FLOORS.get(tag)
-    if entry is not None and not any(entry.get(k) is None for k in FLOOR_KEYS):
-        return {key: float(entry[key]) for key in FLOOR_KEYS if entry[key] is not None}
     if tag not in _warned:
         _warned.add(tag)
         logger.warning(
