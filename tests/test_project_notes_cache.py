@@ -69,6 +69,60 @@ class NoteCachePruneTest(unittest.TestCase):
         self.assertEqual(total, 1)
 
 
+class EmbedderIdentityTest(unittest.TestCase):
+    def test_drops_chunks_written_by_another_model(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            os.makedirs(os.path.dirname(db))
+            conn = _get_note_db(db)
+            with conn:
+                conn.execute("DELETE FROM meta")
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta VALUES ('embedder_dims', '1')"
+                )
+                conn.execute(
+                    "INSERT INTO chunks VALUES (?,?,?,?,?,?,?)",
+                    ("/p/README.md", 0, "text", 1, 1.0, 10, b"\x00" * 16),
+                )
+            conn.close()
+
+            conn = _get_note_db(db)
+            remaining = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            dims = conn.execute(
+                "SELECT value FROM meta WHERE key = 'embedder_dims'"
+            ).fetchone()[0]
+            conn.close()
+
+        self.assertEqual(remaining, 0)
+        self.assertEqual(int(dims), search_notes_cache.EMBEDDER_SPEC.dims)
+
+    def test_keeps_chunks_from_the_same_model(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            os.makedirs(os.path.dirname(db))
+            conn = _get_note_db(db)
+            with conn:
+                conn.execute(
+                    "INSERT INTO chunks VALUES (?,?,?,?,?,?,?)",
+                    (
+                        "/p/README.md",
+                        0,
+                        "text",
+                        1,
+                        1.0,
+                        10,
+                        b"\x00" * (search_notes_cache.EMBEDDER_SPEC.dims * 4),
+                    ),
+                )
+            conn.close()
+
+            conn = _get_note_db(db)
+            remaining = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            conn.close()
+
+        self.assertEqual(remaining, 1)
+
+
 class PrewarmThrottleTest(unittest.TestCase):
     def setUp(self):
         with search_notes_cache._prewarm_lock:

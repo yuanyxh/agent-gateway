@@ -136,24 +136,24 @@ class VectorOnlySearchTest(unittest.TestCase):
         self.assertEqual(result["results"][0]["layer"], "vector")
         self.assertEqual(result["results"][0]["module"], "src/core")
 
-    def test_chinese_vector_only_is_no_match(self):
+    def test_chinese_vector_only_is_weak_match(self):
         result = self._run(
             "聊天记录保存位置",
             [
                 {
-                    "name": "translationSeq",
+                    "name": "StoredTerminalSession",
                     "kind": "symbol",
-                    "file": "Sources/Translation/TranslationPanelController.swift",
+                    "file": "Sources/Terminal/TerminalSessionStore.swift",
                     "signature": None,
                     "visibility": None,
-                    "score": 0.3682,
+                    "score": 0.3721,
                 }
             ],
         )
-        self.assertEqual(result["status"], "no_match")
-        self.assertEqual(result["total"], 0)
-        self.assertEqual(result["rejected"], 1)
-        self.assertIn("English", result["hint"])
+        self.assertEqual(result["status"], "weak_match")
+        self.assertEqual(result["total"], 1)
+        self.assertNotIn("rejected", result)
+        self.assertIn("verify", result["hint"])
 
     def test_vector_only_noise_is_rejected(self):
         result = self._run(

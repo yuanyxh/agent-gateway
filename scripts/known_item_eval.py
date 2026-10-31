@@ -68,7 +68,10 @@ def recall(url: str, session: str, query: str, limit: int) -> list[str]:
             "jsonrpc": "2.0",
             "id": 5,
             "method": "tools/call",
-            "params": {"name": "recall", "arguments": {"query": query, "limit": limit}},
+            "params": {
+                "name": "recall",
+                "arguments": {"keywords": [query], "limit": limit},
+            },
         },
         session,
     )

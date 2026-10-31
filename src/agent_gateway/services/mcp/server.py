@@ -94,6 +94,7 @@ from agent_gateway.services.retrieval.arms.project_search import ProjectSearchAr
 from agent_gateway.services.retrieval.fusion.score import MaxScoreFusion
 from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate
 from agent_gateway.services.retrieval.pipeline import Pipeline
+from agent_gateway.services.retrieval.rerank import get_reranker
 from agent_gateway.services.mcp.server_rest import (
     REST_ROUTES,
     read_args,
@@ -326,6 +327,7 @@ async def _handle_project_notes(arguments: dict) -> list[TextContent]:
             arms=[arm],
             fusion=MaxScoreFusion(),
             gate=LayerPresenceGate(semantic_layers=(NOTES_LAYER,)),
+            reranker=get_reranker(),
         )
         out = await asyncio.to_thread(
             pipeline.run, query.strip(), limit, None, "project_notes"

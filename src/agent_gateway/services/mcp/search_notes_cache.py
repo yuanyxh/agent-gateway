@@ -9,7 +9,10 @@ import time
 
 import numpy as np
 
-from agent_gateway.services.mcp.server_embed import _get_shared_embedder
+from agent_gateway.services.mcp.server_embed import (
+    EMBEDDER_SPEC,
+    _get_shared_embedder,
+)
 
 from agent_gateway.services.mcp.search_constants import (
     NOTE_DB_FILENAME,
@@ -55,7 +58,53 @@ def _get_note_db(db_path: str) -> sqlite3.Connection:
                 PRIMARY KEY (file_path, chunk_index)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+    _enforce_embedder_identity(conn)
     return conn
+
+
+def _enforce_embedder_identity(conn: sqlite3.Connection) -> int:
+    """Drop the cache when it was built by another embedding model.
+
+    Vectors from different models are not comparable, and nothing else in the
+    schema records who wrote them: a model swap used to leave the old rows in
+    place, so every query died on a shape mismatch and silently fell back to
+    keyword scoring. Returns the number of dropped chunks.
+    """
+    dims = str(EMBEDDER_SPEC.dims)
+    conn.row_factory = sqlite3.Row
+    stored = {
+        row["key"]: row["value"]
+        for row in conn.execute("SELECT key, value FROM meta").fetchall()
+    }
+    # The stored blob length is the authority, not the meta row: caches written
+    # before meta existed carry no record, and a partially rebuilt cache holds
+    # both sizes at once (which makes numpy reject the whole matrix).
+    foreign = conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL AND length(embedding) != ?",
+        (EMBEDDER_SPEC.dims * 4,),
+    ).fetchone()[0]
+    dropped = 0
+    if foreign:
+        dropped = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        logger.info(
+            f"[project_notes] cache holds vectors of another model "
+            f"({stored.get('embedder_tag', 'unknown')}; expecting "
+            f"{EMBEDDER_SPEC.tag}/{dims}d), dropping {dropped} chunks to re-embed"
+        )
+        with conn:
+            conn.execute("DELETE FROM chunks")
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO meta VALUES (?, ?)",
+            [("embedder_tag", EMBEDDER_SPEC.tag), ("embedder_dims", dims)],
+        )
+    return dropped
 
 
 def _embed_in_batches(emb, texts: list[str]) -> list:

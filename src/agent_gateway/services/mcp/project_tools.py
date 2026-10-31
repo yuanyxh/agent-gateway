@@ -155,22 +155,10 @@ def _project_search_impl(
 
     # Vector-only matches are weak evidence: do not promote them to exact, and
     # reject candidates without a lexical anchor because the embedding model
-    # scores unrelated gibberish highly.
+    # scores unrelated gibberish highly. Chinese queries carry no lexical terms
+    # (symbols are English identifiers), so the vector layer's own similarity
+    # floor is their only guard — they surface as weak matches, not rejects.
     if total and all(r.get("layer") == "vector" for r in all_found):
-        if _CJK.search(query or ""):
-            return {
-                "status": "no_match",
-                "query": query,
-                "expandedQuery": expanded,
-                "layers": active_layers,
-                "results": [],
-                "total": 0,
-                "rejected": total,
-                "hint": (
-                    "Chinese vector-only matches are disabled; add an English "
-                    "keyword or a file name"
-                ),
-            }
         terms = _query_terms(query)
         filtered = [r for r in all_found if not terms or _has_lexical_overlap(r, terms)]
         if not filtered:

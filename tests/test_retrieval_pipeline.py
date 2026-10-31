@@ -14,11 +14,15 @@ os.environ.setdefault("RETRIEVAL_TRACE", "0")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agent_gateway.services.retrieval import config, trace  # noqa: E402
-from agent_gateway.services.retrieval.fusion.score import HeatWeightedFusion  # noqa: E402
+from agent_gateway.services.retrieval.fusion.score import (  # noqa: E402
+    HeatWeightedFusion,
+    RRFFusion,
+)
 from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate  # noqa: E402
 from agent_gateway.services.retrieval.gate import calibrate  # noqa: E402
 from agent_gateway.services.retrieval.gate.thresholds import floors_for  # noqa: E402
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage  # noqa: E402
+from agent_gateway.services.retrieval.rerank import order_by_score  # noqa: E402
 from agent_gateway.services.retrieval.text.analyzer import (  # noqa: E402
     detect_language,
     split_terms,
@@ -73,7 +77,7 @@ class StageTest(unittest.TestCase):
             stages=stages,
         )
 
-    def test_first_yielding_stage_stops_the_walk(self):
+    def test_tier_below_runs_while_the_limit_is_short(self):
         seen: list[str] = []
         first = FakeArm("a", [item("x", 0.7)], seen)
         second = FakeArm("b", [item("y", 0.9)], seen)
@@ -81,7 +85,18 @@ class StageTest(unittest.TestCase):
 
         out = pipeline.run("q", limit=5)
 
-        self.assertEqual([row["id"] for row in out["results"]], ["x"])
+        self.assertEqual([row["id"] for row in out["results"]], ["y", "x"])
+        self.assertEqual(seen, ["q", "q"])
+
+    def test_filled_tier_stops_the_walk(self):
+        seen: list[str] = []
+        first = FakeArm("a", [item("x", 0.7), item("z", 0.6)], seen)
+        second = FakeArm("b", [item("y", 0.9)], seen)
+        pipeline = self._pipeline([Stage("s1", [first]), Stage("s2", [second])])
+
+        out = pipeline.run("q", limit=2)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["x", "z"])
         self.assertEqual(seen, ["q"])
 
     def test_empty_stage_falls_through(self):
@@ -94,6 +109,22 @@ class StageTest(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in out["results"]], ["y"])
         self.assertEqual(seen, ["q", "q"])
+
+    def test_last_resort_tier_is_skipped_when_anything_was_found(self):
+        seen: list[str] = []
+        first = FakeArm("a", [item("x", 0.7)], seen)
+        second = FakeArm("b", [item("y", 0.9)], seen)
+        pipeline = self._pipeline(
+            [
+                Stage("s1", [first]),
+                Stage("s2", [second], only_if_empty=True),
+            ]
+        )
+
+        out = pipeline.run("q", limit=5)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["x"])
+        self.assertEqual(seen, ["q"])
 
 
 class AutoCalibrateTest(unittest.TestCase):
@@ -174,6 +205,23 @@ class FusionTest(unittest.TestCase):
 
         self.assertEqual([f.id for f in fused], ["hot", "cold"])
 
+    def test_rerank_order_drops_non_positive_scores(self):
+        rows = [item("a", 0.9), item("b", 0.8), item("c", 0.7)]
+
+        out = order_by_score([1.0, -0.5, 2.0], rows)
+
+        self.assertEqual([r.id for r in out], ["c", "a"])
+        self.assertEqual(out[0].score_kind, "rerank")
+
+    def test_rrf_rewards_agreement_between_lists(self):
+        first = ArmResult(name="a", items=[item("x", 0.9), item("y", 0.8)])
+        second = ArmResult(name="b", items=[item("y", 0.4), item("z", 0.3)])
+
+        fused = RRFFusion().fuse([first, second], 5)
+
+        self.assertEqual([f.id for f in fused], ["y", "x", "z"])
+        self.assertEqual(fused[0].score_kind, "rrf")
+
 
 class GateTest(unittest.TestCase):
     def test_layer_presence_matches_legacy_semantics(self):
@@ -250,7 +298,7 @@ class PipelineTest(unittest.TestCase):
             out = pipeline.run("q", limit=5)
 
         self.assertEqual(out["status"], "ok")
-        self.assertIn("nope", recorder.call_args[0][0]["arms"][0]["error"])
+        self.assertIn("nope", recorder.call_args[0][0]["passes"][0]["arms"][0]["error"])
         self.assertEqual(out["results"][0]["id"], "x")
 
     def test_trace_payload_is_recorded(self):
@@ -261,8 +309,35 @@ class PipelineTest(unittest.TestCase):
         payload = recorder.call_args[0][0]
         self.assertEqual(payload["tool"], "recall")
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["arms"][0]["hits"][0]["id"], "x")
+        self.assertEqual(payload["passes"][0]["arms"][0]["hits"][0]["id"], "x")
+        self.assertEqual(payload["lead"]["id"], "x")
         self.assertTrue(out["trace_id"].startswith("rt_"))
+
+    def test_semantic_query_runs_a_second_pass_and_rrf_merges_it(self):
+        seen: list[str] = []
+        arm = FakeArm("a", [item("x", 0.7)], seen)
+        pipeline = self._pipeline([arm])
+
+        with mock.patch.object(trace, "record") as recorder:
+            out = pipeline.run_query(
+                Query(text="kw1 kw2", language="mixed", semantic_text="a sentence"),
+                limit=5,
+            )
+
+        self.assertEqual(seen, ["kw1 kw2", "a sentence"])
+        self.assertEqual(recorder.call_args[0][0]["fusion"], "rrf")
+        self.assertEqual(out["results"][0]["score_kind"], "rrf")
+
+    def test_semantic_query_equal_to_keywords_runs_once(self):
+        seen: list[str] = []
+        pipeline = self._pipeline([FakeArm("a", [item("x", 0.7)], seen)])
+
+        with mock.patch.object(trace, "record"):
+            pipeline.run_query(
+                Query(text="same", language="latin", semantic_text="same")
+            )
+
+        self.assertEqual(seen, ["same"])
 
     def _fallback_pipeline(self, arms: list[FakeArm]) -> Pipeline:
         return Pipeline(

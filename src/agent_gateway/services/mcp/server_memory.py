@@ -881,9 +881,30 @@ async def _handle_remember_batch(arguments: dict) -> list[TextContent]:
     ]
 
 
+def _recall_keywords(arguments: dict) -> list[str]:
+    """Keyword terms from the request; a bare string is accepted as one term."""
+    raw = arguments.get("keywords")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        # Older callers sent the whole query as `query`; keep them working.
+        legacy = str(arguments.get("query") or "").strip()
+        return [legacy] if legacy else []
+    return [str(term).strip() for term in raw if str(term).strip()]
+
+
 @_register("recall")
 async def _handle_recall(arguments: dict) -> list[TextContent]:
-    query = arguments["query"]
+    keywords = _recall_keywords(arguments)
+    semantic = str(arguments.get("query") or "").strip()
+    text = " ".join(keywords) or semantic
+    if not text:
+        return [
+            TextContent(
+                type="text",
+                text=dumps({"error": "keywords must contain at least one term"}),
+            )
+        ]
     limit = int_arg(arguments, "limit", DEFAULT_RECALL_LIMIT)
     include_archived = arguments.get("include_archived", False)
     include_superseded = bool(arguments.get("include_superseded", False))
@@ -905,9 +926,10 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         include_superseded=include_superseded,
     )
     request = Query(
-        text=query,
-        language=detect_language(query),
-        root_text=query,
+        text=text,
+        language=detect_language(text),
+        root_text=text,
+        semantic_text=semantic,
     )
     out = pipeline.run_query(request, limit, tool="recall")
     top = out["results"]
@@ -946,8 +968,13 @@ def _build_recall_pipeline(
     # model silently discards another model's hits.
     floors = floors_for(EMBEDDER_SPEC.tag)
     arms = []
+    # Hot and cold are one tier: both score against the same embedding, so their
+    # hits are comparable and must compete on score. Splitting them let a short
+    # hot result starve a better cold hit (measured: cold held the 0.764 match
+    # while hot's 0.56 filled the limit).
+    memory_arms = []
     if hot_enabled:
-        arms.append(
+        memory_arms.append(
             HotMemoryArm(
                 min_score=floors["hot"],
                 include_archived=include_archived,
@@ -955,23 +982,23 @@ def _build_recall_pipeline(
             )
         )
     if cold_enabled:
-        arms.append(
+        memory_arms.append(
             ColdMemoryArm(
                 min_score=floors["cold"],
                 include_archived=include_archived,
             )
         )
-    arms.append(
-        NotesArm(
-            min_coverage=floors["notes_coverage"],
-            min_semantic=floors["notes_semantic"],
-        )
+    arms.extend(memory_arms)
+    stages: list[Stage] = []
+    if memory_arms:
+        stages.append(Stage(name="memory", arms=memory_arms))
+    notes_arm = NotesArm(
+        min_coverage=floors["notes_coverage"],
+        min_semantic=floors["notes_semantic"],
     )
-    semantic = [a for a in arms if not getattr(a, "fallback_only", False)]
-    lexical = [a for a in arms if getattr(a, "fallback_only", False)]
-    stages = [Stage(name="semantic", arms=semantic)]
-    if lexical:
-        stages.append(Stage(name="fallback", arms=lexical))
+    arms.append(notes_arm)
+    # Notes stay a last resort: entered only when the memory tier found nothing.
+    stages.append(Stage(name="notes", arms=[notes_arm], only_if_empty=True))
     return Pipeline(
         name="recall",
         arms=arms,

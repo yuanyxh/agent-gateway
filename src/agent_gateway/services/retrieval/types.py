@@ -32,13 +32,15 @@ class ModelSpec:
 class Query:
     """A retrieval request.
 
-    `text` is what the caller typed. `root_text` is the untranslated original
-    when the caller rewrote it.
+    `text` is the main query, built from the caller's keywords. `semantic_text`
+    is an optional one-sentence rewording searched in a second pass.
+    `root_text` is the untranslated original when the caller rewrote it.
     """
 
     text: str
     language: str = "unknown"
     root_text: str = ""
+    semantic_text: str = ""
 
 
 @dataclass

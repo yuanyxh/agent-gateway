@@ -134,6 +134,11 @@ def build_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": param_text("param.keywords"),
+                    },
                     "query": {
                         "type": "string",
                         "description": param_text("param.query"),
@@ -155,7 +160,7 @@ def build_tools() -> list[Tool]:
                         "description": param_text("param.layers"),
                     },
                 },
-                "required": ["query"],
+                "required": ["keywords"],
             },
         ),
         Tool(

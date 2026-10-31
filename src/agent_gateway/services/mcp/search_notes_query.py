@@ -136,7 +136,10 @@ def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
                         vector_scores[key] = float(sim)
                         vectors_by_key[key] = vec
         except Exception as e:
-            logger.warning(f"[project_notes] vector search failed: {e}")
+            logger.error(
+                f"[project_notes] vector search failed, scoring is keyword-only "
+                f"for this query: {e}"
+            )
 
     # Hybrid rerank: semantic similarity, exact token coverage, and a small
     # path boost. A chunk must clear the vector threshold or match a token;

@@ -17,7 +17,14 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
         "fact directly; never fabricate one."
     ),
     "param.memories": "Facts to write; same semantics as remember's content.",
-    "param.query": "Search query",
+    "param.keywords": (
+        "Required. 2-5 keywords or short phrases; the main query. "
+        "Chinese and English are supported"
+    ),
+    "param.query": (
+        "Optional. One sentence describing what you are looking for; searched in a "
+        "second pass and merged with the keyword results"
+    ),
     "param.max_results": "Max results",
     "param.since_days": "Days back to look; default 3",
     "param.offset": "Number of results to skip before returning; default 0",

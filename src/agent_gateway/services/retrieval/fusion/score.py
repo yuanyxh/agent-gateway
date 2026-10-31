@@ -6,6 +6,7 @@ Used where scores share a scale (all cosine similarities against one model).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from agent_gateway.services.retrieval.types import ArmResult, RetrievedItem
@@ -64,4 +65,37 @@ class MaxScoreFusion:
         return sorted(merged.values(), key=lambda i: i.score, reverse=True)[:limit]
 
 
-__all__: list[Any] = ["HeatWeightedFusion", "MaxScoreFusion", "heat_key"]
+class RRFFusion:
+    """Rank-only fusion for lists whose scores are not comparable.
+
+    Each input ArmResult is one already-ranked list and contributes
+    `1 / (k + rank)` per item, so an item that both passes agree on outranks one
+    that only a single pass found near the top. k is the published RRF default
+    (Cormack et al., 2009), not a value fitted to any store.
+    """
+
+    name = "rrf"
+    DEFAULT_K = 60
+
+    def __init__(self, k: int = DEFAULT_K):
+        self._k = k
+
+    def fuse(self, arms: list[ArmResult], limit: int) -> list[RetrievedItem]:
+        totals: dict[str, float] = {}
+        best: dict[str, RetrievedItem] = {}
+        for arm in arms:
+            for rank, item in enumerate(arm.items):
+                totals[item.id] = totals.get(item.id, 0.0) + 1.0 / (self._k + rank + 1)
+                current = best.get(item.id)
+                if current is None or item.score > current.score:
+                    best[item.id] = item
+        ordered = sorted(best.values(), key=lambda i: -totals[i.id])[:limit]
+        return [replace(i, score=totals[i.id], score_kind="rrf") for i in ordered]
+
+
+__all__: list[Any] = [
+    "HeatWeightedFusion",
+    "MaxScoreFusion",
+    "RRFFusion",
+    "heat_key",
+]
