@@ -23,8 +23,14 @@ from agent_gateway.services.retrieval.gate.thresholds import (  # noqa: E402
     UncalibratedThresholds,
     floors_for,
 )
-from agent_gateway.services.retrieval.expand.query import expand_query  # noqa: E402
+from agent_gateway.services.retrieval.expand.query import (  # noqa: E402
+    expand_keywords,
+    expand_keywords_with_query,
+    expand_query,
+)
+from agent_gateway.services.retrieval.fusion.score import SumScoreFusion  # noqa: E402
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage  # noqa: E402
+from agent_gateway.services.retrieval.scope import KeywordScope  # noqa: E402
 from agent_gateway.services.retrieval.protocol import Retriever  # noqa: E402
 from agent_gateway.services.retrieval.text.analyzer import (  # noqa: E402
     detect_language,
@@ -78,10 +84,16 @@ class QueryExpansionTest(unittest.TestCase):
             [(s.text, s.weight, s.label) for s in subs], [("剪贴板", 1.0, "text")]
         )
 
-    def test_query_is_not_split(self):
-        subs = expand_query(Query(text="剪贴板 热键"))
+    def test_keywords_do_not_become_sub_queries(self):
+        """Keyword-as-query admitted unrelated memories; it is a boost now."""
+        subs = expand_query(Query(text="剪贴板 热键", keywords=["热键"]))
 
         self.assertEqual([s.text for s in subs], ["剪贴板 热键"])
+
+    def test_groups_expand_one_sub_query_each(self):
+        subs = expand_query(Query(text="q", groups=[["剪贴板"], ["热键", "注册"]]))
+
+        self.assertEqual([s.text for s in subs], ["q", "剪贴板", "热键 注册"])
 
 
 class StageTest(unittest.TestCase):
@@ -127,6 +139,201 @@ class StageTest(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in out["results"]], ["y"])
         self.assertEqual(seen, ["q", "q"])
+
+    def test_keyword_boost_reranks_without_fetching(self):
+        seen: list[str] = []
+
+        class FixedArm:
+            name = "w"
+
+            def retrieve(self, query, limit, filters=None):
+                seen.append(query.text)
+                return ArmResult(
+                    name=self.name,
+                    items=[
+                        item("plain", 0.50, content="面板注册说明"),
+                        item("kw", 0.45, content="热键注册说明"),
+                    ],
+                )
+
+        pipeline = Pipeline(
+            name="test",
+            arms=[FixedArm()],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+        )
+        out = pipeline.run_query(
+            Query(text="面板注册", keywords=["热键"], keyword_weight=2.0), limit=5
+        )
+
+        self.assertEqual(seen, ["面板注册"])
+        self.assertEqual(out["results"][0]["id"], "kw")
+
+    def test_no_keywords_keeps_fusion_order(self):
+        cold = item("cold", 0.70, layer="cold")
+        cold.extra["heat_score"] = 0.0
+        hot = item("hot", 0.60, layer="hot")
+        hot.extra["heat_score"] = 1.0
+        pipeline = Pipeline(
+            name="test",
+            arms=[FakeArm("a", [cold, hot])],
+            fusion=HeatWeightedFusion(),
+            gate=LayerPresenceGate(),
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run("q", limit=5)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["hot", "cold"])
+
+    def test_keyword_hits_report_which_terms_matched(self):
+        pipeline = Pipeline(
+            name="test",
+            arms=[FakeArm("a", [item("x", 0.5, content="热键注册说明")])],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run_query(
+                Query(text="面板注册", keywords=["热键", "不存在的词"]), limit=5
+            )
+
+        self.assertEqual(out["keyword_hits"], ["热键"])
+
+    def test_keyword_hits_absent_without_keywords(self):
+        pipeline = Pipeline(
+            name="test",
+            arms=[FakeArm("a", [item("x", 0.5, content="热键注册说明")])],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run("面板注册", limit=5)
+
+        self.assertNotIn("keyword_hits", out)
+
+
+class KeywordTierTest(unittest.TestCase):
+    def test_each_keyword_becomes_its_own_weighted_sub_query(self):
+        subs = expand_keywords(
+            Query(text="面板注册", keywords=["热键", " ", "缓存"], keyword_weight=3.0)
+        )
+        self.assertEqual([s.text for s in subs], ["热键", "缓存"])
+        self.assertEqual({s.weight for s in subs}, {3.0})
+
+    def test_merge_expansion_keeps_query_below_keywords(self):
+        subs = expand_keywords_with_query(
+            Query(text="面板注册", keywords=["热键"], keyword_weight=2.0)
+        )
+        weights = {s.label: s.weight for s in subs}
+        self.assertEqual(weights["text"], 1.0)
+        self.assertEqual(weights["kw0"], 2.0)
+
+    def test_sum_fusion_adds_scores_and_counts_support(self):
+        arms = [
+            ArmResult(name="a", items=[item("x", 0.4), item("y", 0.3)]),
+            ArmResult(name="b", items=[item("x", 0.2)]),
+        ]
+        fused = SumScoreFusion().fuse(arms, limit=5)
+        self.assertEqual(fused[0].id, "x")
+        self.assertAlmostEqual(fused[0].score, 0.6)
+        self.assertEqual(fused[0].extra["keyword_support"], 2)
+
+    def test_keyword_tier_stops_before_the_query_tier(self):
+        seen: list[str] = []
+        arm = FakeArm("dense", [item("doc", 0.6, content="热键注册")], seen)
+        pipeline = Pipeline(
+            name="test",
+            arms=[arm],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+            stages=[
+                Stage(
+                    name="keyword",
+                    arms=[arm],
+                    subqueries=expand_keywords,
+                    fusion=SumScoreFusion(),
+                ),
+                Stage(name="semantic", arms=[arm]),
+            ],
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run_query(Query(text="面板注册", keywords=["热键"]), limit=5)
+
+        self.assertEqual(seen, ["热键"])
+        self.assertEqual(out["results"][0]["id"], "doc")
+
+    def test_empty_keyword_tier_falls_through_to_the_query(self):
+        seen: list[str] = []
+        arm = FakeArm("dense", [item("doc", 0.6)], seen)
+        pipeline = Pipeline(
+            name="test",
+            arms=[arm],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+            stages=[
+                Stage(
+                    name="keyword",
+                    arms=[arm],
+                    subqueries=lambda q: [],
+                    fusion=SumScoreFusion(),
+                ),
+                Stage(name="semantic", arms=[arm]),
+            ],
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run_query(Query(text="面板注册", keywords=["热键"]), limit=5)
+
+        self.assertEqual(seen, ["面板注册"])
+        self.assertEqual(out["count"], 1)
+
+
+class KeywordScopeTest(unittest.TestCase):
+    def _hits(self):
+        return [
+            item("a", 0.8, content="项目 A 发布记录"),
+            item("b", 0.8, content="项目 B 发布记录"),
+            item("c", 0.8, content="上线记录"),
+        ]
+
+    def test_all_keywords_intersect_first(self):
+        hits = self._hits()
+
+        out = KeywordScope()(Query(text="q", keywords=["项目", "B"]), hits)
+
+        self.assertEqual([i.id for i in out], ["b"])
+
+    def test_partial_claim_is_not_filtered_on(self):
+        hits = self._hits()
+
+        out = KeywordScope()(Query(text="q", keywords=["项目", "上线"]), hits)
+
+        self.assertEqual([i.id for i in out], ["a", "b", "c"])
+
+    def test_unanchorable_keyword_leaves_hits_alone(self):
+        hits = self._hits()
+
+        out = KeywordScope()(Query(text="q", keywords=["无关"]), hits)
+
+        self.assertEqual([i.id for i in out], ["a", "b", "c"])
+
+    def test_scope_survives_fusion(self):
+        arm = FakeArm("dense", [item("keep", 0.6), item("drop", 0.9)])
+        scoped = Stage(
+            name="keyword_scope",
+            arms=[arm],
+            scope=lambda q, items, limit, filters: [i for i in items if i.id == "keep"],
+        )
+        pipeline = Pipeline(
+            name="test",
+            arms=[arm],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+            stages=[scoped, Stage(name="fallback", arms=[arm])],
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run_query(Query(text="q", keywords=["kw"]), limit=5)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["keep"])
 
 
 class AnalyzerTest(unittest.TestCase):

@@ -96,6 +96,31 @@ def stage_flag(profile: str, name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def keyword_mode(profile: str, default: str = "off") -> str:
+    """How caller keywords take part in retrieval.
+
+    `off` keeps the legacy re-rank boost only. `first` gives keywords their own
+    tier above the raw query. `merge` runs both inside one tier and adds up the
+    per-keyword scores. `scope` lets keywords narrow the query's hits, which is
+    what a range limit means: all keywords intersect, then any, then none.
+
+    YAML 1.1 reads the bare word `off` as boolean false, so the value is
+    normalised before the string match or the setting silently falls back.
+    """
+    env_key = f"RETRIEVAL_{profile}_KEYWORD_MODE"
+    raw = os.environ.get(env_key)
+    if raw is None:
+        # Root key first: the Swift config model can hold a string there but
+        # not inside `plans`, whose leaves are numbers.
+        raw = config_loader.value(f"retrieval.{profile}KeywordMode", None)
+    if raw is None:
+        raw = config_loader.value(f"retrieval.plans.{profile}.keyword_mode", default)
+    if isinstance(raw, bool):
+        return "first" if raw else "off"
+    value = str(raw).strip().lower()
+    return value if value in ("off", "first", "merge", "scope") else default
+
+
 def notes_semantic_floor(default: float) -> float:
     """Semantic re-check floor for lexical note hits; 0 disables the check."""
     raw = _setting("RETRIEVAL_NOTES_SEMANTIC", "retrieval.notesSemantic", "")

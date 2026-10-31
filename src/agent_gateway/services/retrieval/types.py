@@ -32,13 +32,22 @@ class ModelSpec:
 class Query:
     """A retrieval request.
 
-    `text` is what the caller typed. `root_text` is the untranslated original
-    when the caller rewrote it; everything else only tunes how arms behave.
+    `text` is what the caller typed. Everything else is optional context a
+    caller that knows more can supply: keywords carry the caller's own emphasis
+    and groups split a query into independently scored term sets.
     """
 
     text: str
     language: str = "unknown"
     root_text: str = ""
+    #: Terms the caller considers primary; each is retrieved on its own.
+    keywords: list[str] = field(default_factory=list)
+    #: Weight of hits a primary keyword fetched, relative to the raw query.
+    keyword_weight: float = 2.0
+    #: Weight of the raw query when keyword lists merge into one ranking.
+    query_weight: float = 1.0
+    #: Independent term sets; each yields its own hit list before merging.
+    groups: list[list[str]] = field(default_factory=list)
     #: Retrieval hint from the caller: semantic / lexical / auto.
     mode: str = "auto"
 

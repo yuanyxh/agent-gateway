@@ -103,7 +103,15 @@ from agent_gateway.services.retrieval.arms.recall import (  # noqa: F401
     update_cold_heat as _update_cold_heat,
 )
 from agent_gateway.services.retrieval import config as retrieval_config
-from agent_gateway.services.retrieval.fusion.score import HeatWeightedFusion
+from agent_gateway.services.retrieval.expand.query import (
+    expand_keywords,
+    expand_keywords_with_query,
+)
+from agent_gateway.services.retrieval.fusion.score import (
+    HeatWeightedFusion,
+    SumScoreFusion,
+)
+from agent_gateway.services.retrieval.scope import KeywordScope
 from agent_gateway.services.retrieval.gate.relevance import (
     LayerPresenceGate,
     RelativeRelevanceGate,
@@ -990,10 +998,20 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         include_archived=include_archived,
         include_superseded=include_superseded,
     )
+    # Callers that know more than a string can say so: keywords get their own
+    # a post-fusion boost reorders hits; they never add candidates.
+    keywords = arguments.get("keywords") or []
+    if isinstance(keywords, str):
+        keywords = [k.strip() for k in keywords.split(",") if k.strip()]
     request = Query(
         text=query,
         language=detect_language(query),
         root_text=query,
+        keywords=list(keywords),
+        keyword_weight=float(
+            arguments.get("keyword_weight")
+            or retrieval_config.stage_number("recall", "boost", "keyword_weight", 2.0)
+        ),
     )
     out = pipeline.run_query(request, limit, tool="recall")
     top = out["results"]
@@ -1010,6 +1028,8 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         "notes_count": sum(1 for r in top if r.get("layer") == "notes"),
         "trace_id": out["trace_id"],
     }
+    if "keyword_hits" in out:
+        payload["keyword_hits"] = out["keyword_hits"]
     if status == "weak_match":
         payload["hint"] = (
             "No semantic memory cleared the relevance floor; results are lexical or related context."
@@ -1057,12 +1077,61 @@ def _build_recall_pipeline(
     )
     semantic = [a for a in arms if not getattr(a, "fallback_only", False)]
     lexical = [a for a in arms if getattr(a, "fallback_only", False)]
+    mode = retrieval_config.keyword_mode("recall")
     if retrieval_config.stage_flag("recall", "run_all", False):
         # Opt-in comparison mode: no early stop, every arm fused once. The
         # fallback arm scores on a different scale, so this ranks across scales.
         stages = [Stage(name="all", arms=arms)]
     else:
-        stages = [
+        stages = []
+        if mode == "first":
+            # Keywords first, but only when they answer the query at least as
+            # well as a hot hit would: a keyword always matches something, so
+            # stopping on any hit hands the ranking to the noisiest tier.
+            stages.append(
+                Stage(
+                    name="keyword",
+                    arms=semantic,
+                    subqueries=expand_keywords,
+                    fusion=SumScoreFusion(),
+                    accept=_keyword_accept(
+                        retrieval_config.stage_number(
+                            "recall", "keyword", "min_score", floors["hot"]
+                        )
+                    ),
+                    min_hits=int(
+                        retrieval_config.stage_number(
+                            "recall", "keyword", "min_hits", 1
+                        )
+                    ),
+                )
+            )
+        if mode == "scope":
+            # Keywords bound the range, the query ranks inside it. The scope
+            # runs the raw-query retrieval first, then keeps only what the
+            # keywords matched; an empty scope falls through to the next tier.
+            stages.append(
+                Stage(
+                    name="keyword_scope",
+                    arms=semantic,
+                    scope=KeywordScope(),
+                )
+            )
+        if mode == "merge":
+            stages.append(
+                Stage(
+                    name="keyword_merge",
+                    arms=semantic,
+                    subqueries=expand_keywords_with_query,
+                    fusion=SumScoreFusion(),
+                    min_hits=int(
+                        retrieval_config.stage_number(
+                            "recall", "keyword", "min_hits", 1
+                        )
+                    ),
+                )
+            )
+        stages.append(
             Stage(
                 name="semantic",
                 arms=semantic,
@@ -1070,7 +1139,7 @@ def _build_recall_pipeline(
                     retrieval_config.stage_number("recall", "semantic", "min_hits", 1)
                 ),
             )
-        ]
+        )
         if lexical:
             stages.append(
                 Stage(
@@ -1096,6 +1165,21 @@ def _build_recall_pipeline(
         expander=expand_episodes,
         stages=stages,
     )
+
+
+def _keyword_accept(floor: float):
+    """Accept a keyword tier only when its best hit clears the semantic floor.
+
+    Stage items still carry the caller's keyword weight; dividing it back out
+    keeps the comparison against `floor` on the embedder's own scale.
+    """
+
+    def accept(query, items) -> bool:
+        weight = float(query.keyword_weight) or 1.0
+        best = max((float(item.score) for item in items), default=0.0) / weight
+        return best >= floor
+
+    return accept
 
 
 def _build_recall_gate():
