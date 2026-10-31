@@ -16,10 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from agent_gateway.services.retrieval import config, trace  # noqa: E402
 from agent_gateway.services.retrieval.fusion.score import HeatWeightedFusion  # noqa: E402
 from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate  # noqa: E402
-from agent_gateway.services.retrieval.gate.thresholds import (  # noqa: E402
-    UncalibratedThresholds,
-    floors_for,
-)
+from agent_gateway.services.retrieval.gate import calibrate  # noqa: E402
+from agent_gateway.services.retrieval.gate.thresholds import floors_for  # noqa: E402
 from agent_gateway.services.retrieval.expand.query import expand_query  # noqa: E402
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage  # noqa: E402
 from agent_gateway.services.retrieval.protocol import Retriever  # noqa: E402
@@ -126,6 +124,31 @@ class StageTest(unittest.TestCase):
         self.assertEqual(seen, ["q", "q"])
 
 
+class AutoCalibrateTest(unittest.TestCase):
+    def test_self_score_requires_the_record_in_its_own_results(self):
+        def search(probe):
+            return {"甲记忆开头": [("a", 0.8), ("b", 0.5)], "乙记忆开头": [("c", 0.6)]}[
+                probe
+            ]
+
+        scores = calibrate.self_scores(
+            [("a", "甲记忆开头"), ("b", "乙记忆开头")], search
+        )
+
+        self.assertEqual(scores, [0.8])
+
+    def test_floor_is_the_median_self_score(self):
+        scores = [0.5 + i * 0.01 for i in range(40)]
+
+        self.assertEqual(calibrate.floor_from_scores(scores), 0.7)
+
+    def test_too_few_probes_yields_no_floor(self):
+        self.assertIsNone(calibrate.floor_from_scores([0.7, 0.8]))
+
+    def test_percentile_picks_expected_index(self):
+        self.assertEqual(calibrate.percentile([1.0, 2.0, 3.0, 4.0, 5.0], 0.5), 3.0)
+
+
 class AnalyzerTest(unittest.TestCase):
     def test_whitespace_boundaries_are_preserved(self):
         self.assertEqual(split_terms("RSS 治理 日报"), ["rss", "治理", "日报"])
@@ -197,9 +220,12 @@ class GateTest(unittest.TestCase):
         self.assertEqual(verdict.status, "ok")
         self.assertEqual(verdict.reason, "semantic_layer_hit")
 
-    def test_unknown_model_fails_loudly(self):
-        with self.assertRaises(KeyError):
-            floors_for("no_such_model")
+    def test_unknown_model_gets_provisional_floors(self):
+        from agent_gateway.services.retrieval.gate import thresholds
+
+        floors = floors_for("no_such_model")
+        self.assertEqual(floors, thresholds.PROVISIONAL_FLOORS)
+        self.assertFalse(thresholds.is_calibrated("no_such_model"))
         self.assertEqual(floors_for("minilm384")["hot"], 0.68)
 
     def test_calibrated_model_ships_measured_values(self):
@@ -212,14 +238,14 @@ class GateTest(unittest.TestCase):
         self.assertAlmostEqual(floors["cold"], 0.55)
         self.assertNotIn("jinazh768", thresholds.SEEDED_TAGS)
 
-    def test_missing_floor_raises(self):
+    def test_partial_table_falls_back_to_provisional(self):
         from agent_gateway.services.retrieval.gate import thresholds
 
         original = thresholds.FLOORS["jinazh768"]
         try:
             thresholds.FLOORS["jinazh768"] = {**original, "hot": None}
-            with self.assertRaises(UncalibratedThresholds):
-                floors_for("jinazh768")
+            floors = floors_for("jinazh768")
+            self.assertEqual(floors, thresholds.PROVISIONAL_FLOORS)
         finally:
             thresholds.FLOORS["jinazh768"] = original
 

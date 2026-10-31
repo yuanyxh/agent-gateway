@@ -516,6 +516,20 @@ async def serve():
         archive_scheduler(lambda: (get_hot_memory(), get_qdrant()), ensure_hot_memory)
     )
 
+    async def auto_calibrate_on_start():
+        """Calibrate an unfamiliar embedder before callers judge its results."""
+        from agent_gateway.services.mcp.server_embed import EMBEDDER_SPEC
+        from agent_gateway.services.retrieval import autocalibrate
+        from agent_gateway.services.retrieval.gate import thresholds
+
+        tag = EMBEDDER_SPEC.tag
+        if thresholds.is_calibrated(tag):
+            return
+        await ensure_hot_memory()
+        await asyncio.to_thread(autocalibrate.run, tag)
+
+    asyncio.create_task(auto_calibrate_on_start())
+
     transport = StreamableHTTPServerTransport(
         mcp_session_id=None, is_json_response_enabled=True
     )
@@ -738,6 +752,25 @@ async def serve():
             {"stats": retrieval_trace.stats(), "recent": retrieval_trace.recent(limit)}
         )
 
+    async def api_retrieval_calibrate(request):
+        """Measure this model's floors from the store; writes the override file."""
+        from agent_gateway.services.mcp.server_embed import EMBEDDER_SPEC
+        from agent_gateway.services.retrieval import autocalibrate
+
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - an empty body is the common case
+            pass
+        tag = str(body.get("tag") or EMBEDDER_SPEC.tag)
+        await ensure_hot_memory()
+        if body.get("write", True):
+            result = await asyncio.to_thread(autocalibrate.run, tag)
+        else:
+            measured = await asyncio.to_thread(autocalibrate.measure)
+            result = {"tag": tag, "written": None, **measured}
+        return JSONResponse(result)
+
     async def api_retrieval_diagnose(request):
         """Probe each hot-layer search stage to locate an empty-result cause."""
         from agent_gateway.services.mcp import server_embed
@@ -871,6 +904,11 @@ async def serve():
             Route(
                 "/api/retrieval/diagnose",
                 endpoint=api_retrieval_diagnose,
+                methods=["POST"],
+            ),
+            Route(
+                "/api/retrieval/calibrate",
+                endpoint=api_retrieval_calibrate,
                 methods=["POST"],
             ),
         ]

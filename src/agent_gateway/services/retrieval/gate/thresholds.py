@@ -38,6 +38,18 @@ FLOORS: dict[str, dict[str, float | None]] = {
 }
 
 
+#: Used only between startup and the first successful auto-calibration. Not a
+#: model-agnostic guess: it keeps recall working instead of failing every call
+#: while the new embedder is still being measured.
+PROVISIONAL_FLOORS: dict[str, float] = {
+    "hot": 0.55,
+    "cold": 0.50,
+    "expanded": 0.50,
+    "search": 0.35,
+    "notes_coverage": 0.50,
+    "notes_semantic": 0.35,
+}
+
 #: Tags whose floors are copied from another model and need real measurements.
 SEEDED_TAGS: set[str] = set()
 _warned: set[str] = set()
@@ -75,17 +87,31 @@ def _override(tag: str) -> dict[str, float] | None:
     return {key: float(entry[key]) for key in FLOOR_KEYS if key in entry}
 
 
+def is_calibrated(tag: str) -> bool:
+    """True when this tag has floors from an override file or the built-in table."""
+    if _override(tag) is not None:
+        return True
+    entry = FLOORS.get(tag)
+    return entry is not None and not any(entry.get(k) is None for k in FLOOR_KEYS)
+
+
 def floors_for(tag: str) -> dict[str, float]:
+    """Floors for a model; provisional values until auto-calibration lands.
+
+    `PROVISIONAL_FLOORS` keeps recall answering during the first minutes of an
+    unfamiliar model instead of failing every call. Once the calibration task
+    writes the override file this returns measured numbers.
+    """
     tuned = _override(tag)
     if tuned is not None:
         return tuned
     entry = FLOORS.get(tag)
-    if entry is None:
-        raise KeyError(f"No threshold table for model tag {tag!r}")
-    missing = [key for key in FLOOR_KEYS if entry.get(key) is None]
-    if missing:
-        raise UncalibratedThresholds(
-            f"Thresholds for model tag {tag!r} are not calibrated: {', '.join(missing)}. "
-            f"Run scripts/calibrate_thresholds.py before enabling this model."
+    if entry is not None and not any(entry.get(k) is None for k in FLOOR_KEYS):
+        return {key: float(entry[key]) for key in FLOOR_KEYS if entry[key] is not None}
+    if tag not in _warned:
+        _warned.add(tag)
+        logger.warning(
+            f"[thresholds] no calibrated floors for {tag!r}; using provisional "
+            f"values until auto-calibration finishes"
         )
-    return {key: float(entry[key]) for key in FLOOR_KEYS if entry[key] is not None}
+    return dict(PROVISIONAL_FLOORS)
