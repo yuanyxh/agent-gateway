@@ -179,6 +179,32 @@ class StageTest(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in out["results"]], ["hot", "cold"])
 
+    def test_keyword_hits_report_which_terms_matched(self):
+        pipeline = Pipeline(
+            name="test",
+            arms=[FakeArm("a", [item("x", 0.5, content="热键注册说明")])],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run_query(
+                Query(text="面板注册", keywords=["热键", "不存在的词"]), limit=5
+            )
+
+        self.assertEqual(out["keyword_hits"], ["热键"])
+
+    def test_keyword_hits_absent_without_keywords(self):
+        pipeline = Pipeline(
+            name="test",
+            arms=[FakeArm("a", [item("x", 0.5, content="热键注册说明")])],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run("面板注册", limit=5)
+
+        self.assertNotIn("keyword_hits", out)
+
 
 class AnalyzerTest(unittest.TestCase):
     def test_whitespace_boundaries_are_preserved(self):

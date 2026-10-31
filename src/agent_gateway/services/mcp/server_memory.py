@@ -1020,6 +1020,8 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         "notes_count": sum(1 for r in top if r.get("layer") == "notes"),
         "trace_id": out["trace_id"],
     }
+    if "keyword_hits" in out:
+        payload["keyword_hits"] = out["keyword_hits"]
     if status == "weak_match":
         payload["hint"] = (
             "No semantic memory cleared the relevance floor; results are lexical or related context."

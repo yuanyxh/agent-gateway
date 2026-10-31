@@ -61,7 +61,7 @@ class Pipeline:
         lexical_only_as_fallback: bool = False,
         stages: list[Stage] | None = None,
         query_expander: Callable[[Query], list[SubQuery]] | None = None,
-        booster: Callable[[Query, list[RetrievedItem]], None] | None = None,
+        booster: Callable[[Query, list[RetrievedItem]], list[str] | None] | None = None,
     ):
         self.name = name
         self.arms = arms
@@ -185,8 +185,9 @@ class Pipeline:
 
         fuse_started = time.perf_counter()
         items = self.fusion.fuse(arms, limit * 2)
+        keyword_hits: list[str] = []
         if self.booster is not None:
-            self.booster(query, items)
+            keyword_hits = self.booster(query, items) or []
             # Re-sort with the fusion's own key: a plain score sort would drop
             # the heat multiplier even when no keyword was supplied.
             rank_key = getattr(self.fusion, "rank_key", lambda i: i.score)
@@ -219,6 +220,11 @@ class Pipeline:
             "_arms": arms,
             "_latency": latency,
         }
+        if query.keywords:
+            # Present only when the caller asked for keywords: a term absent
+            # here matched no returned hit, so the call can be retried without
+            # wiping the rest of the payload shape.
+            payload["keyword_hits"] = keyword_hits
         if debug:
             payload["trace"] = {
                 key: value for key, value in trace_payload.items() if key != "query"

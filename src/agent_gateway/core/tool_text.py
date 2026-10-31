@@ -30,10 +30,14 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     "param.layer": "Layer to delete from; default hot",
     "param.layers": "Layers to search: hot, cold, or both; default both",
     "param.keywords": (
-        "Optional primary terms; each is searched separately and scored with "
-        "keyword_weight"
+        "Optional terms that re-rank results already retrieved: a result whose "
+        "text contains one is scaled by keyword_weight. They never fetch extra "
+        "candidates, and those that match nothing are reported in keyword_hits."
     ),
-    "param.keyword_weight": "Score multiplier for keywords; default 2.0",
+    "param.keyword_weight": (
+        "Multiplier applied to results containing a keyword; 1.0 disables the "
+        "re-rank. Default 2.0"
+    ),
     "param.include_superseded": (
         "Include memories retired by a newer revision (history); deleted memories "
         "are never returned"
