@@ -30,6 +30,7 @@ from agent_gateway.services.retrieval.expand.query import (  # noqa: E402
 )
 from agent_gateway.services.retrieval.fusion.score import SumScoreFusion  # noqa: E402
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage  # noqa: E402
+from agent_gateway.services.retrieval.scope import KeywordScope  # noqa: E402
 from agent_gateway.services.retrieval.protocol import Retriever  # noqa: E402
 from agent_gateway.services.retrieval.text.analyzer import (  # noqa: E402
     detect_language,
@@ -284,6 +285,55 @@ class KeywordTierTest(unittest.TestCase):
 
         self.assertEqual(seen, ["面板注册"])
         self.assertEqual(out["count"], 1)
+
+
+class KeywordScopeTest(unittest.TestCase):
+    def _hits(self):
+        return [
+            item("a", 0.8, content="项目 A 发布记录"),
+            item("b", 0.8, content="项目 B 发布记录"),
+            item("c", 0.8, content="上线记录"),
+        ]
+
+    def test_all_keywords_intersect_first(self):
+        hits = self._hits()
+
+        out = KeywordScope()(Query(text="q", keywords=["项目", "B"]), hits)
+
+        self.assertEqual([i.id for i in out], ["b"])
+
+    def test_partial_claim_is_not_filtered_on(self):
+        hits = self._hits()
+
+        out = KeywordScope()(Query(text="q", keywords=["项目", "上线"]), hits)
+
+        self.assertEqual([i.id for i in out], ["a", "b", "c"])
+
+    def test_unanchorable_keyword_leaves_hits_alone(self):
+        hits = self._hits()
+
+        out = KeywordScope()(Query(text="q", keywords=["无关"]), hits)
+
+        self.assertEqual([i.id for i in out], ["a", "b", "c"])
+
+    def test_scope_survives_fusion(self):
+        arm = FakeArm("dense", [item("keep", 0.6), item("drop", 0.9)])
+        scoped = Stage(
+            name="keyword_scope",
+            arms=[arm],
+            scope=lambda q, items, limit, filters: [i for i in items if i.id == "keep"],
+        )
+        pipeline = Pipeline(
+            name="test",
+            arms=[arm],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+            stages=[scoped, Stage(name="fallback", arms=[arm])],
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run_query(Query(text="q", keywords=["kw"]), limit=5)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["keep"])
 
 
 class AnalyzerTest(unittest.TestCase):

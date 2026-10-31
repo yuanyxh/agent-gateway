@@ -41,6 +41,8 @@ class Stage:
     subqueries: Callable[[Query], list[SubQuery]] | None = None
     #: Fusion for this tier alone; None means the pipeline-level fusion.
     fusion: Any = None
+    #: Narrows this tier's hits before the accept check; None means no filter.
+    scope: Callable[..., list["RetrievedItem"]] | None = None
 
     def __bool__(self) -> bool:
         return bool(self.arms)
@@ -146,6 +148,20 @@ class Pipeline:
                     result = self._run_arm(arm, sub_query, arm_limit, filters)
                     results.append(_weighted(result, sub))
             stage_items = [item for result in results for item in result.items]
+            if stage.scope is not None:
+                stage_items = stage.scope(query, stage_items, arm_limit, filters)
+                # Fusion re-reads the arm results, so the narrowed set has to
+                # replace them or the filter would be undone one step later.
+                kept = {id(item) for item in stage_items}
+                results = [
+                    ArmResult(
+                        name=result.name,
+                        items=[item for item in result.items if id(item) in kept],
+                        elapsed_ms=result.elapsed_ms,
+                        error=result.error,
+                    )
+                    for result in results
+                ]
             if stage.accepts(query, stage_items):
                 return results, stage.fusion or self.fusion
         return [], self.fusion

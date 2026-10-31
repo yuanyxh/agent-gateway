@@ -111,6 +111,7 @@ from agent_gateway.services.retrieval.fusion.score import (
     HeatWeightedFusion,
     SumScoreFusion,
 )
+from agent_gateway.services.retrieval.scope import KeywordScope
 from agent_gateway.services.retrieval.gate.relevance import (
     LayerPresenceGate,
     RelativeRelevanceGate,
@@ -1103,6 +1104,17 @@ def _build_recall_pipeline(
                             "recall", "keyword", "min_hits", 1
                         )
                     ),
+                )
+            )
+        if mode == "scope":
+            # Keywords bound the range, the query ranks inside it. The scope
+            # runs the raw-query retrieval first, then keeps only what the
+            # keywords matched; an empty scope falls through to the next tier.
+            stages.append(
+                Stage(
+                    name="keyword_scope",
+                    arms=semantic,
+                    scope=KeywordScope(),
                 )
             )
         if mode == "merge":
