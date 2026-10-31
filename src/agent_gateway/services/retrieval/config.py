@@ -83,6 +83,19 @@ def stage_number(
         return default
 
 
+def stage_flag(profile: str, name: str, default: bool) -> bool:
+    """Boolean knob for one profile, same lookup order as `stage_number`.
+
+    `run_all` turns the tiered walk into a single tier: every arm runs and the
+    fused list is ranked once, instead of stopping at the first acceptable tier.
+    """
+    key = f"RETRIEVAL_{profile}_{name}".upper().replace("-", "_")
+    raw = _setting(key, f"retrieval.plans.{profile}.{name}", "")
+    if not raw:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 def notes_semantic_floor(default: float) -> float:
     """Semantic re-check floor for lexical note hits; 0 disables the check."""
     raw = _setting("RETRIEVAL_NOTES_SEMANTIC", "retrieval.notesSemantic", "")

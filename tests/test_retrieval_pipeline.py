@@ -25,7 +25,6 @@ from agent_gateway.services.retrieval.gate.thresholds import (  # noqa: E402
 )
 from agent_gateway.services.retrieval.expand.query import expand_query  # noqa: E402
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage  # noqa: E402
-from agent_gateway.services.retrieval.router import Router  # noqa: E402
 from agent_gateway.services.retrieval.protocol import Retriever  # noqa: E402
 from agent_gateway.services.retrieval.text.analyzer import (  # noqa: E402
     detect_language,
@@ -164,45 +163,21 @@ class StageTest(unittest.TestCase):
         self.assertEqual(seen, ["面板注册"])
         self.assertEqual(out["results"][0]["id"], "kw")
 
-
-class RouterTest(unittest.TestCase):
-    def test_known_intent_uses_its_chain(self):
-        path_arm = FakeArm("path", [item("f", 0.9)])
-        default_arm = FakeArm("def", [item("d", 0.5)])
-        router = Router(
-            default=lambda q: [Stage("default", [default_arm])],
-            by_intent={"find_file_path": lambda q: [Stage("path", [path_arm])]},
-        )
+    def test_no_keywords_keeps_fusion_order(self):
+        cold = item("cold", 0.70, layer="cold")
+        cold.extra["heat_score"] = 0.0
+        hot = item("hot", 0.60, layer="hot")
+        hot.extra["heat_score"] = 1.0
         pipeline = Pipeline(
             name="test",
-            arms=[],
-            fusion=MaxScoreFusion(),
+            arms=[FakeArm("a", [cold, hot])],
+            fusion=HeatWeightedFusion(),
             gate=LayerPresenceGate(),
-            router=router,
         )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run("q", limit=5)
 
-        out = pipeline.run_query(Query(text="q", intent="find_file_path"), limit=5)
-
-        self.assertEqual([row["id"] for row in out["results"]], ["f"])
-
-    def test_unknown_intent_falls_back(self):
-        path_arm = FakeArm("path", [item("f", 0.9)])
-        default_arm = FakeArm("def", [item("d", 0.5)])
-        router = Router(
-            default=lambda q: [Stage("default", [default_arm])],
-            by_intent={"find_file_path": lambda q: [Stage("path", [path_arm])]},
-        )
-        pipeline = Pipeline(
-            name="test",
-            arms=[],
-            fusion=MaxScoreFusion(),
-            gate=LayerPresenceGate(),
-            router=router,
-        )
-
-        out = pipeline.run_query(Query(text="q", intent="whatever"), limit=5)
-
-        self.assertEqual([row["id"] for row in out["results"]], ["d"])
+        self.assertEqual([row["id"] for row in out["results"]], ["hot", "cold"])
 
 
 class AnalyzerTest(unittest.TestCase):
@@ -434,6 +409,12 @@ class ConfigTest(unittest.TestCase):
             os.environ.pop("RETRIEVAL_GATE", None)
             os.environ.pop("RETRIEVAL_GATE", None)
             self.assertEqual(config.gate_mode(), "layer")
+
+    def test_stage_flag_reads_env_and_defaults_off(self):
+        with mock.patch.dict(os.environ, {"RETRIEVAL_RECALL_RUN_ALL": "true"}):
+            self.assertTrue(config.stage_flag("recall", "run_all", False))
+        with mock.patch.dict(os.environ, {"RETRIEVAL_RECALL_RUN_ALL": "0"}):
+            self.assertFalse(config.stage_flag("recall", "run_all", True))
 
 
 class ProtocolTest(unittest.TestCase):

@@ -61,7 +61,6 @@ class Pipeline:
         lexical_only_as_fallback: bool = False,
         stages: list[Stage] | None = None,
         query_expander: Callable[[Query], list[SubQuery]] | None = None,
-        router: Any = None,
         booster: Callable[[Query, list[RetrievedItem]], None] | None = None,
     ):
         self.name = name
@@ -73,8 +72,6 @@ class Pipeline:
         self.lexical_only_as_fallback = lexical_only_as_fallback
         self.query_expander = query_expander or expand_query
         self.stages = stages if stages is not None else self._compile(arms)
-        #: Optional intent router; when set it overrides the fixed stage chain.
-        self.router = router
         #: Keywords reorder fused hits; they never fetch new candidates.
         self.booster = booster if booster is not None else keyword_boost
 
@@ -130,15 +127,13 @@ class Pipeline:
         subqueries = self.query_expander(query) or [
             SubQuery(text=query.text, weight=1.0, label="text")
         ]
-        stages = self.router.stages_for(query) if self.router else self.stages
-        for stage in stages:
+        for stage in self.stages:
             results: list[ArmResult] = []
             for sub in subqueries:
                 sub_query = Query(
                     text=sub.text,
                     language=query.language,
                     root_text=sub.text,
-                    intent=query.intent,
                     mode=query.mode,
                 )
                 for arm in stage.arms:
@@ -178,7 +173,6 @@ class Pipeline:
                 text=query.text,
                 language=detect_language(query.text),
                 root_text=query.root_text or query.text,
-                intent=query.intent,
                 keywords=list(query.keywords),
                 keyword_weight=query.keyword_weight,
                 groups=query.groups,
@@ -193,7 +187,10 @@ class Pipeline:
         items = self.fusion.fuse(arms, limit * 2)
         if self.booster is not None:
             self.booster(query, items)
-            items.sort(key=lambda i: i.score, reverse=True)
+            # Re-sort with the fusion's own key: a plain score sort would drop
+            # the heat multiplier even when no keyword was supplied.
+            rank_key = getattr(self.fusion, "rank_key", lambda i: i.score)
+            items.sort(key=rank_key, reverse=True)
         latency["fuse"] = round((time.perf_counter() - fuse_started) * 1000, 2)
 
         related = self.expander(query, items[:limit]) if self.expander else []

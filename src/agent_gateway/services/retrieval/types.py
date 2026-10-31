@@ -33,16 +33,13 @@ class Query:
     """A retrieval request.
 
     `text` is what the caller typed. Everything else is optional context a
-    caller that knows more can supply: an intent label selects a strategy chain,
-    keywords carry the caller's own emphasis, and groups split a query into
-    independently scored term sets.
+    caller that knows more can supply: keywords carry the caller's own emphasis
+    and groups split a query into independently scored term sets.
     """
 
     text: str
     language: str = "unknown"
     root_text: str = ""
-    #: Strategy selector, e.g. FIND_FILE_PATH. Empty means "no hint".
-    intent: str = ""
     #: Terms the caller considers primary; scored above the raw text.
     keywords: list[str] = field(default_factory=list)
     keyword_weight: float = 2.0

@@ -28,6 +28,10 @@ class HeatWeightedFusion:
         self._base = base
         self._weight = weight
 
+    def rank_key(self, item: RetrievedItem) -> float:
+        """Ordering key shared with post-fusion boosts, so a re-sort keeps it."""
+        return heat_key(item, self._heat_max, self._base, self._weight)
+
     def fuse(
         self,
         arms: list[ArmResult],
@@ -41,11 +45,7 @@ class HeatWeightedFusion:
                 existing = merged.get(item.id)
                 if existing is None or item.score * factor > existing.score:
                     merged[item.id] = item
-        ordered = sorted(
-            merged.values(),
-            key=lambda i: heat_key(i, self._heat_max, self._base, self._weight),
-            reverse=True,
-        )
+        ordered = sorted(merged.values(), key=self.rank_key, reverse=True)
         return ordered[:limit]
 
 
@@ -56,6 +56,9 @@ class MaxScoreFusion:
     """
 
     name = "max_score"
+
+    def rank_key(self, item: RetrievedItem) -> float:
+        return float(item.score)
 
     def fuse(
         self,
