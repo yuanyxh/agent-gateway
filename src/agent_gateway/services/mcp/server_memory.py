@@ -102,12 +102,8 @@ from agent_gateway.services.retrieval.arms.recall import (  # noqa: F401
     project_hot_result as _project_hot_result,
     update_cold_heat as _update_cold_heat,
 )
-from agent_gateway.services.retrieval import config as retrieval_config
 from agent_gateway.services.retrieval.fusion.score import HeatWeightedFusion
-from agent_gateway.services.retrieval.gate.relevance import (
-    LayerPresenceGate,
-    RelativeRelevanceGate,
-)
+from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage
 from agent_gateway.services.retrieval.text.analyzer import detect_language, split_terms
@@ -304,9 +300,7 @@ def _cold_and_notes_arms(
         ColdMemoryArm(min_score=min_score, include_archived=include_archived),
         NotesArm(
             min_coverage=RECALL_NOTES_MIN_COVERAGE,
-            min_semantic=retrieval_config.notes_semantic_floor(
-                floors_for(EMBEDDER_SPEC.tag)["notes_semantic"]
-            ),
+            min_semantic=floors_for(EMBEDDER_SPEC.tag)["notes_semantic"],
         ),
     ]
 
@@ -1050,59 +1044,22 @@ def _build_recall_pipeline(
     arms.append(
         NotesArm(
             min_coverage=floors["notes_coverage"],
-            min_semantic=retrieval_config.notes_semantic_floor(
-                floors["notes_semantic"]
-            ),
+            min_semantic=floors["notes_semantic"],
         )
     )
     semantic = [a for a in arms if not getattr(a, "fallback_only", False)]
     lexical = [a for a in arms if getattr(a, "fallback_only", False)]
-    if retrieval_config.stage_flag("recall", "run_all", False):
-        # Opt-in comparison mode: no early stop, every arm fused once. The
-        # fallback arm scores on a different scale, so this ranks across scales.
-        stages = [Stage(name="all", arms=arms)]
-    else:
-        stages = [
-            Stage(
-                name="semantic",
-                arms=semantic,
-                min_hits=int(
-                    retrieval_config.stage_number("recall", "semantic", "min_hits", 1)
-                ),
-            )
-        ]
-        if lexical:
-            stages.append(
-                Stage(
-                    name="fallback",
-                    arms=lexical,
-                    min_hits=int(
-                        retrieval_config.stage_number(
-                            "recall", "fallback", "min_hits", 1
-                        )
-                    ),
-                )
-            )
+    stages = [Stage(name="semantic", arms=semantic)]
+    if lexical:
+        stages.append(Stage(name="fallback", arms=lexical))
     return Pipeline(
         name="recall",
         arms=arms,
-        fusion=HeatWeightedFusion(
-            heat_max=HEAT_MAX,
-            weight=retrieval_config.stage_number(
-                "recall", "fusion", "heat_weight", 0.0
-            ),
-        ),
-        gate=_build_recall_gate(),
+        fusion=HeatWeightedFusion(heat_max=HEAT_MAX, weight=0.0),
+        gate=LayerPresenceGate(),
         expander=expand_episodes,
         stages=stages,
     )
-
-
-def _build_recall_gate():
-    if retrieval_config.gate_mode() != "relative":
-        return LayerPresenceGate()
-    floors = floors_for(EMBEDDER_SPEC.tag)
-    return RelativeRelevanceGate(floor=floors["cold"], min_margin=0.06)
 
 
 def _bound_catch_up_results(

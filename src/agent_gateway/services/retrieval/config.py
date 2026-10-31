@@ -1,14 +1,14 @@
-"""Profile switches.
+"""Index naming and model descriptors.
 
-New stages default to off so the migrated pipeline is behaviour-identical until
-a profile is enabled explicitly.
+Retrieval behaviour is fixed in code. What varies per deployment is the
+embedding model, and that only affects collection names and the threshold
+table keyed by model tag.
 """
 
 from __future__ import annotations
 
 import os
 
-from agent_gateway.core import config_loader
 from agent_gateway.services.retrieval.types import ModelSpec
 
 _MODEL_TAGS = {
@@ -42,67 +42,3 @@ def model_spec(model_id: str, dims: int) -> ModelSpec:
         query_prefix=os.environ.get("EMBEDDER_QUERY_PREFIX", ""),
         doc_prefix=os.environ.get("EMBEDDER_DOC_PREFIX", ""),
     )
-
-
-def _setting(env_key: str, yaml_key: str, default: str) -> str:
-    """Env wins, then config.yaml, then default."""
-    raw = os.environ.get(env_key)
-    if raw is not None:
-        return raw.strip()
-    node = config_loader.value(yaml_key, default)
-    if isinstance(node, list):
-        return ",".join(str(item) for item in node)
-    return str(node).strip() if node is not None else default
-
-
-def gate_mode(profile: str = "") -> str:
-    return _setting("RETRIEVAL_GATE", "retrieval.gate", "layer") or "layer"
-
-
-def stage_number(
-    profile: str,
-    stage: str,
-    name: str,
-    default: float,
-) -> float:
-    """Numeric knob for one stage, overridable without a code change.
-
-    Lookup order: `RETRIEVAL_<PROFILE>_<STAGE>_<NAME>` env, then
-    `retrieval.plans.<profile>.<stage>.<name>` in config.yaml, then default.
-    Values live outside the code because the right number depends on the data
-    a deployment holds, not on the algorithm.
-    """
-    key = f"RETRIEVAL_{profile}_{stage}_{name}".upper().replace("-", "_")
-    yaml_key = f"retrieval.plans.{profile}.{stage}.{name}"
-    raw = _setting(key, yaml_key, "")
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
-def stage_flag(profile: str, name: str, default: bool) -> bool:
-    """Boolean knob for one profile, same lookup order as `stage_number`.
-
-    `run_all` turns the tiered walk into a single tier: every arm runs and the
-    fused list is ranked once, instead of stopping at the first acceptable tier.
-    """
-    key = f"RETRIEVAL_{profile}_{name}".upper().replace("-", "_")
-    raw = _setting(key, f"retrieval.plans.{profile}.{name}", "")
-    if not raw:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def notes_semantic_floor(default: float) -> float:
-    """Semantic re-check floor for lexical note hits; 0 disables the check."""
-    raw = _setting("RETRIEVAL_NOTES_SEMANTIC", "retrieval.notesSemantic", "")
-    if raw in ("", str(default)):
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        return default
-    return max(0.0, value)

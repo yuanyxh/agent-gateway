@@ -15,10 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agent_gateway.services.retrieval import config, trace  # noqa: E402
 from agent_gateway.services.retrieval.fusion.score import HeatWeightedFusion  # noqa: E402
-from agent_gateway.services.retrieval.gate.relevance import (  # noqa: E402
-    LayerPresenceGate,
-    RelativeRelevanceGate,
-)
+from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate  # noqa: E402
 from agent_gateway.services.retrieval.gate.thresholds import (  # noqa: E402
     UncalibratedThresholds,
     floors_for,
@@ -200,30 +197,6 @@ class GateTest(unittest.TestCase):
         self.assertEqual(verdict.status, "ok")
         self.assertEqual(verdict.reason, "semantic_layer_hit")
 
-    def test_relative_gate_requires_margin_or_anchor(self):
-        gate = RelativeRelevanceGate(floor=0.5, min_margin=0.1)
-        flat = [item("a", 0.62), item("b", 0.61), item("c", 0.60)]
-
-        verdict = gate.judge(Query(text="abc"), flat)
-        self.assertEqual(verdict.status, "weak_match")
-        self.assertEqual(verdict.reason, "insufficient_margin")
-
-    def test_relative_gate_passes_on_lexical_anchor(self):
-        gate = RelativeRelevanceGate(floor=0.9, min_margin=0.5)
-        items = [item("a", 0.3, content="episode expansion notes")]
-
-        verdict = gate.judge(Query(text="episode"), items)
-        self.assertEqual(verdict.status, "ok")
-        self.assertTrue(verdict.lexical_anchor)
-
-    def test_relative_gate_passes_on_floor_and_margin(self):
-        gate = RelativeRelevanceGate(floor=0.5, min_margin=0.1)
-        items = [item("a", 0.81), item("b", 0.55), item("c", 0.50)]
-
-        verdict = gate.judge(Query(text="zzz"), items)
-        self.assertEqual(verdict.status, "ok")
-        self.assertEqual(verdict.reason, "floor_and_margin")
-
     def test_unknown_model_fails_loudly(self):
         with self.assertRaises(KeyError):
             floors_for("no_such_model")
@@ -353,20 +326,6 @@ class ConfigTest(unittest.TestCase):
             config.model_tag("jinaai/jina-embeddings-v2-base-zh"), "jinazh768"
         )
 
-    def test_gate_defaults_to_layer_mode(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("RETRIEVAL_GATE", None)
-            os.environ.pop("RETRIEVAL_GATE", None)
-            self.assertEqual(config.gate_mode(), "layer")
-
-    def test_stage_flag_reads_env_and_defaults_off(self):
-        with mock.patch.dict(os.environ, {"RETRIEVAL_RECALL_RUN_ALL": "true"}):
-            self.assertTrue(config.stage_flag("recall", "run_all", False))
-        with mock.patch.dict(os.environ, {"RETRIEVAL_RECALL_RUN_ALL": "0"}):
-            self.assertFalse(config.stage_flag("recall", "run_all", True))
-
-
-class ProtocolTest(unittest.TestCase):
     def test_arm_satisfies_retriever_protocol(self):
         self.assertIsInstance(FakeArm("a", []), Retriever)
 
