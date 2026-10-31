@@ -37,6 +37,10 @@ class Stage:
     #: Fewer hits than this counts as a miss and the walk continues. One weak
     #: row is worse than falling through: it hides every tier below it.
     min_hits: int = 1
+    #: Sub-queries this tier runs; None means the pipeline-wide expansion.
+    subqueries: Callable[[Query], list[SubQuery]] | None = None
+    #: Fusion for this tier alone; None means the pipeline-level fusion.
+    fusion: Any = None
 
     def __bool__(self) -> bool:
         return bool(self.arms)
@@ -116,18 +120,20 @@ class Pipeline:
 
     def _retrieve(
         self, query: Query, limit: int, filters: dict[str, Any] | None
-    ) -> list[ArmResult]:
-        """Walk the tiers; the first tier that yields stops the walk.
+    ) -> tuple[list[ArmResult], Any]:
+        """Walk the tiers; the first tier that accepts stops the walk.
 
         A stage only runs when every earlier stage came back empty, so a loose
-        stage can never dilute a precise hit. Caller keywords become weighted
-        sub-queries inside each stage: their hits keep the weight in the score.
+        stage can never dilute a precise hit. A stage may carry its own
+        sub-queries and fusion: the keyword tier scores one list per keyword and
+        adds them up, while the query tier keeps the pipeline fusion.
         """
         arm_limit = self.per_arm_limit or limit
-        subqueries = self.query_expander(query) or [
-            SubQuery(text=query.text, weight=1.0, label="text")
-        ]
         for stage in self.stages:
+            expander = stage.subqueries or self.query_expander
+            subqueries = expander(query)
+            if not subqueries:
+                continue
             results: list[ArmResult] = []
             for sub in subqueries:
                 sub_query = Query(
@@ -141,8 +147,8 @@ class Pipeline:
                     results.append(_weighted(result, sub))
             stage_items = [item for result in results for item in result.items]
             if stage.accepts(query, stage_items):
-                return results
-        return []
+                return results, stage.fusion or self.fusion
+        return [], self.fusion
 
     def run(
         self,
@@ -180,17 +186,17 @@ class Pipeline:
             )
 
         retrieve_started = time.perf_counter()
-        arms = self._retrieve(query, limit, filters)
+        arms, fusion = self._retrieve(query, limit, filters)
         latency["retrieve"] = round((time.perf_counter() - retrieve_started) * 1000, 2)
 
         fuse_started = time.perf_counter()
-        items = self.fusion.fuse(arms, limit * 2)
+        items = fusion.fuse(arms, limit * 2)
         keyword_hits: list[str] = []
         if self.booster is not None:
             keyword_hits = self.booster(query, items) or []
             # Re-sort with the fusion's own key: a plain score sort would drop
             # the heat multiplier even when no keyword was supplied.
-            rank_key = getattr(self.fusion, "rank_key", lambda i: i.score)
+            rank_key = getattr(fusion, "rank_key", lambda i: i.score)
             items.sort(key=rank_key, reverse=True)
         latency["fuse"] = round((time.perf_counter() - fuse_started) * 1000, 2)
 

@@ -23,7 +23,12 @@ from agent_gateway.services.retrieval.gate.thresholds import (  # noqa: E402
     UncalibratedThresholds,
     floors_for,
 )
-from agent_gateway.services.retrieval.expand.query import expand_query  # noqa: E402
+from agent_gateway.services.retrieval.expand.query import (  # noqa: E402
+    expand_keywords,
+    expand_keywords_with_query,
+    expand_query,
+)
+from agent_gateway.services.retrieval.fusion.score import SumScoreFusion  # noqa: E402
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage  # noqa: E402
 from agent_gateway.services.retrieval.protocol import Retriever  # noqa: E402
 from agent_gateway.services.retrieval.text.analyzer import (  # noqa: E402
@@ -204,6 +209,81 @@ class StageTest(unittest.TestCase):
             out = pipeline.run("面板注册", limit=5)
 
         self.assertNotIn("keyword_hits", out)
+
+
+class KeywordTierTest(unittest.TestCase):
+    def test_each_keyword_becomes_its_own_weighted_sub_query(self):
+        subs = expand_keywords(
+            Query(text="面板注册", keywords=["热键", " ", "缓存"], keyword_weight=3.0)
+        )
+        self.assertEqual([s.text for s in subs], ["热键", "缓存"])
+        self.assertEqual({s.weight for s in subs}, {3.0})
+
+    def test_merge_expansion_keeps_query_below_keywords(self):
+        subs = expand_keywords_with_query(
+            Query(text="面板注册", keywords=["热键"], keyword_weight=2.0)
+        )
+        weights = {s.label: s.weight for s in subs}
+        self.assertEqual(weights["text"], 1.0)
+        self.assertEqual(weights["kw0"], 2.0)
+
+    def test_sum_fusion_adds_scores_and_counts_support(self):
+        arms = [
+            ArmResult(name="a", items=[item("x", 0.4), item("y", 0.3)]),
+            ArmResult(name="b", items=[item("x", 0.2)]),
+        ]
+        fused = SumScoreFusion().fuse(arms, limit=5)
+        self.assertEqual(fused[0].id, "x")
+        self.assertAlmostEqual(fused[0].score, 0.6)
+        self.assertEqual(fused[0].extra["keyword_support"], 2)
+
+    def test_keyword_tier_stops_before_the_query_tier(self):
+        seen: list[str] = []
+        arm = FakeArm("dense", [item("doc", 0.6, content="热键注册")], seen)
+        pipeline = Pipeline(
+            name="test",
+            arms=[arm],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+            stages=[
+                Stage(
+                    name="keyword",
+                    arms=[arm],
+                    subqueries=expand_keywords,
+                    fusion=SumScoreFusion(),
+                ),
+                Stage(name="semantic", arms=[arm]),
+            ],
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run_query(Query(text="面板注册", keywords=["热键"]), limit=5)
+
+        self.assertEqual(seen, ["热键"])
+        self.assertEqual(out["results"][0]["id"], "doc")
+
+    def test_empty_keyword_tier_falls_through_to_the_query(self):
+        seen: list[str] = []
+        arm = FakeArm("dense", [item("doc", 0.6)], seen)
+        pipeline = Pipeline(
+            name="test",
+            arms=[arm],
+            fusion=MaxScoreFusion(),
+            gate=LayerPresenceGate(),
+            stages=[
+                Stage(
+                    name="keyword",
+                    arms=[arm],
+                    subqueries=lambda q: [],
+                    fusion=SumScoreFusion(),
+                ),
+                Stage(name="semantic", arms=[arm]),
+            ],
+        )
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run_query(Query(text="面板注册", keywords=["热键"]), limit=5)
+
+        self.assertEqual(seen, ["面板注册"])
+        self.assertEqual(out["count"], 1)
 
 
 class AnalyzerTest(unittest.TestCase):
