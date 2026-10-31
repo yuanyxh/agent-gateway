@@ -189,15 +189,6 @@ def proxy_environment(port: int) -> dict[str, str]:
     dedup = config_loader.value("modelProxy.skillDedupEnabled", True)
     env["MODEL_PROXY_SKILL_DEDUP"] = "0" if dedup is False else "1"
 
-    rule_injection = _mapping("modelProxy.ruleInjection")
-    if rule_injection:
-        env["MODEL_PROXY_RULE_INJECTION"] = _dumps(
-            {
-                "mode": str(rule_injection.get("mode", "progressive")),
-                "fullEvery": rule_injection.get("fullEvery", 0),
-            }
-        )
-
     output_filter = _output_filter()
     if output_filter is not None:
         env["MODEL_PROXY_OUTPUT_FILTER"] = _dumps(output_filter)

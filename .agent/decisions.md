@@ -46,3 +46,4 @@
 - D1、D2 必须由用户决定，记录用户原话要点。
 - D3 由 Agent 决定，记录默认值来源。
 - 决定被推翻时新增一条，不删除旧记录。
+| 2026-10-31 | D3 | 回退 progressive 规则注入：每条真实 user 消息重新注入完整规则块，删除 `modelProxy.ruleInjection` 与 `MODEL_PROXY_RULE_INJECTION` | Agent | 用户实测对「首条 full + 其余短提醒」的遵从率下降；配置面只增加行为漂移 | 需恢复时按 97d6240 复原 |

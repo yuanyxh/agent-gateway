@@ -36,6 +36,7 @@
 - 2026-10-28 抓页噪声治理：`article.py` 接入 trafilatura（空/短结果回退 `html_to_markdown`），websearch 丢弃 <200 字符页面、默认 `fetch_top=0`，boilerplate 规则补 related/recommend/rank 类名；结果排序对空/短摘要（<20 字符）降权 0.15
 - 2026-10-29 补 `set_memory_status` 生命周期测试（`tests/test_memory_status.py`，3 例）：恢复 active 清 `deleted_at` 与 supersede 字段、只清 retired 位保留 summarized 位；删除置 `deleted_at` 并置 retired 位
 - 2026-10-29 规则注入改确定性位置策略：首条真实 user 注入 full 块（`--rule_start`），其余注入内置英文短提示（`--short_rule_start`）；`MODEL_PROXY_RULE_INJECTION` 控制 `mode` 与 `fullEvery`；剥离兼容旧三横线块；已注入判定改为前缀匹配，避免正文提及标记时误跳过；新增 12 例测试
+- 2026-10-31 回退上述策略：每条真实 user 消息重新注入完整规则块（用户实测短提醒遵从率下降）；删除 `modelProxy.ruleInjection` 配置与 `MODEL_PROXY_RULE_INJECTION` env；剥离仍兼容历史三横线与短块；测试类改为 `InjectionTests`，全量 273 例通过
 - 2026-10-29 按 agent-vibe 1.0.0 升级基座：补 `seed_version` 与 `memory/INDEX.md`、`pre-commit`/`commit-msg`、PR 模板、core 标记；`core.md` 拆为 5 个主题规则，迁入 engineering / testing / vcs / design / collaboration / documentation / library 规则
 - 2026-10-29 工具面收敛：移除 MCP `project_dependencies` / `project_exports` / `summarize` 与对应 handler/schema/tests；`summarize` 仅保留 REST；`project_notes` 增加混合重排、MMR 去重、扫描后预热（`project_search`/`project_structure` 触发 + `/api/project/notes/prewarm`）；新增 3 例缓存清理与分块测试，测试 189 例通过；wheel 已部署复验（合成项目触发 `pruned 1 stale files`）
 - 2026-10-29 工具统计修复：`api_usage` 新增 `tool_names`（每次响应全部工具，JSON 数组），流式收集全部 `content_block_start` / `tool_calls`，非流式从响应体解析；`tool_output_log` 按 `tool_call_id` 去重（真实副本 9168→8498 行）；新增 `GET /usage/tools`，旧行按单工具计入 `legacy_calls`；测试 197 例通过；已部署复验（代理 23:37 重启，新行 `["Bash","Bash","Bash"]`，线上 `tool_output_log` 8502=8502）

@@ -287,8 +287,8 @@ class RetryTests(ProxyTestBase):
         self.assertEqual(len(self.upstream.requests), 2)
 
 
-class ProgressiveInjectionTests(unittest.TestCase):
-    """Position-only injection: full once, short after, identical bytes per message."""
+class InjectionTests(unittest.TestCase):
+    """Every real user input carries the same full rule block."""
 
     def setUp(self) -> None:
         fd, self.prompt_path = tempfile.mkstemp(suffix=".md")
@@ -299,22 +299,16 @@ class ProgressiveInjectionTests(unittest.TestCase):
             proxy_protocol.SYSTEM_PROMPTS_FILE,
             proxy_protocol._sys_prompt_content,
             proxy_protocol._sys_prompt_mtime,
-            proxy_protocol.RULE_INJECTION_MODE,
-            proxy_protocol.RULE_FULL_EVERY,
         )
         proxy_protocol.SYSTEM_PROMPTS_FILE = self.prompt_path
         proxy_protocol._sys_prompt_content = None
         proxy_protocol._sys_prompt_mtime = 0
-        proxy_protocol.RULE_INJECTION_MODE = "progressive"
-        proxy_protocol.RULE_FULL_EVERY = 0
 
     def tearDown(self) -> None:
         (
             proxy_protocol.SYSTEM_PROMPTS_FILE,
             proxy_protocol._sys_prompt_content,
             proxy_protocol._sys_prompt_mtime,
-            proxy_protocol.RULE_INJECTION_MODE,
-            proxy_protocol.RULE_FULL_EVERY,
         ) = self._orig
         os.unlink(self.prompt_path)
 
@@ -328,46 +322,24 @@ class ProgressiveInjectionTests(unittest.TestCase):
             ]
         }
 
-    def test_first_message_gets_full_and_the_rest_short(self) -> None:
+    def test_every_message_gets_the_full_block(self) -> None:
         body = self._conversation()
-        _, full, short = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual((full, short), (1, 1))
-        first = body["messages"][0]["content"]
-        second = body["messages"][2]["content"]
-        self.assertTrue(first.startswith(proxy_protocol.RULE_START_MARK))
-        self.assertIn("RULE-BODY", first)
-        self.assertTrue(second.startswith(proxy_protocol.SHORT_RULE_START_MARK))
-        self.assertIn(proxy_protocol.SHORT_RULE_TEXT, second)
-        self.assertNotIn("RULE-BODY", second)
+        _, count = proxy_protocol._inject_system_prompt(body)
+        self.assertEqual(count, 2)
+        for index in (0, 2):
+            text = body["messages"][index]["content"]
+            self.assertTrue(text.startswith(proxy_protocol.RULE_START_MARK))
+            self.assertIn("RULE-BODY", text)
 
     def test_injection_is_byte_stable_across_requests(self) -> None:
         def injected() -> bytes:
-            data, _, _ = proxy_protocol._inject_system_prompt(self._conversation())
+            data, _ = proxy_protocol._inject_system_prompt(self._conversation())
             assert data is not None
             return data
 
         self.assertEqual(injected(), injected())
 
-    def test_full_every_reinjects_on_cycle(self) -> None:
-        proxy_protocol.RULE_FULL_EVERY = 2
-        body = {"messages": [{"role": "user", "content": f"u{i}"} for i in range(1, 6)]}
-        _, full, short = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual((full, short), (3, 2))
-        modes = [
-            "full"
-            if msg["content"].startswith(proxy_protocol.RULE_START_MARK)
-            else "short"
-            for msg in body["messages"]
-        ]
-        self.assertEqual(modes, ["full", "short", "full", "short", "full"])
-
-    def test_full_mode_injects_every_message(self) -> None:
-        proxy_protocol.RULE_INJECTION_MODE = "full"
-        body = self._conversation()
-        _, full, short = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual((full, short), (2, 0))
-
-    def test_compacted_history_rebuilds_full(self) -> None:
+    def test_compacted_history_injects_every_user_message(self) -> None:
         body = {
             "messages": [
                 {"role": "user", "content": "[summary of earlier turns]"},
@@ -375,9 +347,10 @@ class ProgressiveInjectionTests(unittest.TestCase):
                 {"role": "user", "content": "next"},
             ]
         }
-        _, full, short = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual((full, short), (1, 1))
-        self.assertIn("RULE-BODY", body["messages"][0]["content"])
+        _, count = proxy_protocol._inject_system_prompt(body)
+        self.assertEqual(count, 2)
+        for index in (0, 2):
+            self.assertIn("RULE-BODY", body["messages"][index]["content"])
 
     def test_existing_block_is_not_injected_twice(self) -> None:
         body = {
@@ -386,9 +359,10 @@ class ProgressiveInjectionTests(unittest.TestCase):
                 {"role": "user", "content": "u2"},
             ]
         }
-        _, full, short = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual((full, short), (0, 1))
+        _, count = proxy_protocol._inject_system_prompt(body)
+        self.assertEqual(count, 1)
         self.assertEqual(body["messages"][0]["content"].count("--rule_start"), 1)
+        self.assertIn("RULE-BODY", body["messages"][1]["content"])
 
     def test_marker_mentioned_in_body_still_gets_rules(self) -> None:
         body = {
@@ -399,8 +373,8 @@ class ProgressiveInjectionTests(unittest.TestCase):
                 }
             ]
         }
-        _, full, short = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual((full, short), (1, 0))
+        _, count = proxy_protocol._inject_system_prompt(body)
+        self.assertEqual(count, 1)
         self.assertTrue(body["messages"][0]["content"].startswith("--rule_start"))
 
     def test_legacy_block_in_body_still_gets_rules(self) -> None:
@@ -412,8 +386,8 @@ class ProgressiveInjectionTests(unittest.TestCase):
                 }
             ]
         }
-        _, full, short = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual((full, short), (1, 0))
+        _, count = proxy_protocol._inject_system_prompt(body)
+        self.assertEqual(count, 1)
 
     def test_existing_block_in_array_is_detected(self) -> None:
         body = {
@@ -430,8 +404,8 @@ class ProgressiveInjectionTests(unittest.TestCase):
                 {"role": "user", "content": "u2"},
             ]
         }
-        _, full, short = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual((full, short), (0, 1))
+        _, count = proxy_protocol._inject_system_prompt(body)
+        self.assertEqual(count, 1)
 
     def test_rule_goes_after_the_last_tool_result(self) -> None:
         body = {
@@ -445,33 +419,14 @@ class ProgressiveInjectionTests(unittest.TestCase):
                 }
             ]
         }
-        _, full, _ = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual(full, 1)
+        _, count = proxy_protocol._inject_system_prompt(body)
+        self.assertEqual(count, 1)
         blocks = body["messages"][0]["content"]
         self.assertEqual(
             [block["type"] for block in blocks], ["tool_result", "text", "text"]
         )
         self.assertIn("RULE-BODY", blocks[1]["text"])
         self.assertEqual(blocks[2]["text"], "user follow-up")
-
-    def test_short_block_goes_after_the_last_tool_result(self) -> None:
-        body = {
-            "messages": [
-                {"role": "user", "content": "u1"},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "tool_result", "tool_use_id": "t1", "content": "r"},
-                        {"type": "text", "text": "follow-up"},
-                    ],
-                },
-            ]
-        }
-        _, full, short = proxy_protocol._inject_system_prompt(body)
-        self.assertEqual((full, short), (1, 1))
-        blocks = body["messages"][1]["content"]
-        self.assertEqual([b["type"] for b in blocks], ["tool_result", "text", "text"])
-        self.assertIn(proxy_protocol.SHORT_RULE_START_MARK, blocks[1]["text"])
 
     def test_strip_handles_legacy_full_and_short_blocks(self) -> None:
         text = (

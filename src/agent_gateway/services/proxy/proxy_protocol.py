@@ -40,46 +40,15 @@ logger = setup_logging("token_proxy", json_format=True)
 #: recognizes" in two places.
 RULE_START_MARK = "--rule_start"
 RULE_END_MARK = "--rule_end"
-SHORT_RULE_START_MARK = "--short_rule_start"
-SHORT_RULE_END_MARK = "--short_rule_end"
 
-#: Legacy markers written before 2026-10-29; still stripped so old blocks in
-#: client-side history do not leak into user-text extraction.
+#: Markers of the retired progressive strategy (2026-10-29..10-31); stripped only
+#: so history written under it does not leak rules into user-text extraction.
+LEGACY_SHORT_RULE_START_MARK = "--short_rule_start"
+LEGACY_SHORT_RULE_END_MARK = "--short_rule_end"
+
+#: Triple-hyphen markers written before 2026-10-29; stripped for the same reason.
 LEGACY_RULE_START_MARK = "---rule_start"
 LEGACY_RULE_END_MARK = "---rule_end"
-
-#: Attention reminder injected after the first user message. Static English on
-#: purpose: it is a code constant, never a rendered template, so its bytes cannot
-#: drift between turns and break the cached prefix. It only points at the marker —
-#: restating rule content here would fork the single source (`System_Prompts.md`).
-#: Kept deliberately imperative: a soft reminder was ignored often enough to lose
-#: adherence, so the wording names the consequence of ignoring it.
-SHORT_RULE_TEXT = (
-    "**Strictly comply** with the --rule_start / --rule_end rules.\n"
-    "Self-check: **never ignore them**; violations must be **stopped and redone**."
-)
-
-
-def _rule_injection_config() -> tuple[str, int]:
-    """Read `MODEL_PROXY_RULE_INJECTION` (JSON `{mode, fullEvery}`); defaults to progressive."""
-    raw = os.environ.get("MODEL_PROXY_RULE_INJECTION", "")
-    if not raw:
-        return "progressive", 0
-    try:
-        cfg = json.loads(raw)
-    except ValueError:
-        return "progressive", 0
-    if not isinstance(cfg, dict):
-        return "progressive", 0
-    mode = "full" if cfg.get("mode") == "full" else "progressive"
-    try:
-        every = int(cfg.get("fullEvery", 0) or 0)
-    except (TypeError, ValueError):
-        every = 0
-    return mode, max(0, every)
-
-
-RULE_INJECTION_MODE, RULE_FULL_EVERY = _rule_injection_config()
 
 
 def _strip_blocks(text: str, start: str, end: str) -> str:
@@ -110,7 +79,7 @@ def strip_injected_rules(text: str) -> str:
     triple-hyphen blocks are stripped first: the current double-hyphen marker is a
     substring of them, so matching it first would leave a stray leading hyphen.
     """
-    text = _strip_blocks(text, SHORT_RULE_START_MARK, SHORT_RULE_END_MARK)
+    text = _strip_blocks(text, LEGACY_SHORT_RULE_START_MARK, LEGACY_SHORT_RULE_END_MARK)
     text = _strip_blocks(text, LEGACY_RULE_START_MARK, LEGACY_RULE_END_MARK)
     return _strip_blocks(text, RULE_START_MARK, RULE_END_MARK).strip()
 
@@ -850,11 +819,9 @@ def _starts_with_rule_marker(text: str) -> bool:
     """True when the text itself begins with one of our injection markers.
 
     Prefix-only on purpose: a body that merely mentions `--rule_start` (quoting
-    this feature, or pasting the legacy triple-hyphen block) is still user text
-    and must receive rules. Legacy blocks do not match — the third character is
-    `-`, not `r` — so they get one harmless re-injection.
+    this feature) is still user text and must receive rules.
     """
-    return text.lstrip().startswith((RULE_START_MARK, SHORT_RULE_START_MARK))
+    return text.lstrip().startswith(RULE_START_MARK)
 
 
 def _contains_rule_block(content: object) -> bool:
@@ -885,12 +852,12 @@ def _insert_rule_block(msg: dict, block: str) -> None:
     content.insert(last_tool_result + 1, {"type": "text", "text": block})
 
 
-def _inject_system_prompt(body: dict) -> tuple[bytes | None, int, int]:
-    """Inject full rules into the first real user input, the short reminder into the rest.
+def _inject_system_prompt(body: dict) -> tuple[bytes | None, int]:
+    """Inject the full rule block into **every** real user input.
 
-    Position-only, so every historical message keeps identical bytes across requests
-    and the prompt cache prefix stays stable; compaction simply yields a new first
-    message. Returns (body_bytes, full, short).
+    Every message gets the same block, so no turn is covered only by a reminder and
+    historical messages stay byte-identical across requests. Returns (body_bytes,
+    injected count).
     """
     global _sys_prompt_content, _sys_prompt_mtime
 
@@ -898,7 +865,7 @@ def _inject_system_prompt(body: dict) -> tuple[bytes | None, int, int]:
         current_mtime = os.path.getmtime(SYSTEM_PROMPTS_FILE)
     except OSError:
         _sys_prompt_content = None
-        return None, 0, 0
+        return None, 0
 
     if current_mtime != _sys_prompt_mtime:
         try:
@@ -913,40 +880,26 @@ def _inject_system_prompt(body: dict) -> tuple[bytes | None, int, int]:
             logger.warning(
                 json.dumps({"msg": "system_prompt_read_failed", "error": str(e)})
             )
-            return None, 0, 0
+            return None, 0
 
     if _sys_prompt_content is None:
-        return None, 0, 0
+        return None, 0
 
-    full_block = f"{RULE_START_MARK}\n\n{_sys_prompt_content}\n{RULE_END_MARK}\n\n"
-    short_block = (
-        f"{SHORT_RULE_START_MARK}\n{SHORT_RULE_TEXT}\n{SHORT_RULE_END_MARK}\n\n"
-    )
+    rule_block = f"{RULE_START_MARK}\n\n{_sys_prompt_content}\n{RULE_END_MARK}\n\n"
     messages = body.get("messages", [])
-    full = short = 0
-    real_index = 0
+    injected = 0
     for msg in messages:
         if msg.get("role") != "user":
             continue
         content = msg.get("content", "")
         if not _is_real_user_input(content):
             continue
-        real_index += 1
         if _contains_rule_block(content):
             continue
-        if RULE_INJECTION_MODE == "full":
-            use_full = True
-        else:
-            use_full = real_index == 1 or (
-                RULE_FULL_EVERY > 0 and (real_index - 1) % RULE_FULL_EVERY == 0
-            )
-        _insert_rule_block(msg, full_block if use_full else short_block)
-        if use_full:
-            full += 1
-        else:
-            short += 1
+        _insert_rule_block(msg, rule_block)
+        injected += 1
 
-    if full + short == 0:
+    if injected == 0:
         logger.warning(
             json.dumps(
                 {
@@ -958,7 +911,7 @@ def _inject_system_prompt(body: dict) -> tuple[bytes | None, int, int]:
             )
         )
 
-    return json.dumps(body).encode(), full, short
+    return json.dumps(body).encode(), injected
 
 
 def _extract_usage_from_sse(

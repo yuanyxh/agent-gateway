@@ -173,10 +173,10 @@ async def _prepare_request(
             )
         )
 
-    # Rules: full block on the first real user input, short reminder on the rest
-    rule_full = rule_short = 0
+    # Rules: the full block on every real user input
+    rule_count = 0
     if not raw:
-        injected, rule_full, rule_short = _inject_system_prompt(request_body)
+        injected, rule_count = _inject_system_prompt(request_body)
         if injected is not None:
             body_bytes = injected
 
@@ -189,8 +189,7 @@ async def _prepare_request(
             # Output only the system field, the injected rule count, and model, to avoid flooding
             log_body = {
                 "model": parsed.get("model", ""),
-                "rule_full": rule_full,
-                "rule_short": rule_short,
+                "rule_count": rule_count,
                 "system": (
                     parsed.get("system")
                     if api_format == "anthropic"
