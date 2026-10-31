@@ -1003,7 +1003,10 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         root_text=query,
         intent=str(arguments.get("intent") or ""),
         keywords=list(keywords),
-        keyword_weight=float(arguments.get("keyword_weight") or 2.0),
+        keyword_weight=float(
+            arguments.get("keyword_weight")
+            or retrieval_config.stage_number("recall", "boost", "keyword_weight", 2.0)
+        ),
     )
     out = pipeline.run_query(request, limit, tool="recall")
     top = out["results"]
@@ -1067,19 +1070,28 @@ def _build_recall_pipeline(
     )
     semantic = [a for a in arms if not getattr(a, "fallback_only", False)]
     lexical = [a for a in arms if getattr(a, "fallback_only", False)]
-    base_stages = [Stage(name="semantic", arms=semantic)]
+    base_stages = [
+        Stage(
+            name="semantic",
+            arms=semantic,
+            min_hits=int(
+                retrieval_config.stage_number("recall", "semantic", "min_hits", 1)
+            ),
+        )
+    ]
     if lexical:
         base_stages.append(Stage(name="fallback", arms=lexical))
     # A path intent gets one cheap, precise stage in front: memories that quote a
-    # real path answer "where is it" better than a cosine neighbour does. Empty
-    # path stage falls through to the normal chain untouched.
+    # real path answer "where is it" better than a cosine neighbour does. Fewer
+    # hits than min_hits counts as a miss and falls through untouched.
     path_stages = [
         Stage(
             name="path",
             arms=[PathOnlyArm(arm) for arm in semantic],
-            # A path-bearing memory only answers the question if it also shares
-            # terms with the query; otherwise let the semantic chain run.
             accept=_path_overlap,
+            min_hits=int(
+                retrieval_config.stage_number("recall", "path", "min_hits", 1)
+            ),
         ),
         *base_stages,
     ]

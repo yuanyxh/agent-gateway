@@ -34,12 +34,15 @@ class Stage:
     arms: list[Any] = field(default_factory=list)
     #: (query, stage items) -> True to stop here, False to fall through.
     accept: Callable[[Query, list["RetrievedItem"]], bool] | None = None
+    #: Fewer hits than this counts as a miss and the walk continues. One weak
+    #: row is worse than falling through: it hides every tier below it.
+    min_hits: int = 1
 
     def __bool__(self) -> bool:
         return bool(self.arms)
 
     def accepts(self, query: Query, items: list["RetrievedItem"]) -> bool:
-        if not items:
+        if len(items) < max(1, self.min_hits):
             return False
         return self.accept is None or self.accept(query, items)
 

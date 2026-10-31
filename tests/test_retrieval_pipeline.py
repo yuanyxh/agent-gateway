@@ -112,6 +112,18 @@ class StageTest(unittest.TestCase):
         self.assertEqual([row["id"] for row in out["results"]], ["x"])
         self.assertEqual(seen, ["q"])
 
+    def test_stage_below_min_hits_falls_through(self):
+        seen: list[str] = []
+        thin = FakeArm("a", [item("weak", 0.6)], seen)
+        solid = FakeArm("b", [item("y", 0.9)], seen)
+        pipeline = self._pipeline(
+            [Stage("s1", [thin], min_hits=2), Stage("s2", [solid])]
+        )
+
+        out = pipeline.run("q", limit=5)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["y"])
+
     def test_empty_stage_falls_through(self):
         seen: list[str] = []
         first = FakeArm("a", [], seen)

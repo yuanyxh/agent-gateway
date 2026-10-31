@@ -59,6 +59,30 @@ def gate_mode(profile: str = "") -> str:
     return _setting("RETRIEVAL_GATE", "retrieval.gate", "layer") or "layer"
 
 
+def stage_number(
+    profile: str,
+    stage: str,
+    name: str,
+    default: float,
+) -> float:
+    """Numeric knob for one stage, overridable without a code change.
+
+    Lookup order: `RETRIEVAL_<PROFILE>_<STAGE>_<NAME>` env, then
+    `retrieval.plans.<profile>.<stage>.<name>` in config.yaml, then default.
+    Values live outside the code because the right number depends on the data
+    a deployment holds, not on the algorithm.
+    """
+    key = f"RETRIEVAL_{profile}_{stage}_{name}".upper().replace("-", "_")
+    yaml_key = f"retrieval.plans.{profile}.{stage}.{name}"
+    raw = _setting(key, yaml_key, "")
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def notes_semantic_floor(default: float) -> float:
     """Semantic re-check floor for lexical note hits; 0 disables the check."""
     raw = _setting("RETRIEVAL_NOTES_SEMANTIC", "retrieval.notesSemantic", "")
