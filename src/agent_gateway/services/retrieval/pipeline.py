@@ -7,7 +7,6 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from agent_gateway.services.retrieval import trace as trace_mod
-from agent_gateway.services.retrieval.boost import keyword_boost
 from agent_gateway.services.retrieval.expand.query import expand_query
 from agent_gateway.services.retrieval.text.analyzer import detect_language
 from agent_gateway.services.retrieval.types import (
@@ -37,12 +36,6 @@ class Stage:
     #: Fewer hits than this counts as a miss and the walk continues. One weak
     #: row is worse than falling through: it hides every tier below it.
     min_hits: int = 1
-    #: Sub-queries this tier runs; None means the pipeline-wide expansion.
-    subqueries: Callable[[Query], list[SubQuery]] | None = None
-    #: Fusion for this tier alone; None means the pipeline-level fusion.
-    fusion: Any = None
-    #: Narrows this tier's hits before the accept check; None means no filter.
-    scope: Callable[..., list["RetrievedItem"]] | None = None
 
     def __bool__(self) -> bool:
         return bool(self.arms)
@@ -67,7 +60,6 @@ class Pipeline:
         lexical_only_as_fallback: bool = False,
         stages: list[Stage] | None = None,
         query_expander: Callable[[Query], list[SubQuery]] | None = None,
-        booster: Callable[[Query, list[RetrievedItem]], list[str] | None] | None = None,
     ):
         self.name = name
         self.arms = arms
@@ -78,8 +70,6 @@ class Pipeline:
         self.lexical_only_as_fallback = lexical_only_as_fallback
         self.query_expander = query_expander or expand_query
         self.stages = stages if stages is not None else self._compile(arms)
-        #: Keywords reorder fused hits; they never fetch new candidates.
-        self.booster = booster if booster is not None else keyword_boost
 
     def _compile(self, arms: list[Any]) -> list[Stage]:
         """Translate the legacy arm list into tiers.
@@ -122,20 +112,15 @@ class Pipeline:
 
     def _retrieve(
         self, query: Query, limit: int, filters: dict[str, Any] | None
-    ) -> tuple[list[ArmResult], Any]:
+    ) -> list[ArmResult]:
         """Walk the tiers; the first tier that accepts stops the walk.
 
         A stage only runs when every earlier stage came back empty, so a loose
-        stage can never dilute a precise hit. A stage may carry its own
-        sub-queries and fusion: the keyword tier scores one list per keyword and
-        adds them up, while the query tier keeps the pipeline fusion.
+        stage can never dilute a precise hit.
         """
         arm_limit = self.per_arm_limit or limit
+        subqueries = self.query_expander(query)
         for stage in self.stages:
-            expander = stage.subqueries or self.query_expander
-            subqueries = expander(query)
-            if not subqueries:
-                continue
             results: list[ArmResult] = []
             for sub in subqueries:
                 sub_query = Query(
@@ -148,23 +133,9 @@ class Pipeline:
                     result = self._run_arm(arm, sub_query, arm_limit, filters)
                     results.append(_weighted(result, sub))
             stage_items = [item for result in results for item in result.items]
-            if stage.scope is not None:
-                stage_items = stage.scope(query, stage_items, arm_limit, filters)
-                # Fusion re-reads the arm results, so the narrowed set has to
-                # replace them or the filter would be undone one step later.
-                kept = {id(item) for item in stage_items}
-                results = [
-                    ArmResult(
-                        name=result.name,
-                        items=[item for item in result.items if id(item) in kept],
-                        elapsed_ms=result.elapsed_ms,
-                        error=result.error,
-                    )
-                    for result in results
-                ]
             if stage.accepts(query, stage_items):
-                return results, stage.fusion or self.fusion
-        return [], self.fusion
+                return results
+        return []
 
     def run(
         self,
@@ -195,25 +166,15 @@ class Pipeline:
                 text=query.text,
                 language=detect_language(query.text),
                 root_text=query.root_text or query.text,
-                keywords=list(query.keywords),
-                keyword_weight=query.keyword_weight,
-                groups=query.groups,
                 mode=query.mode,
             )
 
         retrieve_started = time.perf_counter()
-        arms, fusion = self._retrieve(query, limit, filters)
+        arms = self._retrieve(query, limit, filters)
         latency["retrieve"] = round((time.perf_counter() - retrieve_started) * 1000, 2)
 
         fuse_started = time.perf_counter()
-        items = fusion.fuse(arms, limit * 2)
-        keyword_hits: list[str] = []
-        if self.booster is not None:
-            keyword_hits = self.booster(query, items) or []
-            # Re-sort with the fusion's own key: a plain score sort would drop
-            # the heat multiplier even when no keyword was supplied.
-            rank_key = getattr(fusion, "rank_key", lambda i: i.score)
-            items.sort(key=rank_key, reverse=True)
+        items = self.fusion.fuse(arms, limit * 2)
         latency["fuse"] = round((time.perf_counter() - fuse_started) * 1000, 2)
 
         related = self.expander(query, items[:limit]) if self.expander else []
@@ -242,11 +203,6 @@ class Pipeline:
             "_arms": arms,
             "_latency": latency,
         }
-        if query.keywords:
-            # Present only when the caller asked for keywords: a term absent
-            # here matched no returned hit, so the call can be retried without
-            # wiping the rest of the payload shape.
-            payload["keyword_hits"] = keyword_hits
         if debug:
             payload["trace"] = {
                 key: value for key, value in trace_payload.items() if key != "query"
@@ -305,7 +261,7 @@ class Pipeline:
 def _weighted(result: ArmResult, sub: SubQuery) -> ArmResult:
     """Scale a sub-query's hits so primary terms outrank the raw text.
 
-    The arm suffix keeps the trace readable: `dense_hot@keyword` says which
+    The arm suffix keeps the trace readable: `dense_hot@group0` says which
     expansion produced the row.
     """
     if sub.weight == 1.0 or not result.items:
