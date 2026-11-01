@@ -58,7 +58,7 @@ class ProjectSearchContextTest(unittest.TestCase):
             db = os.path.join(root, ".utility", "deps.sqlite")
             _create_db(db)
             with mock.patch.object(project_tools, "_search_vectors", return_value=[]):
-                result = project_tools.tool_project_search(db, "target_fn")
+                result = project_tools._project_search_impl(db, "target_fn")
         self.assertEqual(result["status"], "exact")
         hit = result["results"][0]
         self.assertEqual(hit["importedBy"], ["src/app.py"])
@@ -98,7 +98,7 @@ class LegacySymbolSchemaTest(unittest.TestCase):
                 )
             conn.close()
             with mock.patch.object(project_tools, "_search_vectors", return_value=[]):
-                result = project_tools.tool_project_search(db, "legacy_fn")
+                result = project_tools._project_search_impl(db, "legacy_fn")
         self.assertEqual(result["status"], "exact")
         self.assertNotIn("line", result["result"])
         self.assertNotIn("module", result["result"])
@@ -117,7 +117,7 @@ class VectorOnlySearchTest(unittest.TestCase):
                 mock.patch.object(project_tools, "_search_packages", return_value=[]),
                 mock.patch.object(project_tools, "_search_vectors", return_value=hits),
             ):
-                return project_tools.tool_project_search(db, query, limit=5)
+                return project_tools._project_search_impl(db, query, limit=5)
 
     def test_vector_only_match_is_weak_and_tagged(self):
         result = self._run(

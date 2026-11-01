@@ -75,8 +75,22 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     "param.bit": "Bit index; 0 = summarized, 1 = retired",
     "param.bit_value": "1 = set, 0 = reset",
     "param.db_path": "Required. Absolute path to .utility/deps.sqlite",
-    "param.search_keyword": (
-        "Required. Search keyword; Chinese synonyms are expanded automatically"
+    "param.graph_db_path": (
+        "Required. Absolute path to .utility/graph.sqlite; "
+        "the agent shell exposes it as $UTILITY_GRAPH_DB"
+    ),
+    "param.graph_query": (
+        "Optional. Symbol name or file path to locate; omit to return a graph overview"
+    ),
+    "param.graph_target": (
+        "Required. Symbol name, Class.method, file path, or file:<path> to analyze"
+    ),
+    "param.graph_direction": (
+        "callers, callees, or both; callers means incoming references"
+    ),
+    "param.graph_depth": "Max hops to traverse; default 2",
+    "param.graph_include_stale": (
+        "Include edges marked stale after a file changed; default false"
     ),
     "param.file_path": "Optional. Restrict to a file path (fuzzy match)",
     "param.symbol_kind": "Optional. Restrict to a symbol kind (class/fun/val/...)",

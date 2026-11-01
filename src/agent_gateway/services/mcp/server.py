@@ -63,10 +63,15 @@ from agent_gateway.services.mcp.server_tool_schema import (
     build_tools,
 )
 from agent_gateway.services.mcp.server_search import (
-    DEFAULT_PROJECT_SEARCH_LIMIT,
     DEFAULT_PROJECT_STRUCTURE_LIMIT,
-    tool_project_search,
     tool_project_structure,
+)
+from agent_gateway.services.mcp.graph_tools import (
+    IMPACT_DEFAULT_DEPTH,
+    IMPACT_DEFAULT_LIMIT,
+    LOOKUP_DEFAULT_LIMIT,
+    tool_project_impact,
+    tool_project_lookup,
 )
 from agent_gateway.services.mcp.search_notes_cache import schedule_prewarm_for_db
 from agent_gateway.services.mcp.server_archive import archive_scheduler
@@ -99,8 +104,6 @@ from agent_gateway.services.retrieval import rebuild
 from agent_gateway.services.retrieval import trace as retrieval_trace
 from agent_gateway.services.retrieval.arms.project_notes import LAYER as NOTES_LAYER
 from agent_gateway.services.retrieval.arms.project_notes import ProjectNotesArm
-from agent_gateway.services.retrieval.arms.project_search import LAYER as SEARCH_LAYER
-from agent_gateway.services.retrieval.arms.project_search import ProjectSearchArm
 from agent_gateway.services.retrieval.fusion.score import MaxScoreFusion
 from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate
 from agent_gateway.services.retrieval.pipeline import Pipeline
@@ -267,37 +270,31 @@ async def _handle_memory_graph(arguments: dict) -> list[TextContent]:
     return await handle_memory_graph(arguments)
 
 
-@_register("project_search")
-async def _handle_project_search(arguments: dict) -> list[TextContent]:
-    try:
-        arm = ProjectSearchArm(
-            arguments["dbPath"],
-            arguments.get("file_path", ""),
-            arguments.get("kind", ""),
-        )
-        pipeline = Pipeline(
-            name="project_search",
-            arms=[arm],
-            fusion=MaxScoreFusion(),
-            gate=LayerPresenceGate(semantic_layers=(SEARCH_LAYER,)),
-        )
-        await asyncio.to_thread(
-            pipeline.run,
-            arguments["query"],
-            int_arg(arguments, "limit", DEFAULT_PROJECT_SEARCH_LIMIT),
-            None,
-            "project_search",
-        )
-        # The arm's own status carries exact/ambiguous, which the shared gate does
-        # not model; the payload is returned as shaped, with no trace id.
-        result = arm.payload
-        schedule_prewarm_for_db(arguments["dbPath"])
-        return [TextContent(type="text", text=dumps(result))]
-    except Exception:
-        # Re-raise to handle_call_tool: returning {"error": ...} here makes the SDK treat
-        # it as success, so a real failure is read by the client as "found it, just no
-        # results". Logging is done uniformly by the fallback layer.
-        raise
+@_register("project_lookup")
+async def _handle_project_lookup(arguments: dict) -> list[TextContent]:
+    result = await asyncio.to_thread(
+        tool_project_lookup,
+        arguments["dbPath"],
+        arguments.get("query", ""),
+        arguments.get("kind", ""),
+        arguments.get("file_path", ""),
+        int_arg(arguments, "limit", LOOKUP_DEFAULT_LIMIT),
+    )
+    return [TextContent(type="text", text=dumps(result))]
+
+
+@_register("project_impact")
+async def _handle_project_impact(arguments: dict) -> list[TextContent]:
+    result = await asyncio.to_thread(
+        tool_project_impact,
+        arguments["dbPath"],
+        arguments["target"],
+        arguments.get("direction", "callers"),
+        int_arg(arguments, "depth", IMPACT_DEFAULT_DEPTH),
+        int_arg(arguments, "limit", IMPACT_DEFAULT_LIMIT),
+        arguments.get("includeStale", False) is True,
+    )
+    return [TextContent(type="text", text=dumps(result))]
 
 
 @_register("project_structure")
@@ -736,18 +733,6 @@ async def serve():
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
-    async def api_project_search(request):
-        body = await request.json()
-        try:
-            result = tool_project_search(
-                body.get("dbPath", ""),
-                body.get("query", ""),
-                limit=int_arg(body, "limit", DEFAULT_PROJECT_SEARCH_LIMIT),
-            )
-            return JSONResponse(result)
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=500)
-
     async def api_project_structure(request):
         body = await request.json()
         try:
@@ -936,7 +921,6 @@ async def serve():
                 endpoint=api_memories_status,
                 methods=["POST"],
             ),
-            Route("/api/project/search", endpoint=api_project_search, methods=["POST"]),
             Route(
                 "/api/project/structure",
                 endpoint=api_project_structure,

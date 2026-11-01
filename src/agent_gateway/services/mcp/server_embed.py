@@ -175,8 +175,8 @@ def embed_query(text: str) -> np.ndarray | None:
     embedder is unavailable.
 
     Within one agent turn, several search tools are often called concurrently with the
-    same query (recall / project_notes / project_search are all told in the prompt to
-    be called "in parallel"), and each used to embed the query independently. Query
+    same query (recall / project_notes are both told in the prompt to be called
+    "in parallel"), and each used to embed the query independently. Query
     embedding is a pure function, ~45ms per call, so the cache eliminates this
     duplicated work. Note that mem0 internally uses its own embedder and does not go
     through this function, so that path cannot be shared.

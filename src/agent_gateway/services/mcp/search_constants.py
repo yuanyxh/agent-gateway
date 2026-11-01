@@ -42,11 +42,8 @@ NOTE_KEYWORD_FLOOR = 0.4
 NOTE_MAX_CHUNKS_PER_PROJECT = 50000
 NOTE_MAX_RESULTS = 20
 NOTE_PREVIEW_LEN = 300
-#: Default result limit for the project tools (authoritative source is
-#: `tool_defaults.arg_default`, config surface is config.yaml `mcp.toolDefaults`).
-#: Function signatures reference it so the handler doesn't keep a second copy of the
-#: literal and drift.
-DEFAULT_PROJECT_SEARCH_LIMIT = arg_default("project_search", "limit")
+#: Legacy search path (retrieval arm and its tests); the MCP tool was removed.
+DEFAULT_PROJECT_SEARCH_LIMIT = 15
 DEFAULT_PROJECT_STRUCTURE_LIMIT = arg_default("project_structure", "limit")
 PROJECT_MARKER_FILES = frozenset(
     {

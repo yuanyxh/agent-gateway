@@ -22,6 +22,7 @@ ENTRIES: dict[str, str] = {
     "summarize": "agent_gateway.services.summarize.summarize",
     "astExtractor": "agent_gateway.scanner.ast_extractor",
     "knowledgeRefill": "agent_gateway.services.knowledge.knowledge_refill",
+    "graphIndexer": "agent_gateway.services.graph.indexer",
 }
 
 

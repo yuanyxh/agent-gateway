@@ -20,7 +20,6 @@ from agent_gateway.services.mcp.search_symbols import (
     expand_query,
 )
 from agent_gateway.services.mcp.search_vectors import _search_vectors
-from agent_gateway.services.retrieval.observe import traced
 
 _WORD_SPLIT = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+")
 _CJK = re.compile(r"[一-鿿]")
@@ -294,18 +293,6 @@ def _project_search_impl(
     limit: int = DEFAULT_PROJECT_SEARCH_LIMIT,
 ) -> dict:
     return _shape_payload(_project_search_raw(db_path, query, file_path, kind, limit))
-
-
-@traced("project_search", query_arg=1)
-def tool_project_search(
-    db_path: str,
-    query: str,
-    file_path: str = "",
-    kind: str = "",
-    limit: int = DEFAULT_PROJECT_SEARCH_LIMIT,
-) -> dict:
-    """Traced entry point; the retrieval arm calls the impl directly."""
-    return _project_search_impl(db_path, query, file_path, kind, limit)
 
 
 def tool_project_structure(

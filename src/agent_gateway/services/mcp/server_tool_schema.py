@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from mcp.types import Tool
 
-from agent_gateway.services.mcp.server_search import (
-    DEFAULT_PROJECT_SEARCH_LIMIT,
-    DEFAULT_PROJECT_STRUCTURE_LIMIT,
+from agent_gateway.services.mcp.graph_tools import (
+    IMPACT_DEFAULT_DEPTH,
+    IMPACT_DEFAULT_LIMIT,
+    LOOKUP_DEFAULT_LIMIT,
 )
+from agent_gateway.services.mcp.server_search import DEFAULT_PROJECT_STRUCTURE_LIMIT
 from agent_gateway.services.mcp.server_skills import scan_skills
 from agent_gateway.services.summarize.text import DEFAULT_MAX_TOKENS
 from agent_gateway.core.tool_defaults import arg_default
@@ -51,7 +53,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "recall": "Trigger: user says look up/search/find that earlier one, or refers to history or existing information. Searches shared memory, knowledge base, and notes. Results below the relevance floor are omitted; same-episode context is returned in related.",
     "catch_up": "Trigger: user says just now/last time/previously/recently, or asks what was done, the progress, or what remains unresolved. Do not substitute git log.",
     "forget": "Trigger: user asks to delete a memory, or a memory is wrong/outdated. Deletes it permanently.",
-    "project_search": "Prefer over reading whole files to locate symbols, files, and packages. Searches the project dependency graph.",
+    "project_lookup": "Locate a symbol or file and return its definition with one-hop caller context. Prefer over grep for definition lookup. Omit query for a graph overview (files, symbols, edges, languages).",
+    "project_impact": "Find callers or callees of a symbol with multi-hop traversal. Prefer over grep to answer what a change affects.",
     "project_structure": "Prefer over ls/find traversal to understand the project layout.",
     "project_notes": "Trigger: user asks to find a project's README, design doc, plan, or TODO without knowing the file name. Searches local project Markdown by meaning, not just exact keywords.",
     "tool_resource": "Load a file under references or a script under scripts when instructed.",
@@ -368,34 +371,73 @@ def build_tools() -> list[Tool]:
         ),
         # ── Project tools ──
         Tool(
-            name="project_search",
-            description=TOOL_DESCRIPTIONS["project_search"],
+            name="project_lookup",
+            description=TOOL_DESCRIPTIONS["project_lookup"],
             inputSchema={
                 "type": "object",
                 "properties": {
                     "dbPath": {
                         "type": "string",
-                        "description": param_text("param.db_path"),
+                        "description": param_text("param.graph_db_path"),
                     },
                     "query": {
                         "type": "string",
-                        "description": param_text("param.search_keyword"),
-                    },
-                    "file_path": {
-                        "type": "string",
-                        "description": param_text("param.file_path"),
+                        "description": param_text("param.graph_query"),
                     },
                     "kind": {
                         "type": "string",
                         "description": param_text("param.symbol_kind"),
                     },
+                    "file_path": {
+                        "type": "string",
+                        "description": param_text("param.file_path"),
+                    },
                     "limit": {
                         "type": "integer",
-                        "default": DEFAULT_PROJECT_SEARCH_LIMIT,
+                        "default": LOOKUP_DEFAULT_LIMIT,
                         "description": param_text("param.max_results"),
                     },
                 },
-                "required": ["dbPath", "query"],
+                "required": ["dbPath"],
+            },
+        ),
+        Tool(
+            name="project_impact",
+            description=TOOL_DESCRIPTIONS["project_impact"],
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dbPath": {
+                        "type": "string",
+                        "description": param_text("param.graph_db_path"),
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": param_text("param.graph_target"),
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["callers", "callees", "both"],
+                        "default": "callers",
+                        "description": param_text("param.graph_direction"),
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "default": IMPACT_DEFAULT_DEPTH,
+                        "description": param_text("param.graph_depth"),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": IMPACT_DEFAULT_LIMIT,
+                        "description": param_text("param.max_results"),
+                    },
+                    "includeStale": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": param_text("param.graph_include_stale"),
+                    },
+                },
+                "required": ["dbPath", "target"],
             },
         ),
         Tool(
