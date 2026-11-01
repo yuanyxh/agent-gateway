@@ -14,6 +14,7 @@
 | 评测集标注 | **已停用**：query 由历史会话关键词提取，与用户当时意图不对应（用户判定），基于 query 的相关性标注不成立；改用真实使用 case 驱动排查 | — |
 | 换模型 jina-zh | 热层/冷层已重建，地板由自动标定写入（现 hot 0.616 / cold 0.569）；可采信的结论只有不相关率：minilm 40.5% → jina 12.5%（249 条同批、不依赖意图判断） | — |
 | notes 层降噪 | 语义复核（minilm 0.40 / jina 0.35）+ **仅作兜底**：hot/cold 有命中时 notes 不进主结果；抽样 100 条 notes 占比 26.2%→8.5%，空返回不增 | — |
+| 记忆体第二轮改进 | 近邻矛盾候选、打分批量写、受保护记忆、dry-run、检索层归档过滤、多信号排序（默认关）已实现并通过 369 例；等打包部署 | — |
 
 ## 已完成
 
@@ -45,6 +46,8 @@
 - 2026-10-30 检索层重构（P1-P3）：新增 `services/retrieval/`（types/protocol/registry/pipeline/text/fusion/gate/trace/observe/config）；recall 迁到三臂（dense_hot / dense_cold / lexical_notes）+ HeatWeightedFusion + LayerPresenceGate，行为保持等价；project_search/project_notes 加 trace 装饰器；新增 `GET /api/retrieval/stats`；模型描述与阈值按 model_tag 分档（jinazh768 未标定即报错）；多子查询、RRF、相对门控由 `RETRIEVAL_REWRITERS` / `RETRIEVAL_GATE` 开关控制，默认关闭；新增 21 例检索层测试，全量 244 例通过
 - 2026-10-30 检索层方案收敛：删除未实现/实测否决的组件 —— `expand/term_split.py`（bigram 拆词无效果，延迟 5.7 倍）、`registry.py`（无调用方）、`protocol.Router`/`QueryRewriter`/`Reranker`、`types.RouteDecision`/`PipelineResult`、`Pipeline.reranker`/`corrector`/`rewriters`、`Query.sub_queries`；reranker 实测（jina-reranker-v2）内存 +3.4GB 且排序劣于 embedding，corrector 实测（LLM 改写）4 条 no_match 救活 0 条且改坏 2 条；notes 改为按需执行，普通查询延迟 945ms→132-209ms；全量 265 例通过
 - 2026-10-30 换模型 jina-zh 并修热层空结果：`HotMemoryArm` 改用 `score_details.semantic_score`（mem0 混合分与余弦阈值不可比）；`_build_recall_pipeline` 全部阈值改读 per-model 表（原先 hot/cold 用常量，换模型无法标定）；新增 `POST /api/retrieval/rebuild`、`/api/retrieval/diagnose`；三臂阈值标定并把实测值写进 `FLOORS["jinazh768"]`、清空 `SEEDED_TAGS`；新增 `scripts/export_judge_batch.py`；盲标 249 条 × 3 轮，全量 261 例通过
+- 2026-11-01 记忆图谱与生命周期：新增 `services/memory/{store,graph,link,retention,consolidate}.py`（节点/边 SQLite、六类边、质量分档保留、日/周整合）；`memory_get`/`memory_graph` 工具；`remember` 拆分 fact/context 并新增 type/source_files/source_url；冷层 point id 改 uuid5；归档改软删；`scripts/migrate_memory_graph.py` 回填与停服迁移脚本；全量 348 例通过
+- 2026-11-01 记忆体第二轮改进：周任务矛盾候选由全量矩阵改为 Qdrant 近邻（`query_batch_points` 分批 top-k，失败回退矩阵）；`score_relevance` 改单事务批量写；新增 `importance`/`protected` 与 `MEMORY_PROTECT_IMPORTANCE`，矛盾与归档跳过受保护项；周任务与 `/api/consolidation/run` 支持 `dry_run`；`recall` 检索层用 mem0 `NOT archived=true` 排除归档；新增 `SignalWeightedFusion`（recency/access/quality 默认权重 0）；周任务后 `VACUUM`；删除死常量 `HOT_RETENTION_DAYS`、`SUPERSEDED_RETENTION_DAYS`；新增 13 例测试，全量 369 例通过
 
 ## 下一步
 

@@ -12,11 +12,29 @@ MissingParamText = MissingText
 
 PARAM_DESCRIPTIONS: dict[str, str] = {
     "param.memory_content": (
-        "One fact. With background: line 1 [background], then [fact]; organize as "
-        "scenario/decision/evolution and omit missing parts. Without background: state the "
-        "fact directly; never fabricate one."
+        "One fact, stated directly. Do not include background, scenario, or reasons; "
+        "put those in context."
     ),
-    "param.memories": "Facts to write; same semantics as remember's content.",
+    "param.memory_context": (
+        "Why the fact matters, when it applies, and what it relates to. Embedded "
+        "together with content, so it is searchable."
+    ),
+    "param.memory_type": (
+        "Optional memory type, e.g. decision, preference, bug, convention"
+    ),
+    "param.memory_importance": (
+        "Optional 1-10 importance. Contradiction checks skip values at or above "
+        "the configured protect threshold."
+    ),
+    "param.memory_protected": (
+        "Optional flag; protected memories are never archived or retired by the "
+        "weekly maintenance pass."
+    ),
+    "param.source_files": "Optional file paths this fact is about",
+    "param.source_url": "Optional URL this fact came from",
+    "param.memories": (
+        "Facts to write; same semantics as remember's content and context."
+    ),
     "param.keywords": (
         "Required. 2-5 keywords or short phrases; the main query. "
         "Chinese and English are supported"
@@ -31,7 +49,21 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     "param.catch_up_max_chars": (
         "Max JSON characters returned; default 24000, 0 = unlimited"
     ),
+    "param.recall_max_chars": (
+        "Max JSON characters returned; default 24000, 0 = unlimited. Related rows "
+        "are dropped when the primary results fill the budget"
+    ),
     "param.memory_ids": "Memory IDs",
+    "param.memory_node_id": (
+        "Memory id from recall, remember, or memory_graph; a cold point id is accepted"
+    ),
+    "param.memory_edge": (
+        "Edge to follow: supersedes (version chain), episode (same event), "
+        "derived_from (cold sources), disputes, relates, mentions"
+    ),
+    "param.memory_direction": (
+        "up follows to_id -> from_id, down follows from_id -> to_id, both (default)"
+    ),
     "param.memory_id": "Memory ID to delete",
     "param.point_id": "Optional point ID",
     "param.layer": "Layer to delete from; default hot",

@@ -96,6 +96,39 @@ class EmbedderIdentityTest(unittest.TestCase):
         self.assertEqual(remaining, 0)
         self.assertEqual(int(dims), search_notes_cache.EMBEDDER_SPEC.dims)
 
+    def test_drops_chunks_when_the_recorded_tag_changes(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            os.makedirs(os.path.dirname(db))
+            conn = _get_note_db(db)
+            with conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta VALUES ('embedder_tag', 'othermodel')"
+                )
+                conn.execute(
+                    "INSERT INTO chunks VALUES (?,?,?,?,?,?,?)",
+                    (
+                        "/p/README.md",
+                        0,
+                        "text",
+                        1,
+                        1.0,
+                        10,
+                        b"\x00" * (search_notes_cache.EMBEDDER_SPEC.dims * 4),
+                    ),
+                )
+            conn.close()
+
+            conn = _get_note_db(db)
+            remaining = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            tag = conn.execute(
+                "SELECT value FROM meta WHERE key = 'embedder_tag'"
+            ).fetchone()[0]
+            conn.close()
+
+        self.assertEqual(remaining, 0)
+        self.assertEqual(tag, search_notes_cache.EMBEDDER_SPEC.tag)
+
     def test_keeps_chunks_from_the_same_model(self):
         with tempfile.TemporaryDirectory() as root:
             db = os.path.join(root, ".utility", "note_vectors.sqlite")

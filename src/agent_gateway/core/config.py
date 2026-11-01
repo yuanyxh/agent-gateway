@@ -156,6 +156,39 @@ def summary_exclude_tags() -> set[str]:
     return {t.strip() for t in raw.split(",") if t.strip()}
 
 
+def memory_protect_importance() -> int | None:
+    """Importance at or above which contradiction checks skip a memory."""
+    raw = get("MEMORY_PROTECT_IMPORTANCE", "").strip()
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def memory_max_content_chars() -> int | None:
+    """Soft write limit for one fact; empty means no limit."""
+    raw = get("MEMORY_MAX_CONTENT_CHARS", "").strip()
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def rank_signal_weights() -> dict[str, float]:
+    """Optional ranking signals; all zero means plain score ordering."""
+    out = {}
+    for name, env in (
+        ("recency", "RANK_SIGNAL_RECENCY"),
+        ("access", "RANK_SIGNAL_ACCESS"),
+        ("quality", "RANK_SIGNAL_QUALITY"),
+    ):
+        try:
+            out[name] = float(get(env, "0") or 0)
+        except ValueError:
+            out[name] = 0.0
+    return out
+
+
 def _int(raw: str, default: int) -> int:
     try:
         return int(raw)

@@ -326,7 +326,7 @@ class PipelineTest(unittest.TestCase):
 
         self.assertEqual(seen, ["kw1 kw2", "a sentence"])
         self.assertEqual(recorder.call_args[0][0]["fusion"], "rrf")
-        self.assertEqual(out["results"][0]["score_kind"], "rrf")
+        self.assertNotIn("score_kind", out["results"][0])
 
     def test_semantic_query_equal_to_keywords_runs_once(self):
         seen: list[str] = []
@@ -366,13 +366,16 @@ class PipelineTest(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in out["results"]], ["n"])
 
-    def test_result_shape_carries_score_kind(self):
+    def test_result_shape_omits_diagnostic_fields(self):
         pipeline = self._pipeline([FakeArm("a", [item("x", 0.7)])])
         with mock.patch.object(trace, "record"):
             out = pipeline.run("q", limit=5)
 
-        self.assertEqual(out["results"][0]["score_kind"], "dense")
-        self.assertEqual(out["results"][0]["match_kind"], "direct")
+        row = out["results"][0]
+        self.assertNotIn("score_kind", row)
+        self.assertNotIn("match_kind", row)
+        self.assertEqual(row["id"], "x")
+        self.assertIn("content", row)
 
 
 class ConfigTest(unittest.TestCase):

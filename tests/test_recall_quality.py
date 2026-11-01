@@ -200,6 +200,36 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
                 )
         return json.loads(payload[0].text), hot
 
+    async def test_top_level_archive_flag_is_honoured(self):
+        data, _ = await self._call(
+            [
+                {
+                    "id": "arch",
+                    "memory": "x",
+                    "score": 0.9,
+                    "archived": True,
+                    "metadata": {},
+                }
+            ]
+        )
+
+        self.assertEqual(data["results"], [])
+
+    async def test_top_level_status_is_honoured(self):
+        data, _ = await self._call(
+            [
+                {
+                    "id": "arch",
+                    "memory": "x",
+                    "score": 0.9,
+                    "status": "archived",
+                    "metadata": {},
+                }
+            ]
+        )
+
+        self.assertEqual(data["results"], [])
+
     async def test_hot_threshold_filters_low_scores_and_marks_direct(self):
         data, hot = await self._call(
             [
@@ -212,7 +242,7 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["id"] for row in data["results"]], ["high"])
         self.assertEqual(data["status"], "ok")
         self.assertEqual(data["count"], 1)
-        self.assertEqual(data["results"][0]["match_kind"], "direct")
+        self.assertNotIn("match_kind", data["results"][0])
         # The floor moved into the arm: mem0 filters on the semantic score before
         # hybrid scoring, which silently drops verbatim hits that need rescuing.
         self.assertEqual(hot.threshold, 0.0)
@@ -232,7 +262,6 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual([row["id"] for row in data["results"]], ["m"])
-        self.assertEqual(data["results"][0]["match_kind"], "literal")
 
     async def test_low_score_without_verbatim_hit_is_dropped(self):
         data, _ = await self._call(
@@ -248,7 +277,7 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
             query="张三丰",
         )
 
-        self.assertEqual(data["hot_count"], 0)
+        self.assertEqual(data["results"], [])
 
     async def test_hot_keeps_row_whose_hybrid_score_halved_the_semantic_one(self):
         """mem0 divides by 2 when BM25 is active, so 0.75 cosine shows up as 0.37."""
@@ -265,7 +294,7 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual([row["id"] for row in data["results"]], ["m"])
-        self.assertEqual(data["hot_count"], 1)
+        self.assertEqual(data["results"][0]["layer"], "hot")
 
     async def test_hot_drops_row_when_semantic_score_is_below_floor(self):
         data, _ = await self._call(
@@ -280,7 +309,7 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        self.assertEqual(data["hot_count"], 0)
+        self.assertEqual(data["results"], [])
 
     async def test_only_related_context_is_weak_match(self):
         data, _ = await self._call(
@@ -301,15 +330,15 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(data["status"], "weak_match")
         self.assertEqual(data["count"], 0)
-        self.assertEqual(data["related_count"], 1)
-        self.assertEqual(data["related"][0]["match_kind"], "expanded")
+        self.assertEqual(len(data["related"]), 1)
+        self.assertNotIn("match_kind", data["related"][0])
 
     async def test_empty_result_is_no_match(self):
         data, _ = await self._call([])
 
         self.assertEqual(data["status"], "no_match")
         self.assertEqual(data["count"], 0)
-        self.assertEqual(data["related_count"], 0)
+        self.assertEqual(data["related"], [])
         self.assertIn("relevance floor", data["hint"])
 
 

@@ -57,20 +57,32 @@ class RetrievedItem:
     locator: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
 
+    #: Fields a caller needs to decide; diagnostics stay in the retrieval trace.
+    RESULT_EXTRA_KEYS = ("episode_id", "context", "edge")
+    RESULT_META_KEYS = ("tags", "status", "confidence")
+
     def to_result(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "id": self.id,
             "kind": self.kind,
             "score": float(self.score),
-            "score_kind": self.score_kind,
             "content": self.content,
-            "match_kind": self.match_kind,
         }
         if self.layer:
             out["layer"] = self.layer
         if self.locator:
             out["locator"] = self.locator
-        out.update(self.extra)
+        for key in self.RESULT_EXTRA_KEYS:
+            value = self.extra.get(key)
+            if value not in (None, ""):
+                out[key] = value
+        metadata = self.extra.get("metadata")
+        if isinstance(metadata, dict):
+            kept = {
+                key: metadata[key] for key in self.RESULT_META_KEYS if key in metadata
+            }
+            if kept:
+                out["metadata"] = kept
         return out
 
 

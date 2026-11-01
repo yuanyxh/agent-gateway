@@ -53,7 +53,7 @@ def _create_db(path: str, *, scanned: bool = True) -> None:
 
 
 class ProjectSearchContextTest(unittest.TestCase):
-    def test_search_adds_module_and_importers(self):
+    def test_search_keeps_importers_and_drops_diagnostics(self):
         with tempfile.TemporaryDirectory() as root:
             db = os.path.join(root, ".utility", "deps.sqlite")
             _create_db(db)
@@ -61,9 +61,11 @@ class ProjectSearchContextTest(unittest.TestCase):
                 result = project_tools.tool_project_search(db, "target_fn")
         self.assertEqual(result["status"], "exact")
         hit = result["results"][0]
-        self.assertEqual(hit["module"], "src/pkg")
         self.assertEqual(hit["importedBy"], ["src/app.py"])
-        self.assertEqual(hit["importCount"], 1)
+        self.assertEqual(hit["line"], 3)
+        self.assertNotIn("module", hit)
+        self.assertNotIn("importCount", hit)
+        self.assertNotIn("visibility", hit)
 
     def test_module_survives_missing_imports_table(self):
         with tempfile.TemporaryDirectory() as root:
@@ -98,8 +100,8 @@ class LegacySymbolSchemaTest(unittest.TestCase):
             with mock.patch.object(project_tools, "_search_vectors", return_value=[]):
                 result = project_tools.tool_project_search(db, "legacy_fn")
         self.assertEqual(result["status"], "exact")
-        self.assertIsNone(result["result"]["startLine"])
-        self.assertEqual(result["result"]["module"], "src")
+        self.assertNotIn("line", result["result"])
+        self.assertNotIn("module", result["result"])
 
 
 class VectorOnlySearchTest(unittest.TestCase):
@@ -133,8 +135,9 @@ class VectorOnlySearchTest(unittest.TestCase):
         )
         self.assertEqual(result["status"], "weak_match")
         self.assertNotIn("result", result)
-        self.assertEqual(result["results"][0]["layer"], "vector")
-        self.assertEqual(result["results"][0]["module"], "src/core")
+        self.assertEqual(result["results"][0]["score"], 0.53)
+        self.assertNotIn("layer", result["results"][0])
+        self.assertNotIn("module", result["results"][0])
 
     def test_chinese_vector_only_is_weak_match(self):
         result = self._run(

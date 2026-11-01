@@ -18,15 +18,18 @@ from agent_gateway.core.config import (
     summary_model,
 )
 from agent_gateway.core.memory_lifecycle import (
+    ARCHIVED_AT_FIELD as ARCHIVED_AT_FIELD,
     COLD_SOURCE_MEMORY_IDS_FIELD as COLD_SOURCE_MEMORY_IDS_FIELD,
     COLD_STALE_FIELD as COLD_STALE_FIELD,
     DELETED_AT_FIELD as DELETED_AT_FIELD,
+    DISPUTED_AT_FIELD as DISPUTED_AT_FIELD,
     PROCESSED_CONSUMED_MASK as PROCESSED_CONSUMED_MASK,
     PROCESSED_FIELD as PROCESSED_FIELD,
     PROCESSED_RETIRED_MASK as PROCESSED_RETIRED_MASK,
     PROCESSED_SUMMARIZED_MASK as PROCESSED_SUMMARIZED_MASK,
     REVISION_FIELD as REVISION_FIELD,
     STATUS_ACTIVE as STATUS_ACTIVE,
+    STATUS_ARCHIVED as STATUS_ARCHIVED,
     STATUS_DELETED as STATUS_DELETED,
     STATUS_FIELD as STATUS_FIELD,
     STATUS_HIDDEN as STATUS_HIDDEN,
@@ -101,9 +104,6 @@ EPISODE_COLD_LOOKUP_LIMIT = 200
 # A summary barely related to any source memory starts its own group.
 EPISODE_COLD_MIN_SIMILARITY = 0.45
 
-# Retention: superseded entries are physically removed sooner than active ones.
-SUPERSEDED_RETENTION_DAYS = 30
-
 ERR_MEMORY_IDS_EMPTY = "memory_ids must not be empty"
 ERR_VALUE_INVALID = "value must be 0 (reset) or 1 (set)"
 ERR_BIT_VALUE_NOT_INT = "bit/value must be integers"
@@ -118,11 +118,14 @@ def err_bit_out_of_range(bit: int | None = None) -> str:
 
 
 ARCHIVE_DAYS = 90
-HOT_RETENTION_DAYS = 180
 ARCHIVE_INTERVAL_HOURS = 24
 
 # Empty string = injected by the Swift layer (current system username)
 DEFAULT_USER_ID = os.environ.get("UTILITY_USER_ID", "")
 
-CONTRADICTION_SIMILARITY_THRESHOLD = 0.8
+# Contradiction candidates sit in a similarity band: too close and they are the same
+# fact, too far apart and they are unrelated. The band is the reference implementation's
+# published default, not a value tuned on this store.
+CONTRADICTION_SIMILARITY_MIN = 0.4
+CONTRADICTION_SIMILARITY_MAX = 0.75
 CONTRADICTION_TOP_K = 5

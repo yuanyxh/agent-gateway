@@ -25,10 +25,12 @@ from mcp.types import TextContent
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.services.mcp.server_constants import (
     AI_API_KEY,
+    ARCHIVED_AT_FIELD,
     COLD_COLLECTION,
     COLD_SOURCE_MEMORY_IDS_FIELD,
     COLD_STALE_FIELD,
-    CONTRADICTION_SIMILARITY_THRESHOLD,
+    CONTRADICTION_SIMILARITY_MAX,
+    CONTRADICTION_SIMILARITY_MIN,
     CONTRADICTION_TOP_K,
     DEDUPE_EXACT_SIMILARITY,
     DEDUPE_NOTICE_SIMILARITY,
@@ -37,6 +39,7 @@ from agent_gateway.services.mcp.server_constants import (
     DEFAULT_TIMEOUT,
     DEFAULT_USER_ID,
     DELETED_AT_FIELD,
+    DISPUTED_AT_FIELD,
     EPISODE_COLD_LOOKUP_LIMIT,
     EPISODE_COLD_MIN_SIMILARITY,
     EPISODE_FIELD,
@@ -45,7 +48,6 @@ from agent_gateway.services.mcp.server_constants import (
     ERR_HOT_LAYER_NOT_READY,
     ERR_MEMORY_IDS_EMPTY,
     ERR_VALUE_INVALID,
-    HEAT_MAX,
     HOT_INIT_MAX_RETRIES,
     HOT_INIT_MAX_RUNTIME_FAILURES,
     HOT_INIT_RETRY_DELAY,
@@ -56,6 +58,7 @@ from agent_gateway.services.mcp.server_constants import (
     PROCESSED_RETIRED_MASK,
     REVISION_FIELD,
     STATUS_ACTIVE,
+    STATUS_ARCHIVED,
     STATUS_DELETED,
     STATUS_FIELD,
     STATUS_SUPERSEDED,
@@ -83,8 +86,11 @@ from agent_gateway.services.mcp.server_tool_schema import (
     DEFAULT_CATCH_UP_LIMIT,
     DEFAULT_CATCH_UP_MAX_CHARS,
     DEFAULT_RECALL_LIMIT,
+    DEFAULT_RECALL_MAX_CHARS,
 )
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
+from agent_gateway.services.memory import link as memory_link
+from agent_gateway.services.memory import store as memory_store
 from agent_gateway.services.retrieval.arms.recall import (
     ColdMemoryArm,
     HotMemoryArm,
@@ -96,7 +102,8 @@ from agent_gateway.services.retrieval.arms.recall import (  # noqa: F401
     dot as _dot,
     project_hot_result as _project_hot_result,
 )
-from agent_gateway.services.retrieval.fusion.score import HeatWeightedFusion
+from agent_gateway.core.config import memory_max_content_chars, rank_signal_weights
+from agent_gateway.services.retrieval.fusion.score import SignalWeightedFusion
 from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage
@@ -339,6 +346,15 @@ def _cold_episode_id(
     return max(tally, key=tally.get)
 
 
+def _importance(value) -> int:
+    """Clamp to the published 1-10 scale; a missing value takes the midpoint."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 5
+    return max(1, min(number, 10))
+
+
 def _build_metadata(src: dict, now_iso: str) -> dict:
     return {
         "agent_id": src.get("agent_id", "unknown"),
@@ -355,6 +371,17 @@ def _build_metadata(src: dict, now_iso: str) -> dict:
         REVISION_FIELD: 1,
         # Processed bitmask: bit0=summarized, bit1=retired (see server_constants)
         PROCESSED_FIELD: 0,
+        # Content and context live in separate fields so a response never echoes the
+        # embedded text back as if it were the fact.
+        "fact": str(src.get("content") or ""),
+        "context": str(src.get("context") or ""),
+        "type": str(src.get("type") or ""),
+        "source_files": src.get("source_files") or [],
+        "source_url": str(src.get("source_url") or ""),
+        "importance": _importance(src.get("importance")),
+        "protected": bool(src.get("protected", False)),
+        # Set by the consolidation pass so its own output never feeds the next round.
+        "generated_by": str(src.get("generated_by") or ""),
     }
 
 
@@ -397,14 +424,15 @@ def _active_similar(content: str) -> list[dict]:
             score = r.get("score") or 0
         if r.get("hash") == content_hash:
             score = 1.0
+        meta = r.get("metadata") or {}
         similar.append(
             {
                 "id": r["id"],
                 "content": str(r.get("memory") or r.get("content") or "")[:120],
                 "score": round(float(score), 3),
-                "episode_id": str(
-                    (r.get("metadata") or {}).get(EPISODE_FIELD) or ""
-                ).strip(),
+                "episode_id": str(meta.get(EPISODE_FIELD) or "").strip(),
+                "fact": str(meta.get("fact") or ""),
+                "context": str(meta.get("context") or ""),
             }
         )
     return similar
@@ -446,6 +474,8 @@ def _mark_superseded(
             done.append(sid)
         else:
             failed.append(sid)
+    if done:
+        memory_link.record_hot_status(done, STATUS_SUPERSEDED, superseded_by=new_id)
     return done, failed
 
 
@@ -482,28 +512,82 @@ def _mark_cold_stale(memory_ids: list[str]) -> int:
         return 0
 
 
+def _embed_text(item: dict) -> str:
+    """The text actually embedded: the fact plus its context, so context is searchable."""
+    fact = str(item.get("content") or "")
+    context = str(item.get("context") or "").strip()
+    return f"{fact}\nContext: {context}" if context else fact
+
+
+def _content_warning(content: str) -> str:
+    limit = memory_max_content_chars()
+    if limit and len(content) > limit:
+        return f"content is {len(content)} chars; keep one fact per memory"
+    return ""
+
+
 def _write_memory(item: dict, now_iso: str) -> dict:
     """Dedupe, persist one memory, then soft-supersede the ids it replaces."""
     content = item["content"]
-    similar = _active_similar(content)
+    content_warning = _content_warning(content)
+    embed_text = _embed_text(item)
+    similar = _active_similar(embed_text)
     top = similar[0] if similar else None
+    context = str(item.get("context") or "").strip()
     supersedes = [str(s) for s in (item.get("supersedes") or []) if s]
+    # The same fact written for a different situation is a second memory, not a
+    # duplicate: the dedupe key is the fact plus its context.
+    different_context = bool(
+        top and top.get("fact") == content and top.get("context", "") != context
+    )
 
     # Idempotent write: the same fact is already active, so return its id instead of
     # creating a near-duplicate. Explicit supersede targets are still retired.
-    if top and top["score"] >= DEDUPE_EXACT_SIMILARITY:
+    if top and top["score"] >= DEDUPE_EXACT_SIMILARITY and not different_context:
+        old = get_hot_memory().get(top["id"]) or {}
+        meta = dict(old.get("metadata") or {})
+        changed = False
         requested = str(item.get("episode_id") or "").strip()
         if requested and not top.get("episode_id"):
-            old = get_hot_memory().get(top["id"]) or {}
-            meta = dict(old.get("metadata") or {})
             meta[EPISODE_FIELD] = requested
-            _update_metadata(top["id"], meta)
             top["episode_id"] = requested
+            changed = True
+        # A repeated consolidation summary must keep its marker; without it the next
+        # pass sees a plain memory and summarizes the same cluster again.
+        if item.get("generated_by"):
+            meta["generated_by"] = str(item["generated_by"])
+            changed = True
+        merged_tags = list(meta.get("tags") or [])
+        for tag in item.get("tags") or []:
+            if tag not in merged_tags:
+                merged_tags.append(tag)
+                changed = True
+        if merged_tags:
+            meta["tags"] = merged_tags
+        for key in ("fact", "context", "type", "source_files", "source_url"):
+            if item.get(key) and not meta.get(key):
+                meta[key] = item[key]
+                changed = True
+        if item.get("importance") is not None:
+            meta["importance"] = _importance(item["importance"])
+            changed = True
+        if item.get("protected"):
+            meta["protected"] = True
+            changed = True
+        if changed:
+            _update_metadata(top["id"], meta)
         # Rewriting the same fact with supersedes pointing at itself must not
         # self-retire the only active copy.
         targets = [sid for sid in supersedes if sid != top["id"]]
         superseded, failed = _mark_superseded(targets, top["id"], now_iso)
         _mark_cold_stale(superseded)
+        memory_link.record_hot_memory(
+            top["id"],
+            content,
+            {"episode_id": top.get("episode_id") or "", "status": STATUS_ACTIVE},
+            supersedes=tuple(targets),
+            created_at=now_iso,
+        )
         return {
             "success": True,
             "memory_id": top["id"],
@@ -511,7 +595,8 @@ def _write_memory(item: dict, now_iso: str) -> dict:
             "deduped": True,
             "episode_id": top.get("episode_id") or "",
             "superseded": superseded,
-            "warnings": [f"supersede target not found: {sid}" for sid in failed],
+            "warnings": [f"supersede target not found: {sid}" for sid in failed]
+            + ([content_warning] if content_warning else []),
             "similar": [s for s in similar if s["score"] >= DEDUPE_NOTICE_SIMILARITY],
         }
 
@@ -530,7 +615,7 @@ def _write_memory(item: dict, now_iso: str) -> dict:
     metadata[REVISION_FIELD] = revision
 
     result = get_hot_memory().add(
-        content, user_id=DEFAULT_USER_ID, metadata=metadata, infer=False
+        embed_text, user_id=DEFAULT_USER_ID, metadata=metadata, infer=False
     )
     rows = result.get("results", [])
     memory_id = rows[0].get("id") if rows else None
@@ -544,6 +629,13 @@ def _write_memory(item: dict, now_iso: str) -> dict:
     superseded, failed = _mark_superseded(supersedes, memory_id, now_iso)
     if superseded:
         _mark_cold_stale(superseded)
+    memory_link.record_hot_memory(
+        memory_id,
+        content,
+        metadata,
+        supersedes=tuple(supersedes),
+        created_at=now_iso,
+    )
     return {
         "success": True,
         "memory_id": memory_id,
@@ -551,7 +643,8 @@ def _write_memory(item: dict, now_iso: str) -> dict:
         "deduped": False,
         "episode_id": metadata[EPISODE_FIELD],
         "superseded": superseded,
-        "warnings": [f"supersede target not found: {sid}" for sid in failed],
+        "warnings": [f"supersede target not found: {sid}" for sid in failed]
+        + ([content_warning] if content_warning else []),
         "similar": [s for s in similar if s["score"] >= DEDUPE_NOTICE_SIMILARITY],
     }
 
@@ -597,7 +690,9 @@ def _mark_hot_disputed(memory_id: str, disputed_by: str, reason: str) -> bool:
         old_meta["disputed"] = True
         old_meta["disputed_by"] = disputed_by
         old_meta["dispute_reason"] = reason
+        old_meta[DISPUTED_AT_FIELD] = datetime.now().isoformat()
         if _update_metadata(memory_id, old_meta):
+            memory_link.record_dispute(memory_id, disputed_by, reason)
             return True
         logger.warning(
             f"[dispute] in-place update failed for {memory_id}, rebuilding (id will change)"
@@ -667,12 +762,17 @@ def set_memory_status(
     Restoring to active clears only the retired bit, so an explicit re-activation does
     not cause the summarizer to re-consume content it already digested.
     """
-    if status not in (STATUS_ACTIVE, STATUS_SUPERSEDED, STATUS_DELETED):
+    if status not in (
+        STATUS_ACTIVE,
+        STATUS_SUPERSEDED,
+        STATUS_ARCHIVED,
+        STATUS_DELETED,
+    ):
         raise ValueError(f"invalid status: {status}")
     if not get_hot_memory():
         raise RuntimeError(ERR_HOT_LAYER_NOT_READY)
     now_iso = datetime.now().isoformat()
-    updated, failed, retired = 0, [], []
+    updated, failed, retired, updated_ids = 0, [], [], []
     for mid in memory_ids:
         try:
             old = get_hot_memory().get(mid)
@@ -689,18 +789,26 @@ def set_memory_status(
             meta[SUPERSEDED_BY_FIELD] = ""
             meta[SUPERSEDED_AT_FIELD] = ""
             meta[DELETED_AT_FIELD] = ""
+            meta[ARCHIVED_AT_FIELD] = ""
+            meta["archived"] = False
         else:
             meta[PROCESSED_FIELD] = flags | PROCESSED_RETIRED_MASK
             if status == STATUS_SUPERSEDED:
                 meta[SUPERSEDED_BY_FIELD] = superseded_by
                 meta[SUPERSEDED_AT_FIELD] = now_iso
+            elif status == STATUS_ARCHIVED:
+                meta[ARCHIVED_AT_FIELD] = now_iso
+                meta["archived"] = True
             else:
                 meta[DELETED_AT_FIELD] = now_iso
+                meta["archived"] = True
             retired.append(mid)
         if _update_metadata(mid, meta):
             updated += 1
+            updated_ids.append(mid)
         else:
             failed.append(mid)
+    memory_link.record_hot_status(updated_ids, status, superseded_by=superseded_by)
     cold_stale = _mark_cold_stale(retired) if retired else 0
     return {
         "status": status,
@@ -711,9 +819,47 @@ def set_memory_status(
     }
 
 
+def _memory_created_at(memory_id: str) -> str:
+    try:
+        row = get_hot_memory().get(memory_id) or {}
+    except Exception:
+        return ""
+    return str(row.get("created_at") or "")
+
+
+def _supersede_older(current_id: str, other_id: str) -> None:
+    """Retire the older side of a confirmed contradiction; never both."""
+    if not current_id or not other_id or current_id == other_id:
+        return
+    created = _memory_created_at(current_id)
+    other_created = _memory_created_at(other_id)
+    if not created or not other_created:
+        return
+    older, newer = (
+        (other_id, current_id) if created >= other_created else (current_id, other_id)
+    )
+    done, _ = _mark_superseded([older], newer, datetime.now().isoformat())
+    if done:
+        _mark_cold_stale(done)
+
+
 _pending_contradictions: set[asyncio.Task] = set()
 
 _MAX_CONTRADICTION_TASKS = 5
+
+
+def _contradiction_band(rows: list, memory_id: str) -> list[dict]:
+    """Active neighbours inside the band: closer is a duplicate, farther is unrelated."""
+    return [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("id") != memory_id
+        and _memory_status(row.get("metadata")) == STATUS_ACTIVE
+        and CONTRADICTION_SIMILARITY_MIN
+        <= float(row.get("score") or 0)
+        <= CONTRADICTION_SIMILARITY_MAX
+    ]
 
 
 async def _contradiction_check_hot(content: str, memory_id: str) -> None:
@@ -734,23 +880,15 @@ async def _contradiction_check_hot(content: str, memory_id: str) -> None:
             if isinstance(similar_raw, list)
             else similar_raw.get("results", [])
         )
-        high_sim = [
-            r
-            for r in similar_list
-            if isinstance(r, dict)
-            and r.get("score", 0) >= CONTRADICTION_SIMILARITY_THRESHOLD
-            and r.get("id") != memory_id
-            # Superseded versions are history, not competing facts: comparing against
-            # them turns an ordinary update into a false "contradiction".
-            and _memory_status(r.get("metadata")) == STATUS_ACTIVE
-        ]
-        if high_sim:
-            result = await _check_contradiction(content, high_sim)
+        band = _contradiction_band(similar_list, memory_id)
+        if band:
+            result = await _check_contradiction(content, band)
             if result and result.get("relation") == "contradiction":
                 cid, reason = result.get("conflicting_id", ""), result.get("reason", "")
                 _mark_hot_disputed(memory_id, cid, reason)
                 if cid:
                     _mark_hot_disputed(cid, memory_id, reason)
+                    _supersede_older(memory_id, cid)
                 logger.info(f"Contradiction detected: {memory_id} <-> {cid} ({reason})")
     except Exception as e:
         logger.warning(f"Hot contradiction check failed: {e}")
@@ -778,15 +916,18 @@ async def contradiction_check_cold(content: str, point_id: str) -> None:
         resp = get_qdrant().query_points(
             collection_name=COLD_COLLECTION, query=vec, limit=CONTRADICTION_TOP_K
         )
-        high_sim = [
+        band = [
             r
             for r in resp.points
-            if r.score >= CONTRADICTION_SIMILARITY_THRESHOLD and r.id != point_id
+            if r.id != point_id
+            and CONTRADICTION_SIMILARITY_MIN
+            <= float(r.score or 0)
+            <= CONTRADICTION_SIMILARITY_MAX
         ]
-        if high_sim:
+        if band:
             similar = [
                 {"id": r.id, "content": r.payload.get("content", "")[:500]}
-                for r in high_sim
+                for r in band
             ]
             result = await _check_contradiction(content, similar)
             if result and result.get("relation") == "contradiction":
@@ -800,11 +941,18 @@ async def contradiction_check_cold(content: str, point_id: str) -> None:
                                     "disputed": True,
                                     "disputed_by": cid if pid == point_id else point_id,
                                     "dispute_reason": reason,
+                                    DISPUTED_AT_FIELD: datetime.now().isoformat(),
                                 },
                                 points=[pid],
                             )
                         except Exception:
                             pass
+                left = memory_store.find_node_by_point_id(str(point_id))
+                right = memory_store.find_node_by_point_id(str(cid))
+                if left and right:
+                    memory_link.record_dispute(
+                        left["node_id"], right["node_id"], reason
+                    )
                 logger.info(
                     f"Cold contradiction detected: {point_id} <-> {cid} ({reason})"
                 )
@@ -830,7 +978,7 @@ async def _handle_remember(arguments: dict) -> list[TextContent]:
     result = _write_memory(arguments, now_iso)
     if result.get("memory_id") and not result.get("deduped"):
         spawn_contradiction_check(
-            _contradiction_check_hot(arguments["content"], result["memory_id"])
+            _contradiction_check_hot(_embed_text(arguments), result["memory_id"])
         )
     return [TextContent(type="text", text=dumps(result))]
 
@@ -864,7 +1012,7 @@ async def _handle_remember_batch(arguments: dict) -> list[TextContent]:
         results.append(item_result)
         if item_result.get("memory_id") and not item_result.get("deduped"):
             spawn_contradiction_check(
-                _contradiction_check_hot(mem["content"], item_result["memory_id"])
+                _contradiction_check_hot(_embed_text(mem), item_result["memory_id"])
             )
     return [
         TextContent(
@@ -906,6 +1054,9 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
             )
         ]
     limit = int_arg(arguments, "limit", DEFAULT_RECALL_LIMIT)
+    max_chars = int_arg(arguments, "max_chars", DEFAULT_RECALL_MAX_CHARS)
+    if max_chars < 0:
+        max_chars = DEFAULT_RECALL_MAX_CHARS
     include_archived = arguments.get("include_archived", False)
     include_superseded = bool(arguments.get("include_superseded", False))
     layers = arguments.get("layers")
@@ -934,17 +1085,25 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     out = pipeline.run_query(request, limit, tool="recall")
     top = out["results"]
     related = out["related"]
+    # The budget is spent on the primary results first. Once they are cut, related
+    # context is dropped rather than crowding out a better-scored memory; when they
+    # fit, related rows may use whatever is left.
+    top, top_truncated, used = _bound_catch_up_results(top, max_chars)
+    if top_truncated:
+        related = []
+    elif max_chars > 0:
+        remaining = max_chars - used
+        related, _, _ = (
+            _bound_catch_up_results(related, remaining)
+            if remaining > 0
+            else ([], False, 0)
+        )
     status = out["status"]
     payload = {
         "status": status,
         "results": top,
         "related": related,
-        "count": out["count"],
-        "related_count": out["related_count"],
-        "hot_count": sum(1 for r in top if r.get("layer") == "hot"),
-        "cold_count": sum(1 for r in top if r.get("layer") == "cold"),
-        "notes_count": sum(1 for r in top if r.get("layer") == "notes"),
-        "trace_id": out["trace_id"],
+        "count": len(top),
     }
     if status == "weak_match":
         payload["hint"] = (
@@ -1002,7 +1161,7 @@ def _build_recall_pipeline(
     return Pipeline(
         name="recall",
         arms=arms,
-        fusion=HeatWeightedFusion(heat_max=HEAT_MAX, weight=0.0),
+        fusion=SignalWeightedFusion(**rank_signal_weights()),
         gate=LayerPresenceGate(),
         expander=expand_episodes,
         stages=stages,
@@ -1011,14 +1170,15 @@ def _build_recall_pipeline(
 
 def _bound_catch_up_results(
     results: list[dict], max_chars: int
-) -> tuple[list[dict], bool]:
+) -> tuple[list[dict], bool, int]:
     """Keep the newest results within a character budget.
 
     The first item is always returned; if it alone exceeds the budget, only its
-    content is truncated so pagination can still advance.
+    content is truncated so pagination can still advance. Returns the kept rows,
+    whether anything was dropped, and the characters actually used.
     """
     if max_chars <= 0:
-        return results, False
+        return results, False, 0
     kept: list[dict] = []
     used = 0
     for item in results:
@@ -1041,8 +1201,9 @@ def _bound_catch_up_results(
                 if len(dumps(trimmed)) > max_chars:
                     trimmed["content"] = ""
             kept.append(trimmed)
-        return kept, True
-    return kept, False
+            used = len(dumps(trimmed))
+        return kept, True, used
+    return kept, False, used
 
 
 @_register("catch_up")
@@ -1092,7 +1253,7 @@ async def _handle_catch_up(arguments: dict) -> list[TextContent]:
     )
     total = len(data)
     window = data[offset : offset + limit]
-    results, char_truncated = _bound_catch_up_results(
+    results, char_truncated, _ = _bound_catch_up_results(
         [_project_hot_result(m) for m in window], max_chars
     )
     payload = {
@@ -1128,7 +1289,8 @@ async def _handle_forget(arguments: dict) -> list[TextContent]:
                 meta[PROCESSED_FIELD] = (
                     int(meta.get(PROCESSED_FIELD, 0) or 0) | PROCESSED_RETIRED_MASK
                 )
-                _update_metadata(memory_id, meta)
+                if _update_metadata(memory_id, meta):
+                    memory_link.record_hot_status([memory_id], STATUS_DELETED)
             except Exception:
                 pass
     if layer in ("cold", "all") and point_id and get_qdrant():

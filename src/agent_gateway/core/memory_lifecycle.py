@@ -16,13 +16,16 @@ PROCESSED_CONSUMED_MASK = PROCESSED_SUMMARIZED_MASK | PROCESSED_RETIRED_MASK
 STATUS_FIELD = "status"
 STATUS_ACTIVE = "active"
 STATUS_SUPERSEDED = "superseded"
+STATUS_ARCHIVED = "archived"
 STATUS_DELETED = "deleted"
-STATUS_HIDDEN = (STATUS_SUPERSEDED, STATUS_DELETED)
+STATUS_HIDDEN = (STATUS_SUPERSEDED, STATUS_ARCHIVED, STATUS_DELETED)
 
 SUPERSEDED_BY_FIELD = "superseded_by"
 SUPERSEDED_AT_FIELD = "superseded_at"
 SUPERSES_FIELD = "supersedes"
 REVISION_FIELD = "revision"
+ARCHIVED_AT_FIELD = "archived_at"
+DISPUTED_AT_FIELD = "disputed_at"
 DELETED_AT_FIELD = "deleted_at"
 
 # Cold summaries derived from hot memories; superseding a source marks them stale.

@@ -39,11 +39,14 @@ DEFAULT_WEBSEARCH_MAX_CHARS = max(
 DEFAULT_READ_MAX_CHARS = max(0, arg_default("read_url", "max_chars"))
 DEFAULT_CATCH_UP_LIMIT = max(1, arg_default("catch_up", "limit"))
 DEFAULT_CATCH_UP_MAX_CHARS = max(0, arg_default("catch_up", "max_chars"))
+DEFAULT_GRAPH_LIMIT = 50
+#: recall shares catch_up's budget so both tools bound their response the same way.
+DEFAULT_RECALL_MAX_CHARS = DEFAULT_CATCH_UP_MAX_CHARS
 DEFAULT_SUMMARIZE_MAX_TOKENS = DEFAULT_MAX_TOKENS
 
 #: Fixed English tool descriptions; parameter guidance lives in `tool_text.PARAM_DESCRIPTIONS`.
 TOOL_DESCRIPTIONS: dict[str, str] = {
-    "remember": "Trigger: user says remember/record, a bug is fixed, an insight is learned, or an architecture design changes. Writes one fact to shared memory. Pass supersedes with the id of the memory this fact replaces; the old entry is retired, not deleted.",
+    "remember": "Trigger: user says remember/record, a bug is fixed, an insight is learned, or an architecture design changes. Writes one fact to shared memory. content holds only the fact; context holds why it matters and when it applies. Pass supersedes with the id of the memory this fact replaces; the old entry is retired, not deleted.",
     "remember_batch": "Batch version of remember; prefer it for multiple facts to cut calls.",
     "recall": "Trigger: user says look up/search/find that earlier one, or refers to history or existing information. Searches shared memory, knowledge base, and notes. Results below the relevance floor are omitted; same-episode context is returned in related.",
     "catch_up": "Trigger: user says just now/last time/previously/recently, or asks what was done, the progress, or what remains unresolved. Do not substitute git log.",
@@ -53,6 +56,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "project_notes": "Trigger: user asks to find a project's README, design doc, plan, or TODO without knowing the file name. Searches local project Markdown by meaning, not just exact keywords.",
     "tool_resource": "Load a file under references or a script under scripts when instructed.",
     "set_memory_processed": "Set or reset the processed bit of memories. Idempotent.",
+    "memory_get": "Trigger: you have a memory id from recall or remember and need its full body, lifecycle status, or an archived entry.",
+    "memory_graph": "Trigger: you need the version chain, episode group, contradictions, or source chain around one memory id. Follows edges until the chain ends.",
     "websearch_engine": "Trigger: user says web search/search online/look up/latest info. Returns result links and, when fetch_top>0, Markdown text of top pages.",
     "read_url": "Trigger: user says read this link, check this URL, fetch this page, 看这个链接/读一下/抓取网页. when a link needs to be read, returns the page as Markdown.",
 }
@@ -70,6 +75,23 @@ def build_tools() -> list[Tool]:
                         "type": "string",
                         "description": param_text("param.memory_content"),
                     },
+                    "context": {
+                        "type": "string",
+                        "description": param_text("param.memory_context"),
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": param_text("param.memory_type"),
+                    },
+                    "source_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": param_text("param.source_files"),
+                    },
+                    "source_url": {
+                        "type": "string",
+                        "description": param_text("param.source_url"),
+                    },
                     "agent_id": {"type": "string", "default": "unknown"},
                     "visibility": {
                         "type": "string",
@@ -78,6 +100,18 @@ def build_tools() -> list[Tool]:
                     },
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "confidence": {"type": "number", "default": 1.0},
+                    "importance": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "default": 5,
+                        "description": param_text("param.memory_importance"),
+                    },
+                    "protected": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": param_text("param.memory_protected"),
+                    },
                     "supersedes": {"type": "array", "items": {"type": "string"}},
                     "disputed_by": {"type": "array", "items": {"type": "string"}},
                     "episode_id": {
@@ -104,6 +138,23 @@ def build_tools() -> list[Tool]:
                                     "type": "string",
                                     "description": param_text("param.memory_content"),
                                 },
+                                "context": {
+                                    "type": "string",
+                                    "description": param_text("param.memory_context"),
+                                },
+                                "type": {
+                                    "type": "string",
+                                    "description": param_text("param.memory_type"),
+                                },
+                                "source_files": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": param_text("param.source_files"),
+                                },
+                                "source_url": {
+                                    "type": "string",
+                                    "description": param_text("param.source_url"),
+                                },
                                 "agent_id": {"type": "string", "default": "unknown"},
                                 "visibility": {
                                     "type": "string",
@@ -112,6 +163,20 @@ def build_tools() -> list[Tool]:
                                 },
                                 "tags": {"type": "array", "items": {"type": "string"}},
                                 "confidence": {"type": "number", "default": 1.0},
+                                "importance": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 10,
+                                    "default": 5,
+                                    "description": param_text(
+                                        "param.memory_importance"
+                                    ),
+                                },
+                                "protected": {
+                                    "type": "boolean",
+                                    "default": False,
+                                    "description": param_text("param.memory_protected"),
+                                },
                                 "supersedes": {
                                     "type": "array",
                                     "items": {"type": "string"},
@@ -147,6 +212,11 @@ def build_tools() -> list[Tool]:
                         "type": "integer",
                         "default": DEFAULT_RECALL_LIMIT,
                         "description": param_text("param.max_results"),
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "default": DEFAULT_RECALL_MAX_CHARS,
+                        "description": param_text("param.recall_max_chars"),
                     },
                     "include_archived": {"type": "boolean", "default": False},
                     "include_superseded": {
@@ -242,6 +312,58 @@ def build_tools() -> list[Tool]:
                     },
                 },
                 "required": ["memory_ids"],
+            },
+        ),
+        Tool(
+            name="memory_get",
+            description=TOOL_DESCRIPTIONS["memory_get"],
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "node_id": {
+                        "type": "string",
+                        "description": param_text("param.memory_node_id"),
+                    },
+                },
+                "required": ["node_id"],
+            },
+        ),
+        Tool(
+            name="memory_graph",
+            description=TOOL_DESCRIPTIONS["memory_graph"],
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "node_id": {
+                        "type": "string",
+                        "description": param_text("param.memory_node_id"),
+                    },
+                    "edge": {
+                        "type": "string",
+                        "enum": [
+                            "supersedes",
+                            "episode",
+                            "derived_from",
+                            "disputes",
+                            "relates",
+                            "mentions",
+                        ],
+                        "default": "supersedes",
+                        "description": param_text("param.memory_edge"),
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["up", "down", "both"],
+                        "default": "both",
+                        "description": param_text("param.memory_direction"),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": DEFAULT_GRAPH_LIMIT,
+                        "description": param_text("param.max_results"),
+                    },
+                },
+                "required": ["node_id"],
             },
         ),
         # ── Project tools ──

@@ -99,7 +99,32 @@ def _attach_search_context(db_path: str, results: list[dict]) -> None:
             result["importCount"] = len(owners)
 
 
-def _project_search_impl(
+#: Decision fields for one project search hit; visibility, module and importCount
+#: are diagnostics and stay out of the model-facing response.
+_RESULT_FIELDS = ("name", "kind", "signature", "file")
+
+
+def _shape_row(row: dict) -> dict:
+    out = {key: row[key] for key in _RESULT_FIELDS if key in row}
+    line = row.get("startLine") or row.get("line")
+    if line:
+        out["line"] = line
+    if row.get("score") is not None:
+        out["score"] = row["score"]
+    if row.get("importedBy"):
+        out["importedBy"] = row["importedBy"]
+    return out
+
+
+def _shape_payload(payload: dict) -> dict:
+    if isinstance(payload.get("result"), dict):
+        payload["result"] = _shape_row(payload["result"])
+    if isinstance(payload.get("results"), list):
+        payload["results"] = [_shape_row(row) for row in payload["results"]]
+    return payload
+
+
+def _project_search_raw(
     db_path: str,
     query: str,
     file_path: str = "",
@@ -259,6 +284,16 @@ def _project_search_impl(
         "results": all_found[:limit],
         "total": total,
     }
+
+
+def _project_search_impl(
+    db_path: str,
+    query: str,
+    file_path: str = "",
+    kind: str = "",
+    limit: int = DEFAULT_PROJECT_SEARCH_LIMIT,
+) -> dict:
+    return _shape_payload(_project_search_raw(db_path, query, file_path, kind, limit))
 
 
 @traced("project_search", query_arg=1)

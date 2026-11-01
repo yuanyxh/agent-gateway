@@ -47,3 +47,8 @@
 - D3 由 Agent 决定，记录默认值来源。
 - 决定被推翻时新增一条，不删除旧记录。
 | 2026-10-31 | D3 | 回退 progressive 规则注入：每条真实 user 消息重新注入完整规则块，删除 `modelProxy.ruleInjection` 与 `MODEL_PROXY_RULE_INJECTION` | Agent | 用户实测对「首条 full + 其余短提醒」的遵从率下降；配置面只增加行为漂移 | 需恢复时按 97d6240 复原 |
+
+| 2026-11-01 | D3 | 周任务矛盾候选改为每节点 Qdrant 近邻（`query_batch_points` 分批 top-k，带内过滤去重），全量矩阵仅作失败回退 | Agent | 全量 O(n²) 在 3.6 万节点时约 5 GB 矩阵；forgetful 与 mcp-memory-service 的关联/建边均用采样或近邻，没有全量闭包 | 回退路径保留 `_band_pairs`，由近邻异常触发 |
+| 2026-11-01 | D3 | 新增 `importance`(1–10)/`protected`；矛盾与归档跳过 protected 与达到 `MEMORY_PROTECT_IMPORTANCE` 的条目；周任务与 REST 增加 `dry_run` | Agent | 生产周任务曾直接 supersede 一条历史记忆；forgetful 有 protected 与默认 dry-run，我们缺这两个安全阀 | 阈值留空即只保护显式 protected；dry-run 不写边 |
+| 2026-11-01 | D3 | `recall` 的 mem0 filters 加 `NOT archived=true`；新增 `SignalWeightedFusion`，recency/access/quality 权重默认 0 | Agent | 归档条目会占用 top_k 名额再被丢弃；多信号必须有同一评测集前后对比才允许开启，默认关闭不改变现有排序 | 清空权重即回纯分数排序；过滤失败回退结果后过滤 |
+| 2026-11-01 | D3 | `MEMORY_PROTECT_IMPORTANCE`/`MEMORY_MAX_CONTENT_CHARS`/`RANK_SIGNAL_*` 先只读 env，未接入 utility 配置注入 | Agent | 避免在未产品化的阶段改动 Swift 配置契约；启用时须按宿主规则同时加 `baseEnvironment()` 与 `taskEnvironmentOverrides()` 两个注入点 | 不设 env 即全部关闭/无限制 |

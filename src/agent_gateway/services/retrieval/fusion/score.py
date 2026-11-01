@@ -7,8 +7,13 @@ Used where scores share a scale (all cosine similarities against one model).
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 from typing import Any
 
+from agent_gateway.services.memory.retention import (
+    ACCESS_COUNT_CAP,
+    RECENCY_WINDOW_DAYS,
+)
 from agent_gateway.services.retrieval.types import ArmResult, RetrievedItem
 
 
@@ -42,6 +47,58 @@ class HeatWeightedFusion:
                     merged[item.id] = item
         ordered = sorted(merged.values(), key=self.rank_key, reverse=True)
         return ordered[:limit]
+
+
+class SignalWeightedFusion:
+    """Score times optional signals; every weight defaults to zero.
+
+    Signals stay off until a replay on one evaluation set shows a gain, and each
+    can be disabled on its own. Windows and caps match the retention module so
+    the two features never disagree about "recent" or "frequently accessed".
+    """
+
+    name = "signal_weighted"
+
+    def __init__(
+        self,
+        recency: float = 0.0,
+        access: float = 0.0,
+        quality: float = 0.0,
+    ):
+        self._recency = recency
+        self._access = access
+        self._quality = quality
+
+    def rank_key(self, item: RetrievedItem) -> float:
+        extra = item.extra or {}
+        boost = 1.0
+        if self._recency:
+            boost += self._recency * _recency_value(extra.get("last_accessed_at"))
+        if self._access:
+            count = float(extra.get("access_count") or 0)
+            boost += self._access * min(count / ACCESS_COUNT_CAP, 1.0)
+        if self._quality:
+            boost += self._quality * float(extra.get("relevance") or 0.0)
+        return float(item.score) * boost
+
+    def fuse(self, arms: list[ArmResult], limit: int) -> list[RetrievedItem]:
+        merged: dict[str, RetrievedItem] = {}
+        for arm in arms:
+            for item in arm.items:
+                existing = merged.get(item.id)
+                if existing is None or item.score > existing.score:
+                    merged[item.id] = item
+        return sorted(merged.values(), key=self.rank_key, reverse=True)[:limit]
+
+
+def _recency_value(value, window_days: int = RECENCY_WINDOW_DAYS) -> float:
+    if not value:
+        return 0.0
+    try:
+        days = max(0.0, (datetime.now() - datetime.fromisoformat(str(value))).days)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, 1.0 - days / window_days)
 
 
 class MaxScoreFusion:
@@ -97,5 +154,6 @@ __all__: list[Any] = [
     "HeatWeightedFusion",
     "MaxScoreFusion",
     "RRFFusion",
+    "SignalWeightedFusion",
     "heat_key",
 ]

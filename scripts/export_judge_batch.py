@@ -21,25 +21,57 @@ SNIPPET = 200
 COUNTER = count(990000)
 
 
-def call_recall(endpoint: str, query: str, limit: int) -> dict:
-    body = {
-        "jsonrpc": "2.0",
-        "id": next(COUNTER),
-        "method": "tools/call",
-        "params": {"name": "recall", "arguments": {"query": query, "limit": limit}},
+def post(endpoint: str, body: dict, session: str = "") -> tuple[str, str]:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
     }
+    if session:
+        headers["Mcp-Session-Id"] = session
     request = urllib.request.Request(
+        endpoint, data=json.dumps(body).encode(), headers=headers
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        return response.headers.get("Mcp-Session-Id", session), response.read().decode()
+
+
+def open_session(endpoint: str) -> str:
+    session, _ = post(
         endpoint,
-        data=json.dumps(body).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
+        {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "judge-batch", "version": "1"},
+            },
         },
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        payload = json.loads(response.read().decode())
+    post(endpoint, {"jsonrpc": "2.0", "method": "notifications/initialized"}, session)
+    return session
+
+
+def call_recall(
+    endpoint: str, query: str, limit: int, session: str
+) -> tuple[str, dict]:
+    session, out = post(
+        endpoint,
+        {
+            "jsonrpc": "2.0",
+            "id": next(COUNTER),
+            "method": "tools/call",
+            "params": {
+                "name": "recall",
+                "arguments": {"keywords": [query], "limit": limit, "max_chars": 0},
+            },
+        },
+        session,
+    )
+    payload = json.loads(out)
     text = ((payload.get("result") or {}).get("content") or [{}])[0].get("text", "")
-    return json.loads(text)
+    return session, json.loads(text)
 
 
 def cell(text: str) -> str:
@@ -77,6 +109,7 @@ def main() -> int:
     entries = [
         json.loads(line) for line in open(args.gold, encoding="utf-8") if line.strip()
     ]
+    session = open_session(args.endpoint)
     size = (len(entries) + args.split - 1) // args.split
     for part in range(args.split):
         chunk = entries[part * size : (part + 1) * size]
@@ -88,7 +121,9 @@ def main() -> int:
         ]
         index_rows = []
         for offset, entry in enumerate(chunk, 1):
-            data = call_recall(args.endpoint, entry["query"], args.limit)
+            session, data = call_recall(
+                args.endpoint, entry["query"], args.limit, session
+            )
             blocks.append(render(part * size + offset, entry, data))
             index_rows.append(
                 {

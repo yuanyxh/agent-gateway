@@ -89,13 +89,21 @@ def _enforce_embedder_identity(conn: sqlite3.Connection) -> int:
         "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL AND length(embedding) != ?",
         (EMBEDDER_SPEC.dims * 4,),
     ).fetchone()[0]
+    # A same-dimension model swap passes the blob check but produces vectors that
+    # are not comparable, so the recorded tag is the second signal.
+    stored_tag = str(stored.get("embedder_tag") or "")
+    stale_tag = bool(stored_tag) and stored_tag != EMBEDDER_SPEC.tag
     dropped = 0
-    if foreign:
+    if foreign or stale_tag:
         dropped = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        reason = (
+            f"{stored_tag or 'unknown'} tag, expecting {EMBEDDER_SPEC.tag}/{dims}d"
+            if stale_tag
+            else f"{stored_tag or 'unknown'} dims, expecting {EMBEDDER_SPEC.tag}/{dims}d"
+        )
         logger.info(
-            f"[project_notes] cache holds vectors of another model "
-            f"({stored.get('embedder_tag', 'unknown')}; expecting "
-            f"{EMBEDDER_SPEC.tag}/{dims}d), dropping {dropped} chunks to re-embed"
+            f"[project_notes] cache holds vectors of another model ({reason}), "
+            f"dropping {dropped} chunks to re-embed"
         )
         with conn:
             conn.execute("DELETE FROM chunks")

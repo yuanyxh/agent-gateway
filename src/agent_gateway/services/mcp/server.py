@@ -22,7 +22,6 @@ os.environ["POSTHOG_DISABLED"] = "1"
 # posthog.disabled); set this env var before import so AnonymousTelemetry skips init
 os.environ["MEM0_TELEMETRY"] = "False"
 
-import uuid
 import time
 import asyncio
 import logging
@@ -85,6 +84,17 @@ from agent_gateway.services.mcp.server_state import (
     get_qdrant,
     set_qdrant,
 )
+from agent_gateway.services.mcp.server_memory_graph import (
+    handle_memory_get,
+    handle_memory_graph,
+)
+from agent_gateway.services.memory import link as memory_link
+from agent_gateway.services.memory import store as memory_store
+from agent_gateway.services.memory.consolidate import (
+    consolidation_scheduler,
+    run_daily,
+    run_weekly,
+)
 from agent_gateway.services.retrieval import rebuild
 from agent_gateway.services.retrieval import trace as retrieval_trace
 from agent_gateway.services.retrieval.arms.project_notes import LAYER as NOTES_LAYER
@@ -114,6 +124,7 @@ from agent_gateway.services.mcp.server_constants import (
     QDRANT_PATH,
     PROCESSED_MAX_BIT,
     STATUS_ACTIVE,
+    STATUS_ARCHIVED,
     STATUS_DELETED,
     STATUS_HIDDEN,
     STATUS_SUPERSEDED,
@@ -246,6 +257,16 @@ def _register(name: str):
     return decorator
 
 
+@_register("memory_get")
+async def _handle_memory_get(arguments: dict) -> list[TextContent]:
+    return await handle_memory_get(arguments)
+
+
+@_register("memory_graph")
+async def _handle_memory_graph(arguments: dict) -> list[TextContent]:
+    return await handle_memory_graph(arguments)
+
+
 @_register("project_search")
 async def _handle_project_search(arguments: dict) -> list[TextContent]:
     try:
@@ -260,16 +281,16 @@ async def _handle_project_search(arguments: dict) -> list[TextContent]:
             fusion=MaxScoreFusion(),
             gate=LayerPresenceGate(semantic_layers=(SEARCH_LAYER,)),
         )
-        out = await asyncio.to_thread(
+        await asyncio.to_thread(
             pipeline.run,
             arguments["query"],
             int_arg(arguments, "limit", DEFAULT_PROJECT_SEARCH_LIMIT),
             None,
             "project_search",
         )
-        # The arm's own status carries exact/ambiguous, which the shared gate
-        # does not model; only the trace id is added on top.
-        result = {**arm.payload, "trace_id": out["trace_id"]}
+        # The arm's own status carries exact/ambiguous, which the shared gate does
+        # not model; the payload is returned as shaped, with no trace id.
+        result = arm.payload
         schedule_prewarm_for_db(arguments["dbPath"])
         return [TextContent(type="text", text=dumps(result))]
     except Exception:
@@ -514,6 +535,7 @@ async def serve():
     asyncio.create_task(
         archive_scheduler(lambda: (get_hot_memory(), get_qdrant()), ensure_hot_memory)
     )
+    asyncio.create_task(consolidation_scheduler(ensure_hot_memory))
 
     async def auto_calibrate_on_start():
         """Calibrate an unfamiliar embedder before callers judge its results."""
@@ -556,9 +578,12 @@ async def serve():
                 {"error": "Cold layer not initialized"}, status_code=500
             )
         content = body["content"]
+        source_file = str(body.get("source_file", ""))
         now_iso = datetime.now().isoformat()
         vec = list(emb.embed(content))[0].tolist()
-        point_id = str(uuid.uuid4())
+        # Deterministic id: the same source and body overwrite the same point instead
+        # of appending a new uuid4 copy on every sync.
+        point_id = memory_store.cold_point_id(source_file, content)
         source_ids = body.get(COLD_SOURCE_MEMORY_IDS_FIELD, [])
         episode_id = _cold_episode_id(source_ids, body.get(EPISODE_FIELD, ""), vec)
         get_qdrant().upsert(
@@ -569,7 +594,7 @@ async def serve():
                     vector=vec,
                     payload={
                         "content": content,
-                        "source_file": body.get("source_file", ""),
+                        "source_file": source_file,
                         "created_at": body.get("created_at", ""),
                         "category": body.get("category", ""),
                         "type": "knowledge",
@@ -585,6 +610,14 @@ async def serve():
                     },
                 )
             ],
+        )
+        memory_link.record_cold_memory(
+            point_id,
+            content,
+            source_file=source_file,
+            source_memory_ids=source_ids,
+            episode_id=episode_id,
+            created_at=str(body.get("created_at") or "") or now_iso,
         )
         spawn_contradiction_check(contradiction_check_cold(content, point_id))
         return JSONResponse({"success": True, "layer": "cold"})
@@ -682,9 +715,14 @@ async def serve():
         status = body.get("status", "")
         if not memory_ids:
             return JSONResponse({"error": ERR_MEMORY_IDS_EMPTY}, status_code=400)
-        if status not in (STATUS_ACTIVE, STATUS_SUPERSEDED, STATUS_DELETED):
+        if status not in (
+            STATUS_ACTIVE,
+            STATUS_SUPERSEDED,
+            STATUS_ARCHIVED,
+            STATUS_DELETED,
+        ):
             return JSONResponse(
-                {"error": "status must be active, superseded or deleted"},
+                {"error": "status must be active, superseded, archived or deleted"},
                 status_code=400,
             )
         try:
@@ -726,6 +764,30 @@ async def serve():
         body = await request.json()
         scheduled = schedule_prewarm_for_db(body.get("dbPath", ""))
         return JSONResponse({"scheduled": scheduled})
+
+    async def api_consolidation_run(request):
+        """Maintenance entry: run one consolidation job with an explicit clock."""
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - an empty body is the common case
+            pass
+        job = str(body.get("job") or "daily")
+        now_text = str(body.get("now") or "").strip()
+        now = datetime.fromisoformat(now_text) if now_text else datetime.now()
+        dry_run = bool(body.get("dry_run", False))
+        logger.info(
+            f"[consolidate] manual run requested: job={job} "
+            f"now={now.isoformat()} dry_run={dry_run}"
+        )
+        await ensure_hot_memory()
+        result = await (
+            run_weekly(now=now, dry_run=dry_run)
+            if job == "weekly"
+            else run_daily(now=now)
+        )
+        logger.info(f"[consolidate] manual run done: job={job} result={result}")
+        return JSONResponse({**result, "job": job, "now": now.isoformat()})
 
     async def api_retrieval_rebuild(request):
         body = await request.json()
@@ -883,6 +945,11 @@ async def serve():
             Route(
                 "/api/project/notes/prewarm",
                 endpoint=api_project_notes_prewarm,
+                methods=["POST"],
+            ),
+            Route(
+                "/api/consolidation/run",
+                endpoint=api_consolidation_run,
                 methods=["POST"],
             ),
             Route(
