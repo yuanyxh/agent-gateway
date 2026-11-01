@@ -562,8 +562,11 @@ def _content_warning(content: str) -> str:
     return ""
 
 
-def _write_memory(item: dict, now_iso: str) -> dict:
-    """Dedupe, persist one memory, then soft-supersede the ids it replaces."""
+def _write_memory(item: dict, now_iso: str, db_path: str | None = None) -> dict:
+    """Dedupe, persist one memory, then soft-supersede the ids it replaces.
+
+    `db_path` only targets the graph mirror; the hot layer has a single store.
+    """
     content = item["content"]
     content_warning = _content_warning(content)
     embed_text = _embed_text(item)
@@ -605,10 +608,20 @@ def _write_memory(item: dict, now_iso: str) -> dict:
                 meta[key] = item[key]
                 changed = True
         if item.get("importance") is not None:
-            meta["importance"] = _importance(item["importance"])
+            importance = _importance(item["importance"])
+            # A system-generated write must never pull a user's rating down; an
+            # explicit user write still can.
+            if item.get("generated_by"):
+                importance = max(importance, _importance(meta.get("importance")))
+            meta["importance"] = importance
             changed = True
         if item.get("protected"):
             meta["protected"] = True
+            changed = True
+        # A folded summary that collapses onto an existing node must keep its depth,
+        # or the next pass reads level 0 and folds it again forever.
+        if item.get("level") is not None:
+            meta["level"] = max(_level(meta.get("level")), _level(item["level"]))
             changed = True
         if changed:
             _update_metadata(top["id"], meta)
@@ -617,12 +630,19 @@ def _write_memory(item: dict, now_iso: str) -> dict:
         targets = [sid for sid in supersedes if sid != top["id"]]
         superseded, failed = _mark_superseded(targets, top["id"], now_iso)
         _mark_cold_stale(superseded)
+        # Resending the merged metadata keeps level/importance/protected on the node;
+        # the graph upsert replaces metadata wholesale.
         memory_link.record_hot_memory(
             top["id"],
             content,
-            {"episode_id": top.get("episode_id") or "", "status": STATUS_ACTIVE},
+            {
+                **meta,
+                "episode_id": top.get("episode_id") or "",
+                "status": STATUS_ACTIVE,
+            },
             supersedes=tuple(targets),
             created_at=now_iso,
+            db_path=db_path,
         )
         return {
             "success": True,
@@ -671,6 +691,7 @@ def _write_memory(item: dict, now_iso: str) -> dict:
         metadata,
         supersedes=tuple(supersedes),
         created_at=now_iso,
+        db_path=db_path,
     )
     return {
         "success": True,
@@ -791,7 +812,11 @@ def set_processed_bit(memory_id: str, bit: int, value: int) -> bool:
 
 
 def set_memory_status(
-    memory_ids: list[str], status: str, superseded_by: str = ""
+    memory_ids: list[str],
+    status: str,
+    superseded_by: str = "",
+    *,
+    db_path: str | None = None,
 ) -> dict:
     """Set lifecycle status in place. Retiring keeps bit0 and adds the retired bit.
 
@@ -844,7 +869,9 @@ def set_memory_status(
             updated_ids.append(mid)
         else:
             failed.append(mid)
-    memory_link.record_hot_status(updated_ids, status, superseded_by=superseded_by)
+    memory_link.record_hot_status(
+        updated_ids, status, superseded_by=superseded_by, db_path=db_path
+    )
     cold_stale = _mark_cold_stale(retired) if retired else 0
     return {
         "status": status,
@@ -1121,7 +1148,6 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     out = pipeline.run_query(request, limit, tool="recall")
     top = out["results"]
     related = out["related"]
-    _touch_hot_access(top)
     # The budget is spent on the primary results first. Once they are cut, related
     # context is dropped rather than crowding out a better-scored memory; when they
     # fit, related rows may use whatever is left.
@@ -1135,6 +1161,8 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
             if remaining > 0
             else ([], False, 0)
         )
+    # After truncation: only the rows that survived are ones the caller saw.
+    await asyncio.to_thread(_touch_hot_access, top)
     status = out["status"]
     payload = {
         "status": status,

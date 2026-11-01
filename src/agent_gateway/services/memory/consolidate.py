@@ -280,6 +280,7 @@ async def compress_clusters(
                 "tags": [CONSOLIDATION_TAG],
             },
             now.isoformat(),
+            db_path=db_path,
         )
         memory_id = result.get("memory_id")
         if not memory_id:
@@ -315,67 +316,103 @@ def _summary_level(node: dict) -> int:
         return 0
 
 
-def _merge_victims(summaries: list[dict]) -> list[dict]:
-    """Summaries over budget; the newest `cap - 1` per group survive unfolded."""
+def _over_budget(items: list[dict], cap: int | None) -> list[dict]:
+    """Items to fold. Cap 1 folds everything into one; otherwise the newest cap-1 stay."""
+    if not cap or len(items) <= cap:
+        return []
+    return list(items) if cap == 1 else items[cap - 1 :]
+
+
+def _merge_groups(summaries: list[dict]) -> list[list[dict]]:
+    """One fold group per over-budget bucket; the global budget folds on its own.
+
+    Nodes at `SUMMARY_LEVEL_MAX` still occupy a budget slot but are never folded
+    again: the ceiling protects the detail underneath, so a bucket that is over
+    budget only because of ceiling nodes stays over budget. Protected nodes are
+    dropped by the caller and leave the same kind of gap. Summaries written by
+    this run are counted from the next one, so a wide overflow can take a few
+    days to settle.
+    """
+
+    def foldable(victims: list[dict]) -> list[dict]:
+        return [n for n in victims if _summary_level(n) < SUMMARY_LEVEL_MAX]
+
+    groups: list[list[dict]] = []
+    taken: set[str] = set()
     per_episode = memory_max_summaries_per_episode()
-    total = memory_max_summaries()
-    victims: dict[str, dict] = {}
-
-    def over_budget(items: list[dict], cap: int | None):
-        if not cap or len(items) <= cap:
-            return []
-        return items[max(cap - 1, 1) :]
-
     if per_episode:
-        groups: dict[str, list[dict]] = {}
+        buckets: dict[str, list[dict]] = {}
         for node in summaries:
             episode = str((node.get("metadata") or {}).get("episode_id") or "")
-            groups.setdefault(episode, []).append(node)
-        for items in groups.values():
-            for node in over_budget(items, per_episode):
-                victims[node["node_id"]] = node
-    for node in over_budget(summaries, total):
-        victims[node["node_id"]] = node
-    return list(victims.values())
+            buckets.setdefault(episode, []).append(node)
+        for items in buckets.values():
+            victims = foldable(_over_budget(items, per_episode))
+            if len(victims) < 2:
+                continue
+            groups.append(victims)
+            taken.update(node["node_id"] for node in victims)
+    rest = [node for node in summaries if node["node_id"] not in taken]
+    victims = foldable(_over_budget(rest, memory_max_summaries()))
+    if len(victims) >= 2:
+        groups.append(victims)
+    return groups
+
+
+def _node_importance(node: dict) -> int:
+    """Default 5 matches the write path, so a fold never lowers importance."""
+    try:
+        return int((node.get("metadata") or {}).get("importance") or 5)
+    except (TypeError, ValueError):
+        return 5
 
 
 async def merge_summaries(
     *, db_path: str | None = None, now: datetime | None = None
 ) -> int:
-    """Fold over-budget summaries into one higher-level summary.
+    """Fold over-budget summaries into higher-level ones, one per bucket.
 
-    Disabled unless a budget is configured. Old summaries are archived, never
+    Disabled unless a budget is configured. Folded summaries are archived, never
     deleted, and stay reachable through derived_from edges.
     """
-    from agent_gateway.services.mcp import server_memory
-    from agent_gateway.services.mcp.server_constants import DEFAULT_TIMEOUT
-
     if not (memory_max_summaries() or memory_max_summaries_per_episode()):
         return 0
     if not llm_client.is_configured():
         return 0
-    victims = _merge_victims(_summary_nodes(db_path))
-    if len(victims) < 2:
+    protect_at = memory_protect_importance()
+    merged = 0
+    for group in _merge_groups(_summary_nodes(db_path)):
+        kept = [node for node in group if not _is_protected(node, protect_at)]
+        merged += await _merge_group(kept, db_path=db_path, now=now)
+    return merged
+
+
+async def _merge_group(
+    nodes: list[dict], *, db_path: str | None, now: datetime | None
+) -> int:
+    from agent_gateway.services.mcp import server_memory
+    from agent_gateway.services.mcp.server_constants import DEFAULT_TIMEOUT
+
+    if len(nodes) < 2:
         return 0
-    level = min(max(_summary_level(node) for node in victims) + 1, SUMMARY_LEVEL_MAX)
-    rows = _hot_rows([node["node_id"] for node in victims])
-    facts = [
-        text
-        for text in (
-            str(
-                rows.get(node["node_id"], {}).get("payload", {}).get("data") or ""
-            ).strip()
-            for node in victims
-        )
-        if text
+    rows = _hot_rows([node["node_id"] for node in nodes])
+    covered = [
+        (node, str(rows[node["node_id"]]["payload"].get("data") or "").strip())
+        for node in nodes
+        if node["node_id"] in rows
     ]
-    if len(facts) < 2:
+    covered = [(node, text) for node, text in covered if text]
+    if len(covered) < 2:
         logger.info(
-            f"[consolidate] merge skipped: only {len(facts)} readable summaries"
+            f"[consolidate] merge skipped: {len(covered)} of {len(nodes)} summaries readable"
         )
         return 0
+    level = min(max(_summary_level(node) for node, _ in covered) + 1, SUMMARY_LEVEL_MAX)
+    episodes = {
+        str((node.get("metadata") or {}).get("episode_id") or "").strip()
+        for node, _ in covered
+    }
     prompt = prompt_loader.prompt(
-        "consolidate", facts_text="\n".join(f"- {fact}" for fact in facts)
+        "consolidate", facts_text="\n".join(f"- {text}" for _, text in covered)
     )
     raw = await llm_client.achat(
         prompt,
@@ -388,7 +425,7 @@ async def merge_summaries(
     summary = str(parsed.get("summary") or "").strip()
     if not summary:
         logger.warning(
-            f"[consolidate] merge returned no summary for {len(victims)} inputs"
+            f"[consolidate] merge returned no summary for {len(covered)} inputs"
         )
         return 0
     result = server_memory._write_memory(
@@ -397,19 +434,38 @@ async def merge_summaries(
             "context": str(parsed.get("context") or ""),
             "generated_by": GENERATED_BY,
             "tags": [CONSOLIDATION_TAG],
+            "importance": max(_node_importance(node) for node, _ in covered),
+            "episode_id": episodes.pop() if len(episodes) == 1 else "",
             SUMMARY_LEVEL_FIELD: level,
         },
         (now or datetime.now()).isoformat(),
+        db_path=db_path,
     )
     memory_id = result.get("memory_id")
     if not memory_id:
         logger.warning("[consolidate] merge write returned no memory_id")
         return 0
-    graph.add_edges(
-        [(memory_id, node["node_id"], "derived_from") for node in victims],
-        db_path=db_path,
-    )
-    server_memory.set_memory_status([node["node_id"] for node in victims], "archived")
+    if result.get("deduped"):
+        # The text collapsed onto an existing node, which stays active and keeps its
+        # body; only the siblings are retired.
+        logger.info(f"[consolidate] merge collapsed onto {memory_id}")
+    victims = [node["node_id"] for node, _ in covered if node["node_id"] != memory_id]
+    try:
+        graph.add_edges(
+            [(memory_id, node_id, "derived_from") for node_id in victims],
+            db_path=db_path,
+        )
+    except Exception as e:  # noqa: BLE001 - the summary is already written
+        logger.warning(f"[consolidate] derived_from edges failed: {e}")
+    try:
+        archived = server_memory.set_memory_status(victims, "archived", db_path=db_path)
+    except Exception as e:  # noqa: BLE001 - keep the next run recoverable
+        logger.warning(f"[consolidate] merge archive failed for {len(victims)}: {e}")
+        return 0
+    if archived.get("failed"):
+        logger.warning(
+            f"[consolidate] merge archived {archived.get('updated')} of {len(victims)}"
+        )
     logger.info(
         f"[consolidate] merged {len(victims)} summaries into {memory_id} level={level}"
     )

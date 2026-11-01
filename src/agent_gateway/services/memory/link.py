@@ -22,6 +22,13 @@ def _title(content: str) -> str:
     return line[:_TITLE_CHARS]
 
 
+def _int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def record_hot_memory(
     memory_id: str,
     content: str,
@@ -47,6 +54,11 @@ def record_hot_memory(
             "source_files": source_files,
             "source_url": str(meta.get("source_url") or ""),
             "generated_by": str(meta.get("generated_by") or ""),
+            # Upsert replaces metadata wholesale, so anything not listed here is
+            # dropped on the next write.
+            "level": _int(meta.get("level"), 0),
+            "importance": _int(meta.get("importance"), 5),
+            "protected": bool(meta.get("protected", False)),
         }
         store.upsert_node(
             memory_id,

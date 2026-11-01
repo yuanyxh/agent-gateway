@@ -185,6 +185,7 @@ class CompressTest(_Base):
         item = write.call_args[0][0]
         self.assertEqual(item["generated_by"], "consolidation")
         self.assertEqual(item["content"], "merged")
+        self.assertEqual(write.call_args[1]["db_path"], self.db)
         edges = add_edges.call_args[0][0]
         self.assertEqual(
             {(edge[0], edge[1], edge[2]) for edge in edges},
@@ -323,7 +324,7 @@ class DailyTest(_Base):
 
 
 class MergeBudgetTest(unittest.TestCase):
-    def _victims(self, summaries, *, total, per_episode):
+    def _groups(self, summaries, *, total, per_episode):
         with (
             mock.patch.object(consolidate, "memory_max_summaries", return_value=total),
             mock.patch.object(
@@ -332,96 +333,236 @@ class MergeBudgetTest(unittest.TestCase):
                 return_value=per_episode,
             ),
         ):
-            return [n["node_id"] for n in consolidate._merge_victims(summaries)]
+            return [
+                [n["node_id"] for n in group]
+                for group in consolidate._merge_groups(summaries)
+            ]
 
     def test_without_budget_nothing_is_folded(self):
         summaries = [{"node_id": f"s{i}"} for i in range(5)]
 
-        self.assertEqual(self._victims(summaries, total=None, per_episode=None), [])
+        self.assertEqual(self._groups(summaries, total=None, per_episode=None), [])
 
     def test_global_cap_keeps_the_newest_and_folds_the_rest(self):
         summaries = [{"node_id": f"s{i}"} for i in range(5)]
 
         self.assertEqual(
-            self._victims(summaries, total=3, per_episode=None),
-            ["s2", "s3", "s4"],
+            self._groups(summaries, total=3, per_episode=None),
+            [["s2", "s3", "s4"]],
         )
 
-    def test_episode_cap_counts_within_one_episode_only(self):
+    def test_cap_of_one_folds_everything_into_a_single_summary(self):
+        summaries = [{"node_id": f"s{i}"} for i in range(3)]
+
+        self.assertEqual(
+            self._groups(summaries, total=1, per_episode=None), [["s0", "s1", "s2"]]
+        )
+
+    def test_each_episode_folds_on_its_own(self):
         summaries = [
             {"node_id": "a0", "metadata": {"episode_id": "ea"}},
             {"node_id": "a1", "metadata": {"episode_id": "ea"}},
             {"node_id": "a2", "metadata": {"episode_id": "ea"}},
             {"node_id": "b0", "metadata": {"episode_id": "eb"}},
+            {"node_id": "b1", "metadata": {"episode_id": "eb"}},
+            {"node_id": "b2", "metadata": {"episode_id": "eb"}},
         ]
 
         self.assertEqual(
-            self._victims(summaries, total=None, per_episode=2), ["a1", "a2"]
+            self._groups(summaries, total=None, per_episode=2),
+            [["a1", "a2"], ["b1", "b2"]],
+        )
+
+    def test_nodes_at_the_level_ceiling_are_not_folded_again(self):
+        summaries = [
+            {"node_id": "s0", "metadata": {"level": 3}},
+            {"node_id": "s1", "metadata": {"level": 0}},
+            {"node_id": "s2", "metadata": {"level": 0}},
+        ]
+
+        self.assertEqual(
+            self._groups(summaries, total=2, per_episode=None), [["s1", "s2"]]
         )
 
 
-class MergeRunTest(_Base):
+class FakeHot:
+    """Minimal mem0 surface used by the write path."""
+
+    def __init__(self, rows=None, similar=None):
+        self.rows = rows or {}
+        self.similar = similar or []
+        self.added: list[str] = []
+        self.updated: list[str] = []
+
+    def search(self, _text, **_kwargs):
+        return self.similar
+
+    def get(self, memory_id):
+        return self.rows.get(memory_id)
+
+    def update(self, memory_id, metadata=None, **_kwargs):
+        row = self.rows.setdefault(
+            memory_id, {"id": memory_id, "memory": "", "metadata": {}}
+        )
+        row["metadata"] = dict(metadata or {})
+        self.updated.append(memory_id)
+        return {"message": "ok"}
+
+    def add(self, text, **kwargs):
+        memory_id = f"m{len(self.added) + 1}"
+        self.added.append(memory_id)
+        self.rows[memory_id] = {
+            "id": memory_id,
+            "memory": text,
+            "metadata": dict(kwargs.get("metadata") or {}),
+        }
+        return {"results": [{"id": memory_id}]}
+
+
+class MergeRunTest(unittest.TestCase):
+    """Runs the real write path: only the vector read and the LLM are stubbed."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        # The write path resolves the graph DB from GATEWAY_HOME, so the test store
+        # and the production default must be the same file here.
+        self._env = mock.patch.dict(os.environ, {"GATEWAY_HOME": self._tmp.name})
+        self._env.start()
+        for node_id in NODE_IDS:
+            store.upsert_node(node_id, layer="hot", status="active")
+
+    def tearDown(self):
+        self._env.stop()
+        self._tmp.cleanup()
+
     def test_over_budget_summaries_fold_into_one_higher_level(self):
+        hot = FakeHot()
         nodes = [{"node_id": node, "metadata": {"level": 0}} for node in NODE_IDS[:3]]
-        rows = {node: {"payload": {"data": f"fact {node}"}} for node in NODE_IDS[1:3]}
+        rows = {node: {"payload": {"data": f"fact {node}"}} for node in NODE_IDS}
+        self._run(hot, total=2, rows=rows, nodes=nodes)
+
+        # The graph node, not just the mem0 metadata, must carry the new level.
+        self.assertEqual(store.get_nodes(["m1"])["m1"]["metadata"]["level"], 1)
+        self.assertEqual(self._archived(), {"n2", "n3"})
+        edges = graph.neighbors("m1", types=("derived_from",), direction="down")
+        self.assertEqual({edge["to_id"] for edge in edges}, {"n2", "n3"})
+
+    def test_deduped_fold_keeps_the_matched_summary_active(self):
+        hot = FakeHot(
+            rows={
+                "n2": {
+                    "id": "n2",
+                    "memory": "fact n2",
+                    "metadata": {"status": "active", "level": 0},
+                }
+            },
+            similar=[
+                {
+                    "id": "n2",
+                    "memory": "fact n2",
+                    "score": 0.6,
+                    "score_details": {"semantic_score": 0.99},
+                    "metadata": {"status": "active", "fact": "fact n2"},
+                }
+            ],
+        )
+        nodes = [{"node_id": node, "metadata": {"level": 0}} for node in NODE_IDS[:3]]
+        rows = {node: {"payload": {"data": f"fact {node}"}} for node in NODE_IDS}
+        self._run(hot, total=2, rows=rows, nodes=nodes)
+
+        node = store.get_nodes(["n2"])["n2"]
+        self.assertEqual(node["status"], "active")
+        self.assertEqual(node["metadata"]["level"], 1)
+        self.assertEqual(self._archived(), {"n3"})
+
+    def test_budget_gap_smaller_than_two_writes_nothing(self):
+        hot = FakeHot()
+        nodes = [{"node_id": "n1", "metadata": {}}, {"node_id": "n2", "metadata": {}}]
+        self._run(hot, total=2, nodes=nodes)
+
+        self.assertEqual(hot.added, [])
+
+    def test_protected_summary_is_left_out_of_the_fold(self):
+        hot = FakeHot()
+        nodes = [{"node_id": node, "metadata": {"level": 0}} for node in NODE_IDS]
+        nodes[1]["metadata"]["protected"] = True
+        rows = {node: {"payload": {"data": f"fact {node}"}} for node in NODE_IDS}
+        self._run(hot, total=2, rows=rows, nodes=nodes)
+
+        # n1 stays as the newest slot, n2 is protected, so the fold covers n3+n4.
+        self.assertEqual(self._archived(), {"n3", "n4"})
+        self.assertEqual(store.get_nodes(["n2"])["n2"]["status"], "active")
+
+    def test_fold_writes_the_new_node_to_the_given_graph(self):
+        hot = FakeHot()
+        nodes = [{"node_id": node, "metadata": {"level": 0}} for node in NODE_IDS[:3]]
+        rows = {node: {"payload": {"data": f"fact {node}"}} for node in NODE_IDS}
+        other = os.path.join(self._tmp.name, "other.sqlite")
+        self._run(hot, total=2, rows=rows, nodes=nodes, db_path=other)
+
+        self.assertIn("m1", store.get_nodes(["m1"], db_path=other))
+
+    def _archived(self) -> set[str]:
+        return {node["node_id"] for node in store.list_nodes(status="archived")}
+
+    def _run(
+        self, hot, *, total, per_episode=None, rows=None, nodes=None, db_path=None
+    ) -> int:
+        # The lifecycle write needs a live row per victim, as mem0 would have.
+        for node_id in NODE_IDS:
+            hot.rows.setdefault(
+                node_id,
+                {
+                    "id": node_id,
+                    "memory": f"fact {node_id}",
+                    "metadata": {"status": "active"},
+                },
+            )
+        patches = self._patch(
+            hot, total=total, per_episode=per_episode, rows=rows, nodes=nodes
+        )
         with (
-            mock.patch.object(consolidate, "memory_max_summaries", return_value=2),
-            mock.patch.object(
-                consolidate, "memory_max_summaries_per_episode", return_value=None
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            mock.patch(
+                "agent_gateway.services.mcp.server_memory.get_hot_memory",
+                return_value=hot,
             ),
-            mock.patch.object(consolidate, "_summary_nodes", return_value=nodes),
-            mock.patch.object(consolidate, "_hot_rows", return_value=rows),
+        ):
+            return asyncio.run(consolidate.merge_summaries(db_path=db_path, now=NOW))
+
+    def _patch(self, hot, *, total, per_episode=None, rows=None, nodes=None):
+        stack = [
+            mock.patch.object(consolidate, "memory_max_summaries", return_value=total),
+            mock.patch.object(
+                consolidate,
+                "memory_max_summaries_per_episode",
+                return_value=per_episode,
+            ),
+            mock.patch.object(
+                consolidate, "memory_protect_importance", return_value=None
+            ),
+            mock.patch.object(consolidate, "_summary_nodes", return_value=nodes or []),
+            mock.patch.object(consolidate, "_hot_rows", return_value=rows or {}),
             mock.patch.object(consolidate.prompt_loader, "prompt", return_value="p"),
             mock.patch.object(
                 consolidate.llm_client, "is_configured", return_value=True
             ),
             mock.patch.object(
-                consolidate.llm_client,
-                "achat",
-                mock.AsyncMock(return_value="{}"),
-            ) as achat,
+                consolidate.llm_client, "achat", mock.AsyncMock(return_value="{}")
+            ),
             mock.patch.object(
                 consolidate.llm_client, "parse_json", return_value={"summary": "folded"}
             ),
-            mock.patch.object(consolidate.graph, "add_edges") as add_edges,
-            mock.patch(
-                "agent_gateway.services.mcp.server_memory._write_memory",
-                return_value={"memory_id": "merged"},
-            ) as write,
-            mock.patch(
-                "agent_gateway.services.mcp.server_memory.set_memory_status"
-            ) as set_status,
-        ):
-            merged = asyncio.run(consolidate.merge_summaries(db_path=self.db, now=NOW))
-
-        self.assertEqual(merged, 1)
-        achat.assert_awaited_once()
-        self.assertEqual(write.call_args[0][0]["level"], 1)
-        add_edges.assert_called_once_with(
-            [("merged", "n2", "derived_from"), ("merged", "n3", "derived_from")],
-            db_path=self.db,
-        )
-        set_status.assert_called_once_with(["n2", "n3"], "archived")
-
-    def test_budget_gap_smaller_than_two_writes_nothing(self):
-        nodes = [{"node_id": "n1", "metadata": {}}, {"node_id": "n2", "metadata": {}}]
-        with (
-            mock.patch.object(consolidate, "memory_max_summaries", return_value=1),
-            mock.patch.object(
-                consolidate, "memory_max_summaries_per_episode", return_value=None
-            ),
-            mock.patch.object(consolidate, "_summary_nodes", return_value=nodes),
-            mock.patch.object(
-                consolidate.llm_client, "is_configured", return_value=True
-            ),
-            mock.patch(
-                "agent_gateway.services.mcp.server_memory._write_memory"
-            ) as write,
-        ):
-            merged = asyncio.run(consolidate.merge_summaries(db_path=self.db, now=NOW))
-
-        self.assertEqual(merged, 0)
-        write.assert_not_called()
+        ]
+        return stack
 
 
 class NearbyPairsTest(unittest.TestCase):

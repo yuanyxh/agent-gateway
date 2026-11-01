@@ -149,6 +149,43 @@ class WriteContractTest(unittest.TestCase):
         self.assertEqual(meta["generated_by"], "consolidation")
         self.assertIn("consolidated", meta["tags"])
 
+    def _dedupe_write(self, item):
+        similar = [
+            {
+                "id": "old",
+                "score": 0.99,
+                "fact": "fact",
+                "context": "",
+                "episode_id": "",
+            }
+        ]
+        hot, patches = _patched(similar)
+        hot.get.return_value = {"metadata": {"importance": 9}}
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            mock.patch.object(
+                server_memory, "_update_metadata", return_value=True
+            ) as update,
+        ):
+            server_memory._write_memory(item, "2026-01-01T00:00:00")
+        return update.call_args[0][1]
+
+    def test_system_write_never_lowers_a_stored_importance(self):
+        meta = self._dedupe_write(
+            {"content": "fact", "generated_by": "consolidation", "importance": 5}
+        )
+
+        self.assertEqual(meta["importance"], 9)
+
+    def test_explicit_rewrite_can_lower_importance(self):
+        meta = self._dedupe_write({"content": "fact", "importance": 3})
+
+        self.assertEqual(meta["importance"], 3)
+
 
 class ProjectionTest(unittest.TestCase):
     def test_fact_replaces_the_embedded_text_and_context_is_separate(self):

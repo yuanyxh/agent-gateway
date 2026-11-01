@@ -194,8 +194,14 @@ class HotMemoryArm:
             logger.warning(f"Hot search failed: {e}")
             return ArmResult(name=self.name, error=str(e))
         if items:
-            # Quality scores live on the graph node, not in the mem0 payload.
-            nodes = memory_store.get_nodes([item.id for item in items])
+            # Quality scores live on the graph node, not in the mem0 payload. A graph
+            # failure must not discard results this arm already has: the pipeline
+            # treats any exception here as a failed arm with no items at all.
+            try:
+                nodes = memory_store.get_nodes([item.id for item in items])
+            except Exception as e:  # noqa: BLE001 - signals are optional
+                logger.warning(f"Hot relevance lookup failed: {e}")
+                nodes = {}
             for item in items:
                 node = nodes.get(item.id)
                 if node:

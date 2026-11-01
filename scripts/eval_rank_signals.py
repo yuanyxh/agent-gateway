@@ -7,7 +7,10 @@ known-item metrics as `known_item_eval.py` plus the returned character count,
 which is the context budget the signals are trading against.
 
     PYTHONPATH=src python scripts/eval_rank_signals.py --url http://127.0.0.1:51999/mcp \
-        --items ~/.config/agent-gateway/known_items.jsonl --label baseline
+        --items "$GATEWAY_HOME/known_items.jsonl" --label baseline
+
+recall updates access_count/last_accessed_at, so comparing access or recency
+weights needs a fresh store snapshot per run.
 """
 
 from __future__ import annotations
@@ -19,7 +22,16 @@ import urllib.request
 from pathlib import Path
 
 METRICS = ("hit@1", "hit@3", "hit@5", "hit@10", "mrr")
-DEFAULT_ITEMS = Path.home() / ".config" / "agent-gateway" / "known_items.jsonl"
+
+
+def default_items() -> Path:
+    """Derived from GATEWAY_HOME so an isolated snapshot reads its own sample set.
+
+    Imported here, not at module scope, so `--help` works without PYTHONPATH.
+    """
+    from agent_gateway.core.paths import gateway_home
+
+    return gateway_home() / "known_items.jsonl"
 
 
 def post(url: str, body: dict, session: str = "") -> tuple[str, str]:
@@ -87,21 +99,34 @@ def score(ranks: list[int | None]) -> dict[str, float]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://127.0.0.1:9001/mcp")
-    parser.add_argument("--items", type=Path, default=DEFAULT_ITEMS)
+    parser.add_argument("--items", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--min-samples", type=int, default=20)
     parser.add_argument("--label", default="run")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
+    items_path = args.items or default_items()
 
-    if not args.items.is_file():
-        print(f"no sample set at {args.items}", file=sys.stderr)
+    if not items_path.is_file():
+        print(f"no sample set at {items_path}", file=sys.stderr)
         return 2
     items = [
         json.loads(line)
-        for line in args.items.read_text(encoding="utf-8").splitlines()
+        for line in items_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    session = open_session(args.url)
+    # A tiny set produces confident-looking numbers from noise; refuse instead.
+    if len(items) < args.min_samples:
+        print(
+            f"need at least {args.min_samples} samples, got {len(items)}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        session = open_session(args.url)
+    except OSError as e:
+        print(f"cannot reach {args.url}: {e}", file=sys.stderr)
+        return 2
 
     ranks: list[int | None] = []
     chars = 0

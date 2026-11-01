@@ -193,6 +193,25 @@ class SignalFieldTest(unittest.TestCase):
         self.assertEqual(result.items[0].extra["relevance"], 0.8)
 
 
+class RelevanceFailureTest(unittest.TestCase):
+    def test_graph_failure_keeps_the_hot_results(self):
+        hot = FakeHotMemory([{"id": "m1", "memory": "x", "score": 0.9, "metadata": {}}])
+        with (
+            mock.patch.object(server_state, "get_hot_memory", return_value=hot),
+            mock.patch.object(
+                recall_arms.memory_store,
+                "get_nodes",
+                side_effect=RuntimeError("database is locked"),
+            ),
+        ):
+            result = recall_arms.HotMemoryArm(min_score=0.0).retrieve(
+                Query(text="q", language="en", root_text="q"), 3
+            )
+
+        self.assertEqual([item.id for item in result.items], ["m1"])
+        self.assertFalse(result.error)
+
+
 class TouchAccessTest(unittest.TestCase):
     def test_access_counter_moves_for_hot_rows_only(self):
         hot = mock.Mock()
