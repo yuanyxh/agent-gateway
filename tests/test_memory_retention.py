@@ -106,6 +106,30 @@ class DisputeStampTest(unittest.TestCase):
 
 
 class HotArchiveWriteTest(unittest.TestCase):
+    def test_protected_point_is_not_archived(self):
+        from agent_gateway.services.mcp import server_archive
+
+        point = mock.Mock()
+        point.id = "p1"
+        point.payload = {"metadata": {"protected": True}}
+        vector_store = mock.Mock()
+        vector_store.collection_name = "mem0"
+        vector_store._create_filter.return_value = None
+        vector_store.client.scroll.return_value = ([point], None)
+        hot = mock.Mock()
+        hot.vector_store = vector_store
+
+        with (
+            mock.patch.object(
+                server_archive.retention, "is_expired", return_value=True
+            ),
+            mock.patch.object(server_archive.memory_link, "record_hot_status"),
+        ):
+            archived, _, _ = server_archive.run_archive_sync_impl(hot, None, NOW)
+
+        self.assertEqual(archived, 0)
+        vector_store.client.set_payload.assert_not_called()
+
     def test_archive_writes_state_into_metadata(self):
         from agent_gateway.services.mcp import server_archive
 

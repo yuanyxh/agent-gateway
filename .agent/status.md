@@ -14,7 +14,7 @@
 | 评测集标注 | **已停用**：query 由历史会话关键词提取，与用户当时意图不对应（用户判定），基于 query 的相关性标注不成立；改用真实使用 case 驱动排查 | — |
 | 换模型 jina-zh | 热层/冷层已重建，地板由自动标定写入（现 hot 0.616 / cold 0.569）；可采信的结论只有不相关率：minilm 40.5% → jina 12.5%（249 条同批、不依赖意图判断） | — |
 | notes 层降噪 | 语义复核（minilm 0.40 / jina 0.35）+ **仅作兜底**：hot/cold 有命中时 notes 不进主结果；抽样 100 条 notes 占比 26.2%→8.5%，空返回不增 | — |
-| 记忆体第二轮改进 | 近邻矛盾候选、打分批量写、受保护记忆、dry-run、检索层归档过滤、多信号排序（默认关）已实现并通过 369 例；等打包部署 | — |
+| 记忆体第二轮改进 | 近邻矛盾候选、打分批量写、受保护记忆、dry-run、检索层归档过滤、多信号排序（默认关）、摘要预算折叠已实现并通过 379 例；等打包部署 | — |
 
 ## 已完成
 
@@ -48,12 +48,16 @@
 - 2026-10-30 换模型 jina-zh 并修热层空结果：`HotMemoryArm` 改用 `score_details.semantic_score`（mem0 混合分与余弦阈值不可比）；`_build_recall_pipeline` 全部阈值改读 per-model 表（原先 hot/cold 用常量，换模型无法标定）；新增 `POST /api/retrieval/rebuild`、`/api/retrieval/diagnose`；三臂阈值标定并把实测值写进 `FLOORS["jinazh768"]`、清空 `SEEDED_TAGS`；新增 `scripts/export_judge_batch.py`；盲标 249 条 × 3 轮，全量 261 例通过
 - 2026-11-01 记忆图谱与生命周期：新增 `services/memory/{store,graph,link,retention,consolidate}.py`（节点/边 SQLite、六类边、质量分档保留、日/周整合）；`memory_get`/`memory_graph` 工具；`remember` 拆分 fact/context 并新增 type/source_files/source_url；冷层 point id 改 uuid5；归档改软删；`scripts/migrate_memory_graph.py` 回填与停服迁移脚本；全量 348 例通过
 - 2026-11-01 记忆体第二轮改进：周任务矛盾候选由全量矩阵改为 Qdrant 近邻（`query_batch_points` 分批 top-k，失败回退矩阵）；`score_relevance` 改单事务批量写；新增 `importance`/`protected` 与 `MEMORY_PROTECT_IMPORTANCE`，矛盾与归档跳过受保护项；周任务与 `/api/consolidation/run` 支持 `dry_run`；`recall` 检索层用 mem0 `NOT archived=true` 排除归档；新增 `SignalWeightedFusion`（recency/access/quality 默认权重 0）；周任务后 `VACUUM`；删除死常量 `HOT_RETENTION_DAYS`、`SUPERSEDED_RETENTION_DAYS`；新增 13 例测试，全量 369 例通过
+- 2026-11-01 多信号排序补数据链路：热臂 `extra` 补 `heat_score`/`access_count`/`last_accessed_at`，`relevance` 由图库回填；`recall` 对热层 top 结果 `access_count += 1`；100 条 known-item 评测（`scripts/eval_rank_signals.py`）显示只有 recency 0.2 略有提升（hit@1 0.69→0.72），默认权重保持 0
+- 2026-11-01 摘要预算折叠：日任务末尾按 `MEMORY_MAX_SUMMARIES` / `MEMORY_MAX_SUMMARIES_PER_EPISODE` 折叠超预算摘要（保留最新 `cap-1`，其余合并为一条 `level+1`，上限 3 层），旧摘要软归档并写 `derived_from`；预算为 0 时不折叠；新增 4 例测试；全量 379 例通过
+- 2026-11-01 跨仓配置链打通：`MEMORY_*` / `RANK_SIGNAL_*` 写入 `_YAML_FALLBACKS`（selfManaged 回退）并导出契约（env.json 58 键）；宿主新增 `MCPConfig` 字段与 `memoryEnvironment()`，两个注入点同时生效
 
 ## 下一步
 
-1. 用户确认后提交本仓检索质量改动
+1. 打包部署记忆体第二轮改进并复验（近邻候选耗时、dry-run 不落盘、归档过滤后的召回）
 2. 评估 `project_search` 中文/无词法锚点查询的 `weak_match` 阈值
 3. utility 侧打包与整机回归通过后发版
+4. 归档条目物理迁出热层：未开始，细节与触发条件见 utility 仓 `.claude/plans/memory-system.md` 的「待办」章节
 
 ## 最近验证
 

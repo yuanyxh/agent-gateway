@@ -52,3 +52,6 @@
 | 2026-11-01 | D3 | 新增 `importance`(1–10)/`protected`；矛盾与归档跳过 protected 与达到 `MEMORY_PROTECT_IMPORTANCE` 的条目；周任务与 REST 增加 `dry_run` | Agent | 生产周任务曾直接 supersede 一条历史记忆；forgetful 有 protected 与默认 dry-run，我们缺这两个安全阀 | 阈值留空即只保护显式 protected；dry-run 不写边 |
 | 2026-11-01 | D3 | `recall` 的 mem0 filters 加 `NOT archived=true`；新增 `SignalWeightedFusion`，recency/access/quality 权重默认 0 | Agent | 归档条目会占用 top_k 名额再被丢弃；多信号必须有同一评测集前后对比才允许开启，默认关闭不改变现有排序 | 清空权重即回纯分数排序；过滤失败回退结果后过滤 |
 | 2026-11-01 | D3 | `MEMORY_PROTECT_IMPORTANCE`/`MEMORY_MAX_CONTENT_CHARS`/`RANK_SIGNAL_*` 先只读 env，未接入 utility 配置注入 | Agent | 避免在未产品化的阶段改动 Swift 配置契约；启用时须按宿主规则同时加 `baseEnvironment()` 与 `taskEnvironmentOverrides()` 两个注入点 | 不设 env 即全部关闭/无限制 |
+
+| 2026-11-01 | D3 | 摘要按预算折叠：保留最新 `cap-1`，其余合并为一条 `level+1` 摘要（上限 3 层），旧摘要软归档并写 `derived_from`；预算默认 0 即不折叠 | Agent | 摘要无上界增长会持续占用热层；按相似度聚类折叠只会引入新的拟合阈值，预算触发是唯一可解释的条件 | `MEMORY_MAX_SUMMARIES` 置 0 即停用；层级上限由 `SUMMARY_LEVEL_MAX` 控制 |
+| 2026-11-01 | D3 | 取代「`MEMORY_*`/`RANK_SIGNAL_*` 只读 env」一条：开关已接入宿主配置链（`MCPConfig` 字段 + `memoryEnvironment()` 两个注入点 + `_YAML_FALLBACKS`），并导出契约 | Agent | 用户要求同步配置；只读 env 的开关在宿主侧既不可见也无法启用 | 配置项保留默认 0，行为与未接入时一致 |

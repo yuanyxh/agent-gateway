@@ -300,15 +300,128 @@ class DailyTest(_Base):
             mock.patch.object(
                 consolidate, "compress_clusters", mock.AsyncMock(return_value=1)
             ) as compress,
+            mock.patch.object(
+                consolidate, "merge_summaries", mock.AsyncMock(return_value=0)
+            ) as merge,
         ):
             result = asyncio.run(consolidate.run_daily(db_path=self.db, now=NOW))
 
         score.assert_called_once()
         compress.assert_awaited_once()
+        merge.assert_awaited_once()
         self.assertEqual(
             result,
-            {"scored": 4, "pairs": 1, "edges": 1, "clusters": 1, "compressed": 1},
+            {
+                "scored": 4,
+                "pairs": 1,
+                "edges": 1,
+                "clusters": 1,
+                "compressed": 1,
+                "merged": 0,
+            },
         )
+
+
+class MergeBudgetTest(unittest.TestCase):
+    def _victims(self, summaries, *, total, per_episode):
+        with (
+            mock.patch.object(consolidate, "memory_max_summaries", return_value=total),
+            mock.patch.object(
+                consolidate,
+                "memory_max_summaries_per_episode",
+                return_value=per_episode,
+            ),
+        ):
+            return [n["node_id"] for n in consolidate._merge_victims(summaries)]
+
+    def test_without_budget_nothing_is_folded(self):
+        summaries = [{"node_id": f"s{i}"} for i in range(5)]
+
+        self.assertEqual(self._victims(summaries, total=None, per_episode=None), [])
+
+    def test_global_cap_keeps_the_newest_and_folds_the_rest(self):
+        summaries = [{"node_id": f"s{i}"} for i in range(5)]
+
+        self.assertEqual(
+            self._victims(summaries, total=3, per_episode=None),
+            ["s2", "s3", "s4"],
+        )
+
+    def test_episode_cap_counts_within_one_episode_only(self):
+        summaries = [
+            {"node_id": "a0", "metadata": {"episode_id": "ea"}},
+            {"node_id": "a1", "metadata": {"episode_id": "ea"}},
+            {"node_id": "a2", "metadata": {"episode_id": "ea"}},
+            {"node_id": "b0", "metadata": {"episode_id": "eb"}},
+        ]
+
+        self.assertEqual(
+            self._victims(summaries, total=None, per_episode=2), ["a1", "a2"]
+        )
+
+
+class MergeRunTest(_Base):
+    def test_over_budget_summaries_fold_into_one_higher_level(self):
+        nodes = [{"node_id": node, "metadata": {"level": 0}} for node in NODE_IDS[:3]]
+        rows = {node: {"payload": {"data": f"fact {node}"}} for node in NODE_IDS[1:3]}
+        with (
+            mock.patch.object(consolidate, "memory_max_summaries", return_value=2),
+            mock.patch.object(
+                consolidate, "memory_max_summaries_per_episode", return_value=None
+            ),
+            mock.patch.object(consolidate, "_summary_nodes", return_value=nodes),
+            mock.patch.object(consolidate, "_hot_rows", return_value=rows),
+            mock.patch.object(consolidate.prompt_loader, "prompt", return_value="p"),
+            mock.patch.object(
+                consolidate.llm_client, "is_configured", return_value=True
+            ),
+            mock.patch.object(
+                consolidate.llm_client,
+                "achat",
+                mock.AsyncMock(return_value="{}"),
+            ) as achat,
+            mock.patch.object(
+                consolidate.llm_client, "parse_json", return_value={"summary": "folded"}
+            ),
+            mock.patch.object(consolidate.graph, "add_edges") as add_edges,
+            mock.patch(
+                "agent_gateway.services.mcp.server_memory._write_memory",
+                return_value={"memory_id": "merged"},
+            ) as write,
+            mock.patch(
+                "agent_gateway.services.mcp.server_memory.set_memory_status"
+            ) as set_status,
+        ):
+            merged = asyncio.run(consolidate.merge_summaries(db_path=self.db, now=NOW))
+
+        self.assertEqual(merged, 1)
+        achat.assert_awaited_once()
+        self.assertEqual(write.call_args[0][0]["level"], 1)
+        add_edges.assert_called_once_with(
+            [("merged", "n2", "derived_from"), ("merged", "n3", "derived_from")],
+            db_path=self.db,
+        )
+        set_status.assert_called_once_with(["n2", "n3"], "archived")
+
+    def test_budget_gap_smaller_than_two_writes_nothing(self):
+        nodes = [{"node_id": "n1", "metadata": {}}, {"node_id": "n2", "metadata": {}}]
+        with (
+            mock.patch.object(consolidate, "memory_max_summaries", return_value=1),
+            mock.patch.object(
+                consolidate, "memory_max_summaries_per_episode", return_value=None
+            ),
+            mock.patch.object(consolidate, "_summary_nodes", return_value=nodes),
+            mock.patch.object(
+                consolidate.llm_client, "is_configured", return_value=True
+            ),
+            mock.patch(
+                "agent_gateway.services.mcp.server_memory._write_memory"
+            ) as write,
+        ):
+            merged = asyncio.run(consolidate.merge_summaries(db_path=self.db, now=NOW))
+
+        self.assertEqual(merged, 0)
+        write.assert_not_called()
 
 
 class NearbyPairsTest(unittest.TestCase):
@@ -415,6 +528,38 @@ class UncoveredMembersTest(_Base):
         )
 
 
+class ProtectedCandidateTest(_Base):
+    def test_protected_nodes_never_reach_the_judge(self):
+        rows = {
+            "n1": {"vector": [1.0, 0.0], "payload": {"data": "a", "protected": True}},
+            "n2": {"vector": [1.0, 0.0], "payload": {"data": "b"}},
+        }
+        with (
+            mock.patch.object(
+                consolidate.llm_client, "is_configured", return_value=True
+            ),
+            mock.patch.object(
+                consolidate,
+                "active_hot",
+                return_value=[{"node_id": "n1"}, {"node_id": "n2"}],
+            ),
+            mock.patch.object(consolidate, "_hot_rows", return_value=rows),
+            mock.patch.object(
+                consolidate,
+                "_candidate_pairs",
+                mock.AsyncMock(return_value=[]),
+            ) as candidates,
+            mock.patch(
+                "agent_gateway.services.mcp.server_memory._check_contradiction",
+                new=mock.AsyncMock(),
+            ) as judge,
+        ):
+            asyncio.run(consolidate.detect_contradictions(db_path=self.db, now=NOW))
+
+        self.assertEqual(candidates.await_args.args[0], ["n2"])
+        judge.assert_not_awaited()
+
+
 class ContradictionSkipTest(_Base):
     def test_pairs_with_a_dispute_edge_are_not_judged_again(self):
         rows = {
@@ -446,6 +591,24 @@ class ContradictionSkipTest(_Base):
 
 
 class WeeklyTest(_Base):
+    def test_dry_run_skips_forgetting_and_vacuum(self):
+        with (
+            mock.patch.object(
+                consolidate,
+                "detect_contradictions",
+                mock.AsyncMock(return_value={"pairs": 0, "disputes": 0}),
+            ),
+            mock.patch.object(consolidate, "forget_expired") as forget,
+            mock.patch.object(consolidate.store, "vacuum") as vacuum,
+        ):
+            result = asyncio.run(
+                consolidate.run_weekly(db_path=self.db, now=NOW, dry_run=True)
+            )
+
+        forget.assert_not_called()
+        vacuum.assert_not_called()
+        self.assertEqual(result["archived"], 0)
+
     def test_weekly_combines_disputes_and_forgetting(self):
         with (
             mock.patch.object(

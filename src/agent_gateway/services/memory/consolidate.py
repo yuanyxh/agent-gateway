@@ -18,7 +18,11 @@ import time
 from datetime import datetime
 
 from agent_gateway.core import prompt_loader
-from agent_gateway.core.config import memory_protect_importance
+from agent_gateway.core.config import (
+    memory_max_summaries,
+    memory_max_summaries_per_episode,
+    memory_protect_importance,
+)
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.llm import client as llm_client
 from agent_gateway.services.memory import graph, retention, store
@@ -38,6 +42,9 @@ COMPRESS_MIN_MEMBERS = 2
 
 CONSOLIDATION_TAG = "consolidated"
 GENERATED_BY = "consolidation"
+SUMMARY_LEVEL_FIELD = "level"
+#: Depth ceiling so repeated folding cannot erase the details below it.
+SUMMARY_LEVEL_MAX = 3
 
 
 def _dense(raw):
@@ -290,6 +297,125 @@ async def compress_clusters(
     return written
 
 
+def _summary_nodes(db_path: str | None) -> list[dict]:
+    nodes = store.list_nodes(
+        layer="hot", status="active", limit=NODE_SCAN_LIMIT, db_path=db_path
+    )
+    return [
+        node
+        for node in nodes
+        if (node.get("metadata") or {}).get("generated_by") == GENERATED_BY
+    ]
+
+
+def _summary_level(node: dict) -> int:
+    try:
+        return int((node.get("metadata") or {}).get(SUMMARY_LEVEL_FIELD) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _merge_victims(summaries: list[dict]) -> list[dict]:
+    """Summaries over budget; the newest `cap - 1` per group survive unfolded."""
+    per_episode = memory_max_summaries_per_episode()
+    total = memory_max_summaries()
+    victims: dict[str, dict] = {}
+
+    def over_budget(items: list[dict], cap: int | None):
+        if not cap or len(items) <= cap:
+            return []
+        return items[max(cap - 1, 1) :]
+
+    if per_episode:
+        groups: dict[str, list[dict]] = {}
+        for node in summaries:
+            episode = str((node.get("metadata") or {}).get("episode_id") or "")
+            groups.setdefault(episode, []).append(node)
+        for items in groups.values():
+            for node in over_budget(items, per_episode):
+                victims[node["node_id"]] = node
+    for node in over_budget(summaries, total):
+        victims[node["node_id"]] = node
+    return list(victims.values())
+
+
+async def merge_summaries(
+    *, db_path: str | None = None, now: datetime | None = None
+) -> int:
+    """Fold over-budget summaries into one higher-level summary.
+
+    Disabled unless a budget is configured. Old summaries are archived, never
+    deleted, and stay reachable through derived_from edges.
+    """
+    from agent_gateway.services.mcp import server_memory
+    from agent_gateway.services.mcp.server_constants import DEFAULT_TIMEOUT
+
+    if not (memory_max_summaries() or memory_max_summaries_per_episode()):
+        return 0
+    if not llm_client.is_configured():
+        return 0
+    victims = _merge_victims(_summary_nodes(db_path))
+    if len(victims) < 2:
+        return 0
+    level = min(max(_summary_level(node) for node in victims) + 1, SUMMARY_LEVEL_MAX)
+    rows = _hot_rows([node["node_id"] for node in victims])
+    facts = [
+        text
+        for text in (
+            str(
+                rows.get(node["node_id"], {}).get("payload", {}).get("data") or ""
+            ).strip()
+            for node in victims
+        )
+        if text
+    ]
+    if len(facts) < 2:
+        logger.info(
+            f"[consolidate] merge skipped: only {len(facts)} readable summaries"
+        )
+        return 0
+    prompt = prompt_loader.prompt(
+        "consolidate", facts_text="\n".join(f"- {fact}" for fact in facts)
+    )
+    raw = await llm_client.achat(
+        prompt,
+        temperature=0.1,
+        timeout=DEFAULT_TIMEOUT,
+        disable_thinking=True,
+        label="Summary merge failed",
+    )
+    parsed = llm_client.parse_json(raw) or {}
+    summary = str(parsed.get("summary") or "").strip()
+    if not summary:
+        logger.warning(
+            f"[consolidate] merge returned no summary for {len(victims)} inputs"
+        )
+        return 0
+    result = server_memory._write_memory(
+        {
+            "content": summary,
+            "context": str(parsed.get("context") or ""),
+            "generated_by": GENERATED_BY,
+            "tags": [CONSOLIDATION_TAG],
+            SUMMARY_LEVEL_FIELD: level,
+        },
+        (now or datetime.now()).isoformat(),
+    )
+    memory_id = result.get("memory_id")
+    if not memory_id:
+        logger.warning("[consolidate] merge write returned no memory_id")
+        return 0
+    graph.add_edges(
+        [(memory_id, node["node_id"], "derived_from") for node in victims],
+        db_path=db_path,
+    )
+    server_memory.set_memory_status([node["node_id"] for node in victims], "archived")
+    logger.info(
+        f"[consolidate] merged {len(victims)} summaries into {memory_id} level={level}"
+    )
+    return 1
+
+
 async def run_daily(
     *,
     now: datetime | None = None,
@@ -302,12 +428,14 @@ async def run_daily(
     compressed = await compress_clusters(
         sampled["clusters"], sampled["rows"], now=now, db_path=db_path
     )
+    merged = await merge_summaries(db_path=db_path, now=now)
     return {
         "scored": scored,
         "pairs": len(sampled["pairs"]),
         "edges": sampled["edges"],
         "clusters": len(sampled["clusters"]),
         "compressed": compressed,
+        "merged": merged,
     }
 
 
@@ -506,7 +634,7 @@ async def run_weekly(
     disputes = await detect_contradictions(
         db_path=db_path, now=now, sample_size=sample_size, dry_run=dry_run
     )
-    archived = forget_expired(db_path=db_path, now=now)
+    archived = 0 if dry_run else forget_expired(db_path=db_path, now=now)
     if not dry_run:
         store.vacuum(db_path=db_path)
     return {"disputes": disputes, "archived": archived}

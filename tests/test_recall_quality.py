@@ -176,6 +176,41 @@ class FakeHotMemory:
         return self.results
 
 
+class SignalFieldTest(unittest.TestCase):
+    def test_hot_arm_reads_quality_from_the_graph(self):
+        hot = FakeHotMemory([{"id": "m1", "memory": "x", "score": 0.9, "metadata": {}}])
+        with (
+            mock.patch.object(server_state, "get_hot_memory", return_value=hot),
+            mock.patch.object(
+                recall_arms.memory_store,
+                "get_nodes",
+                return_value={"m1": {"metadata": {"relevance": 0.8}}},
+            ),
+        ):
+            arm = recall_arms.HotMemoryArm(min_score=0.0)
+            result = arm.retrieve(Query(text="q", language="en", root_text="q"), 3)
+
+        self.assertEqual(result.items[0].extra["relevance"], 0.8)
+
+
+class TouchAccessTest(unittest.TestCase):
+    def test_access_counter_moves_for_hot_rows_only(self):
+        hot = mock.Mock()
+        hot.get.return_value = {"metadata": {"access_count": 2}}
+        with (
+            mock.patch.object(server_memory, "get_hot_memory", return_value=hot),
+            mock.patch.object(
+                server_memory, "_update_metadata", return_value=True
+            ) as update,
+        ):
+            server_memory._touch_hot_access(
+                [{"id": "m1", "layer": "hot"}, {"id": "c1", "layer": "cold"}]
+            )
+
+        update.assert_called_once()
+        self.assertEqual(update.call_args[0][1]["access_count"], 3)
+
+
 class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
     async def _call(self, hot_results, *, related=None, query="q"):
         hot = FakeHotMemory(hot_results)

@@ -193,6 +193,15 @@ class HotMemoryArm:
         except Exception as e:  # noqa: BLE001 - degrade to the cold layer
             logger.warning(f"Hot search failed: {e}")
             return ArmResult(name=self.name, error=str(e))
+        if items:
+            # Quality scores live on the graph node, not in the mem0 payload.
+            nodes = memory_store.get_nodes([item.id for item in items])
+            for item in items:
+                node = nodes.get(item.id)
+                if node:
+                    item.extra["relevance"] = (node.get("metadata") or {}).get(
+                        "relevance"
+                    )
         return ArmResult(name=self.name, items=items)
 
     def _project(
@@ -206,6 +215,15 @@ class HotMemoryArm:
             for key, value in projected.items()
             if key not in ("id", "layer", "content", "score", "match_kind")
         }
+        # Ranking signals live in metadata but stay out of the response whitelist.
+        extra.update(
+            {
+                "heat_score": meta.get("heat_score", DEFAULT_HEAT_SCORE),
+                "access_count": meta.get("access_count", 0),
+                "last_accessed_at": meta.get("last_accessed_at", ""),
+                "relevance": meta.get("relevance"),
+            }
+        )
         return RetrievedItem(
             id=str(projected.get("id", "")),
             kind="memory",
@@ -271,6 +289,7 @@ class ColdMemoryArm:
                             "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
                             "access_count": payload.get("access_count", 0),
                             "last_accessed_at": payload.get("last_accessed_at", ""),
+                            "relevance": payload.get("relevance"),
                             "episode_id": payload.get(EPISODE_FIELD, ""),
                         },
                     )

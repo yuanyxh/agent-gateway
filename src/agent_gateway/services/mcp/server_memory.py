@@ -355,6 +355,14 @@ def _importance(value) -> int:
     return max(1, min(number, 10))
 
 
+def _level(value) -> int:
+    """Consolidation depth; zero means a first-level summary."""
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _build_metadata(src: dict, now_iso: str) -> dict:
     return {
         "agent_id": src.get("agent_id", "unknown"),
@@ -380,6 +388,7 @@ def _build_metadata(src: dict, now_iso: str) -> dict:
         "source_url": str(src.get("source_url") or ""),
         "importance": _importance(src.get("importance")),
         "protected": bool(src.get("protected", False)),
+        "level": _level(src.get("level")),
         # Set by the consolidation pass so its own output never feeds the next round.
         "generated_by": str(src.get("generated_by") or ""),
     }
@@ -448,6 +457,33 @@ def _update_metadata(memory_id: str, meta: dict) -> bool:
     except Exception as e:
         logger.warning(f"Metadata update failed for {memory_id}: {e}")
         return False
+
+
+def _touch_hot_access(results: list[dict]) -> None:
+    """Bump access counters for the rows a caller actually saw.
+
+    Keep this off the ranking path: the value is read on the next query.
+    """
+    hot = get_hot_memory()
+    if hot is None or not results:
+        return
+    now = datetime.now().isoformat()
+    for row in results:
+        if row.get("layer") != "hot":
+            continue
+        memory_id = str(row.get("id") or "")
+        if not memory_id:
+            continue
+        try:
+            current = hot.get(memory_id) or {}
+            meta = dict(current.get("metadata") or {})
+            if not meta:
+                continue
+            meta["access_count"] = int(meta.get("access_count", 0) or 0) + 1
+            meta["last_accessed_at"] = now
+            _update_metadata(memory_id, meta)
+        except Exception as e:  # noqa: BLE001 - never fail a recall on bookkeeping
+            logger.warning(f"[recall] access touch failed for {memory_id}: {e}")
 
 
 def _mark_superseded(
@@ -1085,6 +1121,7 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     out = pipeline.run_query(request, limit, tool="recall")
     top = out["results"]
     related = out["related"]
+    _touch_hot_access(top)
     # The budget is spent on the primary results first. Once they are cut, related
     # context is dropped rather than crowding out a better-scored memory; when they
     # fit, related rows may use whatever is left.

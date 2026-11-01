@@ -51,6 +51,13 @@ _YAML_FALLBACKS: dict[str, tuple[str, str]] = {
     "UTILITY_LOG_BACKUP_COUNT": ("general.logBackupCount", "text"),
     "NOTE_EXCLUDE_DIRS": ("mcp.noteExcludeDirs", "json"),
     "NOTE_EXTENSIONS": ("mcp.noteExtensions", "json"),
+    "MEMORY_PROTECT_IMPORTANCE": ("mcp.memoryProtectImportance", "text"),
+    "MEMORY_MAX_CONTENT_CHARS": ("mcp.memoryMaxContentChars", "text"),
+    "MEMORY_MAX_SUMMARIES": ("mcp.memoryMaxSummaries", "text"),
+    "MEMORY_MAX_SUMMARIES_PER_EPISODE": ("mcp.memoryMaxSummariesPerEpisode", "text"),
+    "RANK_SIGNAL_RECENCY": ("mcp.rankSignalRecency", "text"),
+    "RANK_SIGNAL_ACCESS": ("mcp.rankSignalAccess", "text"),
+    "RANK_SIGNAL_QUALITY": ("mcp.rankSignalQuality", "text"),
     "KNOWLEDGE_TOPICS": ("knowledge.topics", "json"),
     "KNOWLEDGE_TOPIC_TARGET": ("knowledge.poolTargetTopic", "text"),
     "KNOWLEDGE_MAX_FAIL_STREAK": ("knowledge.maxFailStreak", "text"),
@@ -174,19 +181,44 @@ def memory_max_content_chars() -> int | None:
         return None
 
 
+def memory_max_summaries() -> int | None:
+    """Global cap on active consolidation summaries; empty or zero disables merging."""
+    raw = get("MEMORY_MAX_SUMMARIES", "").strip()
+    try:
+        value = int(raw) if raw else 0
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def memory_max_summaries_per_episode() -> int | None:
+    """Per-episode cap on active consolidation summaries."""
+    raw = get("MEMORY_MAX_SUMMARIES_PER_EPISODE", "").strip()
+    try:
+        value = int(raw) if raw else 0
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _weight(raw: str) -> float:
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def rank_signal_weights() -> dict[str, float]:
-    """Optional ranking signals; all zero means plain score ordering."""
-    out = {}
-    for name, env in (
-        ("recency", "RANK_SIGNAL_RECENCY"),
-        ("access", "RANK_SIGNAL_ACCESS"),
-        ("quality", "RANK_SIGNAL_QUALITY"),
-    ):
-        try:
-            out[name] = float(get(env, "0") or 0)
-        except ValueError:
-            out[name] = 0.0
-    return out
+    """Optional ranking signals; all zero means plain score ordering.
+
+    Each key is read literally so `--export-contracts` picks it up; a loop over
+    a key list is invisible to the AST scan and would drop it from the contract.
+    """
+    return {
+        "recency": _weight(get("RANK_SIGNAL_RECENCY", "0")),
+        "access": _weight(get("RANK_SIGNAL_ACCESS", "0")),
+        "quality": _weight(get("RANK_SIGNAL_QUALITY", "0")),
+    }
 
 
 def _int(raw: str, default: int) -> int:
