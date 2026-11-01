@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from agent_gateway.cli import env_builder, minod  # noqa: E402
-from agent_gateway.core import config_loader, daemon  # noqa: E402
+from agent_gateway.core import config_loader, daemon, paths  # noqa: E402
 
 PYTHON = sys.executable
 
@@ -61,8 +61,10 @@ class EnvBuilderTest(unittest.TestCase):
         self.assertEqual(env["MCP_PORT"], "9123")
         self.assertEqual(env["MEMORY_SERVER_URL"], "http://127.0.0.1:9123")
         self.assertEqual(env["QDRANT_PATH"], str(self.root / "data" / "qdrant"))
-        self.assertTrue(
-            env["FASTEMBED_CACHE_PATH"].endswith(".cache/utility/fastembed")
+        # Derived from the active cache root, not a hardcoded legacy path.
+        self.assertEqual(
+            Path(env["FASTEMBED_CACHE_PATH"]),
+            Path(paths.gateway_cache()) / "fastembed",
         )
         self.assertNotIn("EMBEDDER_MODEL", env)
 

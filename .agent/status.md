@@ -103,3 +103,5 @@
 - `project_search` 向量层绝对阈值仍为 0.35；中文向量-only 已直接 `no_match`，英文无词法锚点仍可能返回 `weak_match`，需人工复核。
 - `recall` 的 0.68/0.56/60% 阈值来自历史分数分布、批量正负例与单测；不同 embedding 版本可能需要重新标定。
 - `recall` 的正例 `weak_match` 多为 notes-only；调用方应按 `status` 判断，不应把 notes 当语义记忆命中。
+- 2026-11-01 记忆折叠审查修复（11 项）：`level`/`importance`/`protected` 进 `node_meta` 白名单并在去重分支传播；折叠排除已命中摘要、跳过 protected、按 bucket 分组、cap=1 全折叠、只归档已读到正文的节点；`set_memory_status` 增加 `db_path`；热臂图库回填失败不再丢弃结果；`_touch_hot_access` 移到截断之后并走 to_thread；评测脚本默认走 `GATEWAY_HOME` 且校验样本与连通性；新增不 mock `_write_memory` 的折叠集成测试；全量 387 例通过
+- 2026-11-01 部署验证与两处修正：`memory_protect_importance()` 在配置为 0 时返回 None（原先返回 0 让每条记忆都被判为受保护，周任务矛盾检测静默归零）；`tests/__init__.py` 把 `GATEWAY_CACHE` 指向临时目录，测试不再写进生产的 `~/.cache/utility/server.log`，`test_mcp_environment_defaults` 改为断言 `paths.gateway_cache()` 派生；按 CI 命令 `discover -s tests -t .` 全量 391 例通过
