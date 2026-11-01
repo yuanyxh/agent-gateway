@@ -164,12 +164,17 @@ def summary_exclude_tags() -> set[str]:
 
 
 def memory_protect_importance() -> int | None:
-    """Importance at or above which contradiction checks skip a memory."""
+    """Importance at or above which contradiction checks skip a memory.
+
+    Zero disables the threshold; returning it as-is would protect every memory,
+    because every importance is >= 0.
+    """
     raw = get("MEMORY_PROTECT_IMPORTANCE", "").strip()
     try:
-        return int(raw) if raw else None
+        value = int(raw) if raw else 0
     except ValueError:
         return None
+    return value if value > 0 else None
 
 
 def memory_max_content_chars() -> int | None:

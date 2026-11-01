@@ -122,6 +122,30 @@ class ConfigFallbackTest(unittest.TestCase):
         self._write("ai:\n  model: m1\n")
         self.assertEqual(config.get("NOT_INJECTED_ENV", "x"), "x")
 
+    def test_zero_protect_threshold_disables_it(self):
+        # 0 must mean "off": every importance is >= 0, so returning 0 would make
+        # the weekly pass treat every memory as protected.
+        self._write("mcp:\n  memoryProtectImportance: 0\n")
+        self.assertIsNone(config.memory_protect_importance())
+
+    def test_protect_threshold_is_read_from_config(self):
+        self._write("mcp:\n  memoryProtectImportance: 8\n")
+        self.assertEqual(config.memory_protect_importance(), 8)
+
+    def test_zero_summary_budget_disables_folding(self):
+        self._write(
+            "mcp:\n  memoryMaxSummaries: 0\n  memoryMaxSummariesPerEpisode: 0\n"
+        )
+        self.assertIsNone(config.memory_max_summaries())
+        self.assertIsNone(config.memory_max_summaries_per_episode())
+
+    def test_rank_signals_default_to_zero(self):
+        self._write("mcp:\n  rankSignalRecency: 0.2\n")
+        weights = config.rank_signal_weights()
+
+        self.assertEqual(weights["recency"], 0.2)
+        self.assertEqual(weights["access"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
