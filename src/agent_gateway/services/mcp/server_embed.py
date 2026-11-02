@@ -2,8 +2,8 @@
 
 Split out of server.py (2026-08-30, refactor phase 4): fastembed configuration and
 the single embedder instance. Shared by the hot layer (server.py's
-MEM0_CONFIG/_patch_mem0_fastembed), the cold layer (ColdMemoryArm) and project
-vector search (server_search.py). Code moved as-is, no logic changes.
+MEM0_CONFIG/_patch_mem0_fastembed), the cold layer (ColdMemoryArm) and note
+vector search. Code moved as-is, no logic changes.
 
 Note: this module does not import mem0/qdrant — server.py's module-level side-effect
 ordering (POSTHOG_DISABLED/MEM0_TELEMETRY + _patch_mem0_fastembed before import mem0)

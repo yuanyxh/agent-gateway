@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-MCP MinoBraiN — hot/cold two-tier shared memory + project dependency-graph query
+MCP MinoBraiN — hot/cold two-tier shared memory + project call-graph query
 
 Hot layer: Mem0 → Qdrant (raw fragment memories, auto extract/dedup/conflict resolution)
 Cold layer: Qdrant separate collection (archived knowledge index)
-Project: SQLite dependency-graph query (FTS5 + synonym expansion)
+Project: SQLite call-graph query (graph.sqlite)
 
 Ported from self-service-docker, adapted for the Utility.app subprocess model.
 
-Refactor (2026-08-30, phase 4): shared embedder → server_embed.py; project
-dependency-graph query and note semantic search → server_search.py; this entry point
-keeps memory operations / cold layer / skills / HTTP service / main().
+Refactor (2026-08-30, phase 4): shared embedder → server_embed.py; this entry
+point keeps memory operations / cold layer / skills / HTTP service / main().
 """
 
 # mem0's built-in PostHog telemetry hangs initialization in an offline environment,
@@ -66,10 +65,14 @@ from agent_gateway.services.mcp.graph_tools import (
     IMPACT_DEFAULT_DEPTH,
     IMPACT_DEFAULT_LIMIT,
     LOOKUP_DEFAULT_LIMIT,
+    _graph_db_path,
     tool_project_impact,
     tool_project_lookup,
 )
-from agent_gateway.services.mcp.search_notes_cache import schedule_prewarm_for_db
+from agent_gateway.services.mcp.search_notes_cache import (
+    schedule_prewarm_for_db,
+    schedule_project_notes_prewarm,
+)
 from agent_gateway.services.mcp.server_archive import archive_scheduler
 from agent_gateway.services.mcp.server_memory import (
     HANDLERS as MEMORY_HANDLERS,
@@ -98,10 +101,14 @@ from agent_gateway.services.memory.consolidate import (
 )
 from agent_gateway.services.retrieval import rebuild
 from agent_gateway.services.retrieval import trace as retrieval_trace
+from agent_gateway.services.retrieval.arms.project_lookup import ProjectLookupArm
 from agent_gateway.services.retrieval.arms.project_notes import LAYER as NOTES_LAYER
 from agent_gateway.services.retrieval.arms.project_notes import ProjectNotesArm
 from agent_gateway.services.retrieval.fusion.score import MaxScoreFusion
-from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate
+from agent_gateway.services.retrieval.gate.relevance import (
+    LayerPresenceGate,
+    PassThroughGate,
+)
 from agent_gateway.services.retrieval.pipeline import Pipeline
 from agent_gateway.services.retrieval.rerank import get_reranker
 from agent_gateway.services.mcp.server_rest import (
@@ -268,15 +275,54 @@ async def _handle_memory_graph(arguments: dict) -> list[TextContent]:
 
 @_register("project_lookup")
 async def _handle_project_lookup(arguments: dict) -> list[TextContent]:
-    result = await asyncio.to_thread(
-        tool_project_lookup,
-        arguments["path"],
-        arguments.get("query", ""),
-        arguments.get("kind", ""),
-        arguments.get("file_path", ""),
-        int_arg(arguments, "limit", LOOKUP_DEFAULT_LIMIT),
+    path = arguments["path"]
+    query = str(arguments.get("query", "")).strip()
+    kind = arguments.get("kind", "")
+    file_path = arguments.get("file_path", "")
+    limit = int_arg(arguments, "limit", LOOKUP_DEFAULT_LIMIT)
+
+    # Validation, a missing graph and the empty-query overview are not
+    # retrieval, so they keep the original response shape.
+    if not query or not os.path.isdir(path) or not os.path.isfile(_graph_db_path(path)):
+        result = await asyncio.to_thread(
+            tool_project_lookup, path, query, kind, file_path, limit
+        )
+        return [TextContent(type="text", text=dumps(result))]
+
+    pipeline = Pipeline(
+        name="project_lookup",
+        arms=[ProjectLookupArm(path, kind, file_path)],
+        fusion=MaxScoreFusion(),
+        gate=PassThroughGate(),
     )
-    return [TextContent(type="text", text=dumps(result))]
+    out = await asyncio.to_thread(pipeline.run, query, limit, None, "project_lookup")
+    results = [
+        {
+            "name": row.get("name", ""),
+            "kind": row.get("kind", ""),
+            "file": (row.get("locator") or {}).get("file", ""),
+            "startLine": (row.get("locator") or {}).get("line", 0),
+            "endLine": (row.get("locator") or {}).get("end_line", 0),
+            "callerCount": row.get("caller_count", 0),
+            "topCallers": row.get("top_callers", []),
+            "resolver": row.get("resolver", ""),
+        }
+        for row in out["results"]
+    ]
+    return [
+        TextContent(
+            type="text",
+            text=dumps(
+                {
+                    "status": out["status"],
+                    "query": query,
+                    "results": results,
+                    "errors": out["errors"],
+                    "trace_id": out["trace_id"],
+                }
+            ),
+        )
+    ]
 
 
 @_register("project_impact")
@@ -347,6 +393,7 @@ async def _handle_project_notes(arguments: dict) -> list[TextContent]:
                         "count": len(results),
                         "total_chunks": arm.total_chunks,
                         "status": out["status"],
+                        "errors": out.get("errors") or [],
                     }
                 ),
             )
@@ -713,7 +760,12 @@ async def serve():
 
     async def api_project_notes_prewarm(request):
         body = await request.json()
-        scheduled = schedule_prewarm_for_db(body.get("dbPath", ""))
+        project_path = str(body.get("project_path") or "").strip()
+        scheduled = (
+            schedule_project_notes_prewarm(project_path)
+            if project_path
+            else schedule_prewarm_for_db(body.get("dbPath", ""))
+        )
         return JSONResponse({"scheduled": scheduled})
 
     async def api_consolidation_run(request):

@@ -12,10 +12,10 @@ from unittest import mock
 os.environ.setdefault("QDRANT_PATH", tempfile.mkdtemp(prefix="agent-gateway-test-"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agent_gateway.services.mcp import project_tools, server_memory  # noqa: E402
+from agent_gateway.services.mcp import server_memory  # noqa: E402
 from agent_gateway.services.retrieval.types import RetrievedItem  # noqa: E402
 
-RECALL_TOP_KEYS = {"status", "results", "related", "count"}
+RECALL_TOP_KEYS = {"status", "results", "related", "count", "errors"}
 RECALL_ITEM_KEYS = {
     "id",
     "kind",
@@ -29,7 +29,6 @@ RECALL_ITEM_KEYS = {
     "metadata",
 }
 RECALL_META_KEYS = {"tags", "status", "confidence"}
-PROJECT_ITEM_KEYS = {"name", "kind", "signature", "file", "line", "score", "importedBy"}
 
 
 def _item() -> RetrievedItem:
@@ -132,37 +131,30 @@ class RecallResponseTest(unittest.TestCase):
         self.assertEqual(set(data), RECALL_TOP_KEYS | {"hint"})
 
 
-class ProjectSearchResponseTest(unittest.TestCase):
-    def test_row_keeps_only_decision_fields(self):
-        shaped = project_tools._shape_row(
-            {
-                "name": "f",
-                "kind": "function",
-                "signature": "f()",
-                "file": "a.py",
-                "startLine": 3,
-                "visibility": "public",
-                "module": "src",
-                "importCount": 2,
-                "importedBy": ["b.py"],
-                "score": 0.53,
-                "layer": "fts5",
-            }
-        )
+class LookupItemShapeTest(unittest.TestCase):
+    def test_lookup_decision_fields_survive_shaping(self):
+        out = RetrievedItem(
+            id="project_lookup:a.py:function:scan:10",
+            kind="function",
+            score=1.0,
+            score_kind="rank",
+            content="scan()",
+            layer="project_lookup",
+            locator={"file": "a.py", "line": 10, "end_line": 20},
+            extra={
+                "name": "scan",
+                "caller_count": 3,
+                "top_callers": [{"file": "b.py"}],
+                "resolver": "treesitter",
+            },
+        ).to_result()
 
-        self.assertEqual(set(shaped), PROJECT_ITEM_KEYS)
-        self.assertEqual(shaped["line"], 3)
-
-    def test_payload_shapes_result_and_results(self):
-        payload = {
-            "result": {"name": "a", "module": "src"},
-            "results": [{"name": "a", "module": "src"}],
-        }
-
-        shaped = project_tools._shape_payload(payload)
-
-        self.assertEqual(shaped["result"], {"name": "a"})
-        self.assertEqual(shaped["results"], [{"name": "a"}])
+        self.assertEqual(out["name"], "scan")
+        self.assertEqual(out["caller_count"], 3)
+        self.assertEqual(out["top_callers"], [{"file": "b.py"}])
+        self.assertEqual(out["resolver"], "treesitter")
+        self.assertEqual(out["locator"]["end_line"], 20)
+        self.assertNotIn("score_kind", out)
 
 
 if __name__ == "__main__":

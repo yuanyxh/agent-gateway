@@ -18,7 +18,10 @@ from agent_gateway.services.retrieval.fusion.score import (  # noqa: E402
     HeatWeightedFusion,
     RRFFusion,
 )
-from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate  # noqa: E402
+from agent_gateway.services.retrieval.gate.relevance import (  # noqa: E402
+    LayerPresenceGate,
+    PassThroughGate,
+)
 from agent_gateway.services.retrieval.gate import calibrate  # noqa: E402
 from agent_gateway.services.retrieval.gate.thresholds import floors_for  # noqa: E402
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage  # noqa: E402
@@ -300,6 +303,51 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(out["status"], "ok")
         self.assertIn("nope", recorder.call_args[0][0]["passes"][0]["arms"][0]["error"])
         self.assertEqual(out["results"][0]["id"], "x")
+
+    def test_failing_arm_is_reported_in_response(self):
+        class Boom:
+            name = "boom"
+
+            def retrieve(self, query, limit, filters=None):
+                raise RuntimeError("nope")
+
+        pipeline = self._pipeline([Boom(), FakeArm("ok", [item("x", 0.7)])])
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run("q", limit=5)
+
+        self.assertEqual(
+            out["errors"],
+            [{"pass": "primary", "arm": "boom", "error": "RuntimeError: nope"}],
+        )
+
+    def test_successful_arms_report_no_errors(self):
+        pipeline = self._pipeline([FakeArm("a", [item("x", 0.7)])])
+        with mock.patch.object(trace, "record"):
+            out = pipeline.run("q", limit=5)
+
+        self.assertEqual(out["errors"], [])
+
+    def test_arm_limit_covers_the_caller_limit(self):
+        seen_limits: list[int] = []
+
+        class LimitArm:
+            name = "limit"
+
+            def retrieve(self, query, limit, filters=None):
+                seen_limits.append(limit)
+                return ArmResult(name=self.name, items=[])
+
+        pipeline = self._pipeline([LimitArm()])
+        with mock.patch.object(trace, "record"):
+            pipeline.run("q", limit=50)
+
+        self.assertEqual(seen_limits, [50])
+
+    def test_pass_through_gate_reports_presence_only(self):
+        gate = PassThroughGate()
+
+        self.assertEqual(gate.judge(Query(text="q"), [item("x", 0.01)]).status, "ok")
+        self.assertEqual(gate.judge(Query(text="q"), []).status, "no_match")
 
     def test_trace_payload_is_recorded(self):
         pipeline = self._pipeline([FakeArm("a", [item("x", 0.7)])])

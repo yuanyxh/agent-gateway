@@ -36,3 +36,23 @@ class LayerPresenceGate:
         if items or related:
             return GateVerdict(status="weak_match", reason="lexical_or_related_only")
         return GateVerdict(status="no_match", reason="empty")
+
+
+class PassThroughGate:
+    """Report presence only, for deterministic lookups with no score floor.
+
+    Symbol lookup returns exact/near-exact matches, so a low score is not
+    evidence of a weak answer; the caller's own status machine decides.
+    """
+
+    name = "pass_through"
+
+    def judge(
+        self,
+        query: Query,
+        items: list[RetrievedItem],
+        related: list[RetrievedItem] | None = None,
+    ) -> GateVerdict:
+        if items or related:
+            return GateVerdict(status="ok", reason="results_present")
+        return GateVerdict(status="no_match", reason="empty")

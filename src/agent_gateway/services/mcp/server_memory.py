@@ -1169,6 +1169,7 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         "results": top,
         "related": related,
         "count": len(top),
+        "errors": out.get("errors") or [],
     }
     if status == "weak_match":
         payload["hint"] = (

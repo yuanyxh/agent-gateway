@@ -7,7 +7,7 @@
 **不迁入 notes**：检索质量不该成为可被静默改坏的变量——改写坏了的表现是「搜不到」，
 没有任何报错，与「这条记录本来就不存在」无法区分。
 
-被 `server_search.expand_query()` 引用，用于 FTS5 全文搜索的同义词扩展。
+当前无调用方；模块与 `MCP_SYNONYMS` 契约随 tool_defaults 的增量配置机制保留。
 """
 
 from __future__ import annotations

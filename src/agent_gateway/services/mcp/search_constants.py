@@ -5,8 +5,6 @@ from __future__ import annotations
 import importlib.util
 import threading
 
-import numpy as np
-
 from agent_gateway.core.log_utils import setup_logging
 # ---------------------------------------------------------------------------
 # Configuration (same as pre-split server.py; NOTE_*/PROJECT_MARKER_* are server-specific)
@@ -41,8 +39,6 @@ NOTE_KEYWORD_FLOOR = 0.4
 NOTE_MAX_CHUNKS_PER_PROJECT = 50000
 NOTE_MAX_RESULTS = 20
 NOTE_PREVIEW_LEN = 300
-#: Legacy search path (retrieval arm and its tests); the MCP tool was removed.
-DEFAULT_PROJECT_SEARCH_LIMIT = 15
 PROJECT_MARKER_FILES = frozenset(
     {
         # JS/TS
@@ -78,11 +74,8 @@ PROJECT_MARKER_FILES = frozenset(
 PROJECT_MARKER_MAX_DEPTH = 2
 PROJECT_MARKER_FILE_SUFFIXES = (".csproj", ".sln")
 PROJECT_MARKER_DIR_SUFFIXES = (".xcodeproj", ".xcworkspace")
-_MAX_VECTOR_CACHE = 3
-_MAX_VECTOR_ROWS = 50000
 # Number of texts fed to the embedder per call (ONNX inference is batched to avoid building an oversized batch at once)
 _EMBED_BATCH_SIZE = 32
-_symbol_embeddings: dict[str, tuple[list[dict], np.ndarray | None]] = {}
 _note_cache_lock = threading.Lock()
 
 logger = setup_logging("server")

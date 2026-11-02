@@ -1,7 +1,7 @@
 """Unified SQLite connection utility.
 
 Consolidates the scattered `sqlite3.connect(...)` boilerplate of
-token_proxy / proxy_usage / server_search / server into
+token_proxy / proxy_usage / server into
 `with conn(db_path) as c:` — auto-commit + rollback on exception +
 always close, avoiding connection leaks and duplicated boilerplate.
 """

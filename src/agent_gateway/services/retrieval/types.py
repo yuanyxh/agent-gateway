@@ -58,7 +58,15 @@ class RetrievedItem:
     extra: dict[str, Any] = field(default_factory=dict)
 
     #: Fields a caller needs to decide; diagnostics stay in the retrieval trace.
-    RESULT_EXTRA_KEYS = ("episode_id", "context", "edge")
+    RESULT_EXTRA_KEYS = (
+        "episode_id",
+        "context",
+        "edge",
+        "name",
+        "caller_count",
+        "top_callers",
+        "resolver",
+    )
     RESULT_META_KEYS = ("tags", "status", "confidence")
 
     def to_result(self) -> dict[str, Any]:

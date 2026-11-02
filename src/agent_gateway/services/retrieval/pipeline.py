@@ -105,7 +105,9 @@ class Pipeline:
         self, query: Query, limit: int, filters: dict[str, Any] | None
     ) -> list[ArmResult]:
         """Walk the tiers until `limit` distinct items are held or tiers run out."""
-        arm_limit = PER_ARM_LIMIT or limit
+        # Over-fetch covers the per-arm default, but a caller asking for more
+        # must reach the arm or fusion can never fill that limit.
+        arm_limit = max(PER_ARM_LIMIT, limit)
         collected: list[ArmResult] = []
         seen: set[str] = set()
         for stage in self.stages:
@@ -198,6 +200,12 @@ class Pipeline:
 
         top = items[:limit]
         related = related[:limit]
+        errors = [
+            {"pass": label, "arm": arm.name, "error": arm.error}
+            for label, arms in passes
+            for arm in arms
+            if arm.error
+        ]
         latency["total"] = round((time.perf_counter() - started) * 1000, 2)
 
         trace_payload = self._trace_payload(
@@ -211,6 +219,8 @@ class Pipeline:
             "related": [item.to_result() for item in related],
             "count": len(top),
             "related_count": len(related),
+            # Arm failures are otherwise indistinguishable from a real miss.
+            "errors": errors,
             "trace_id": trace_payload["trace_id"],
         }
 

@@ -1,7 +1,7 @@
 """Trace wrappers for retrievers that keep their own algorithm.
 
-`project_search` and `project_notes` are not on the pipeline yet; wrapping them
-keeps trace coverage at 100% so both can be compared before migration.
+No caller currently: `project_notes` runs through the pipeline, which emits its
+own trace, and `project_search` was removed.
 """
 
 from __future__ import annotations
