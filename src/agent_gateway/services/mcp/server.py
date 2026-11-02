@@ -115,7 +115,7 @@ from agent_gateway.services.mcp.server_rest import (
     REST_ROUTES,
     read_args,
 )
-from agent_gateway.services.mcp.server_utils import dumps, int_arg
+from agent_gateway.services.mcp.server_utils import dumps, int_arg, run_with_timeout
 from agent_gateway.services.mcp.server_constants import (
     COLD_COLLECTION,
     COLD_SOURCE_MEMORY_IDS_FIELD,
@@ -339,6 +339,11 @@ async def _handle_project_impact(arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=dumps(result))]
 
 
+#: Keeps the response ahead of client-side MCP timeouts. Queries no longer
+#: embed, so this only guards the first ONNX load and very large caches.
+PROJECT_NOTES_TIMEOUT_SECONDS = 20
+
+
 @_register("project_notes")
 async def _handle_project_notes(arguments: dict) -> list[TextContent]:
     try:
@@ -371,9 +376,39 @@ async def _handle_project_notes(arguments: dict) -> list[TextContent]:
             gate=LayerPresenceGate(semantic_layers=(NOTES_LAYER,)),
             reranker=get_reranker(),
         )
-        out = await asyncio.to_thread(
-            pipeline.run, query.strip(), limit, None, "project_notes"
+        out, timed_out = await run_with_timeout(
+            pipeline.run,
+            query.strip(),
+            limit,
+            None,
+            "project_notes",
+            timeout=PROJECT_NOTES_TIMEOUT_SECONDS,
         )
+        if timed_out:
+            return [
+                TextContent(
+                    type="text",
+                    text=dumps(
+                        {
+                            "results": [],
+                            "count": 0,
+                            "total_chunks": arm.total_chunks,
+                            "status": "partial",
+                            "timeout": True,
+                            "errors": [
+                                {
+                                    "pass": "primary",
+                                    "arm": "project_notes",
+                                    "error": (
+                                        "timeout after "
+                                        f"{PROJECT_NOTES_TIMEOUT_SECONDS}s"
+                                    ),
+                                }
+                            ],
+                        }
+                    ),
+                )
+            ]
         # `file`/`line` stay at the top level: existing callers read those keys.
         results = [
             {

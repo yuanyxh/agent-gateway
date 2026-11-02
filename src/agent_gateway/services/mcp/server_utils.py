@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 
@@ -19,3 +20,18 @@ def int_arg(arguments: dict, key: str, default: int) -> int:
         return int(arguments.get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+async def run_with_timeout(fn, *args, timeout: float, **kwargs):
+    """Run a blocking call off the loop; return `(result, timed_out)`.
+
+    The worker thread cannot be cancelled: the deadline only stops the wait, so
+    a long rebuild keeps running and its late result is discarded.
+    """
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(fn, *args, **kwargs), timeout=timeout
+        )
+        return result, False
+    except asyncio.TimeoutError:
+        return None, True

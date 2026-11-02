@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
+
+# The service always injects this; tests must opt in explicitly so the cache
+# identity guard does not treat the default embedder as an accidental swap.
+os.environ.setdefault("EMBEDDER_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 from agent_gateway.services.mcp import search_notes_cache
 from agent_gateway.services.mcp.search_notes_cache import (
@@ -343,6 +348,86 @@ class QueryWhileBusyTest(unittest.TestCase):
 
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["results"][0]["file"], "doc.md")
+
+
+class NoteScanExclusionTest(unittest.TestCase):
+    def test_skips_eval_datasets_and_pytest_cache(self):
+        from agent_gateway.services.mcp.search_notes_io import _scan_md_files
+
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "README.md").write_text("# ok", encoding="utf-8")
+            for rel in ["tests/eval/datasets/answer.md", ".pytest_cache/notes.md"]:
+                path = Path(root, rel)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("# skip", encoding="utf-8")
+
+            files = {os.path.relpath(f["path"], root) for f in _scan_md_files(root)}
+
+        self.assertEqual(files, {"README.md"})
+
+
+class EmbedderIdentityGuardTest(unittest.TestCase):
+    def test_refuses_to_drop_cache_without_explicit_model(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            os.makedirs(os.path.dirname(db))
+            conn = _get_note_db(db)
+            with conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta VALUES ('embedder_tag', 'othermodel')"
+                )
+                conn.execute(
+                    "INSERT INTO chunks VALUES (?,?,?,?,?,?,?)",
+                    (
+                        "/p/README.md",
+                        0,
+                        "text",
+                        1,
+                        1.0,
+                        10,
+                        b"\x00" * (search_notes_cache.EMBEDDER_SPEC.dims * 4),
+                    ),
+                )
+            conn.close()
+
+            with mock.patch.dict(os.environ):
+                os.environ.pop("EMBEDDER_MODEL", None)
+                with self.assertRaises(RuntimeError):
+                    _get_note_db(db)
+                raw = sqlite3.connect(db)
+                kept = raw.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+                raw.close()
+
+        self.assertEqual(kept, 1)
+
+    def test_drops_cache_when_the_model_is_explicit(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            os.makedirs(os.path.dirname(db))
+            conn = _get_note_db(db)
+            with conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta VALUES ('embedder_tag', 'othermodel')"
+                )
+                conn.execute(
+                    "INSERT INTO chunks VALUES (?,?,?,?,?,?,?)",
+                    (
+                        "/p/README.md",
+                        0,
+                        "text",
+                        1,
+                        1.0,
+                        10,
+                        b"\x00" * (search_notes_cache.EMBEDDER_SPEC.dims * 4),
+                    ),
+                )
+            conn.close()
+
+            conn = _get_note_db(db)
+            remaining = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            conn.close()
+
+        self.assertEqual(remaining, 0)
 
 
 if __name__ == "__main__":

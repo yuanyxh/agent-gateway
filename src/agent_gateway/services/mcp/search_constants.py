@@ -38,6 +38,12 @@ NOTE_KEYWORD_FLOOR = 0.4
 NOTE_MAX_CHUNKS_PER_PROJECT = 50000
 NOTE_MAX_RESULTS = 20
 NOTE_PREVIEW_LEN = 300
+#: Project-relative prefixes excluded from note indexing. Eval datasets and
+#: pytest caches are not project documentation and can dwarf real content.
+NOTE_EXCLUDE_RELPATHS = ("tests/eval", ".pytest_cache")
+#: Changed files embedded per commit during a rebuild, so a long run keeps
+#: finished work and can log progress instead of committing once at the end.
+NOTE_EMBED_FILES_PER_COMMIT = 8
 PROJECT_MARKER_FILES = frozenset(
     {
         # JS/TS

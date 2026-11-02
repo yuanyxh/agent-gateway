@@ -10,6 +10,7 @@ from agent_gateway.services.mcp.search_constants import (
     NOTE_CHUNK_MIN_SIZE,
     NOTE_CHUNK_OVERLAP,
     NOTE_EXCLUDE_DIRS,
+    NOTE_EXCLUDE_RELPATHS,
     PROJECT_MARKER_DIR_SUFFIXES,
     PROJECT_MARKER_FILES,
     PROJECT_MARKER_FILE_SUFFIXES,
@@ -52,6 +53,11 @@ def _is_ignored(abs_path: str, ignore_spec, project_root: str, is_dir: bool) -> 
         return False
 
 
+def _is_excluded_relpath(abs_path: str, project_root: str) -> bool:
+    rel = os.path.relpath(abs_path, project_root).replace(os.sep, "/")
+    return any(rel == p or rel.startswith(p + "/") for p in NOTE_EXCLUDE_RELPATHS)
+
+
 def _scan_md_files(project_path: str) -> list[dict]:
     """Recursively scan .md files under project_path, respecting exclusions."""
     ignore_spec = _load_gitignore(project_path)
@@ -59,7 +65,12 @@ def _scan_md_files(project_path: str) -> list[dict]:
     try:
         for root, dirs, names in os.walk(project_path, followlinks=False):
             # In-place pruning of excluded directories
-            dirs[:] = [d for d in dirs if d not in NOTE_EXCLUDE_DIRS]
+            dirs[:] = [
+                d
+                for d in dirs
+                if d not in NOTE_EXCLUDE_DIRS
+                and not _is_excluded_relpath(os.path.join(root, d), project_path)
+            ]
             # Also check .gitignore on remaining dirs when pathspec available
             if _HAS_PATHSPEC and ignore_spec is not None and root != project_path:
                 dirs[:] = [
@@ -74,6 +85,8 @@ def _scan_md_files(project_path: str) -> list[dict]:
                 if not name.endswith(".md"):
                     continue
                 fpath = os.path.join(root, name)
+                if _is_excluded_relpath(fpath, project_path):
+                    continue
                 if _is_ignored(fpath, ignore_spec, project_path, is_dir=False):
                     continue
                 try:

@@ -16,6 +16,7 @@ from agent_gateway.services.mcp.server_embed import (
 
 from agent_gateway.services.mcp.search_constants import (
     NOTE_DB_FILENAME,
+    NOTE_EMBED_FILES_PER_COMMIT,
     NOTE_MAX_CHUNKS_PER_PROJECT,
     _EMBED_BATCH_SIZE,
     logger,
@@ -110,6 +111,15 @@ def _enforce_embedder_identity(conn: sqlite3.Connection) -> int:
     stale_tag = bool(stored_tag) and stored_tag != EMBEDDER_SPEC.tag
     dropped = 0
     if foreign or stale_tag:
+        # A bare script without EMBEDDER_MODEL falls back to the built-in
+        # default, which looks like a model swap and would wipe the live cache.
+        if not os.environ.get("EMBEDDER_MODEL"):
+            conn.close()
+            raise RuntimeError(
+                f"note cache was built by {stored_tag or 'another embedder'}, "
+                f"expecting {EMBEDDER_SPEC.tag}; set EMBEDDER_MODEL to the active "
+                "model (mcp.embedderModel) before rebuilding"
+            )
         dropped = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         reason = (
             f"{stored_tag or 'unknown'} tag, expecting {EMBEDDER_SPEC.tag}/{dims}d"
@@ -342,59 +352,68 @@ def _ensure_note_cache(
                 accepted.append((mf, chunks))
                 total += len(chunks)
 
-            # Phase 3: run batched inference over all texts to embed at once. Calling
-            # per file multiplies the Python↔ONNX round trips to the order of the file
-            # count; batched, it depends only on the total item count.
-            vectors: list = []
-            if emb is not None:
-                texts = [c["chunk_text"] for _mf, chunks in accepted for c in chunks]
-                vectors = _embed_in_batches(emb, texts)
+            # Phase 3+4: embed and commit in file batches. A rebuild can run for
+            # tens of minutes, so waiting for every file before the first commit
+            # risks losing all work and leaves no progress signal.
+            written = 0
+            for start in range(0, len(accepted), NOTE_EMBED_FILES_PER_COMMIT):
+                batch = accepted[start : start + NOTE_EMBED_FILES_PER_COMMIT]
+                vectors: list = []
+                if emb is not None:
+                    texts = [c["chunk_text"] for _mf, chunks in batch for c in chunks]
+                    vectors = _embed_in_batches(emb, texts)
 
-            # Phase 4: write back (vectors map one-to-one to the flattened order of
-            # accepted). A single file's "delete old rows + insert new rows" is committed
-            # in one transaction to stay atomic.
-            cursor = 0
-            for mf, chunks in accepted:
-                try:
-                    conn.execute(
-                        "DELETE FROM chunks WHERE file_path = ?", (mf["path"],)
-                    )
-                    for c in chunks:
-                        vec = vectors[cursor] if cursor < len(vectors) else None
-                        cursor += 1
-                        if vec is not None:
-                            conn.execute(
-                                "INSERT OR REPLACE INTO chunks VALUES (?,?,?,?,?,?,?)",
-                                (
-                                    mf["path"],
-                                    c["chunk_index"],
-                                    c["chunk_text"],
-                                    c["line_start"],
-                                    mf["mtime"],
-                                    mf["size"],
-                                    np.asarray(vec, dtype=np.float32).tobytes(),
-                                ),
-                            )
-                        else:
-                            # No embedder: store without embedding (keyword fallback later)
-                            conn.execute(
-                                "INSERT OR REPLACE INTO chunks "
-                                "(file_path, chunk_index, chunk_text, line_start, mtime, file_size) "
-                                "VALUES (?,?,?,?,?,?)",
-                                (
-                                    mf["path"],
-                                    c["chunk_index"],
-                                    c["chunk_text"],
-                                    c["line_start"],
-                                    mf["mtime"],
-                                    mf["size"],
-                                ),
-                            )
-                    conn.commit()
-                except Exception as e:
-                    logger.warning(f"[project_notes] error writing {mf['path']}: {e}")
-                    conn.rollback()
-                    continue
+                # A single file's "delete old rows + insert new rows" stays in one
+                # transaction so a partial write cannot leave half a file behind.
+                cursor = 0
+                for mf, chunks in batch:
+                    try:
+                        conn.execute(
+                            "DELETE FROM chunks WHERE file_path = ?", (mf["path"],)
+                        )
+                        for c in chunks:
+                            vec = vectors[cursor] if cursor < len(vectors) else None
+                            cursor += 1
+                            if vec is not None:
+                                conn.execute(
+                                    "INSERT OR REPLACE INTO chunks VALUES (?,?,?,?,?,?,?)",
+                                    (
+                                        mf["path"],
+                                        c["chunk_index"],
+                                        c["chunk_text"],
+                                        c["line_start"],
+                                        mf["mtime"],
+                                        mf["size"],
+                                        np.asarray(vec, dtype=np.float32).tobytes(),
+                                    ),
+                                )
+                            else:
+                                # No embedder: store without embedding (keyword fallback later)
+                                conn.execute(
+                                    "INSERT OR REPLACE INTO chunks "
+                                    "(file_path, chunk_index, chunk_text, line_start, mtime, file_size) "
+                                    "VALUES (?,?,?,?,?,?)",
+                                    (
+                                        mf["path"],
+                                        c["chunk_index"],
+                                        c["chunk_text"],
+                                        c["line_start"],
+                                        mf["mtime"],
+                                        mf["size"],
+                                    ),
+                                )
+                        conn.commit()
+                    except Exception as e:
+                        logger.warning(
+                            f"[project_notes] error writing {mf['path']}: {e}"
+                        )
+                        conn.rollback()
+                        continue
+                written += len(batch)
+                logger.info(
+                    f"[project_notes] {project_path}: embedded "
+                    f"{written}/{len(accepted)} files"
+                )
 
         total_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         return conn, db_path, total_chunks

@@ -52,6 +52,7 @@
 - 2026-11-01 摘要预算折叠：日任务末尾按 `MEMORY_MAX_SUMMARIES` / `MEMORY_MAX_SUMMARIES_PER_EPISODE` 折叠超预算摘要（保留最新 `cap-1`，其余合并为一条 `level+1`，上限 3 层），旧摘要软归档并写 `derived_from`；预算为 0 时不折叠；新增 4 例测试；全量 379 例通过
 - 2026-11-01 跨仓配置链打通：`MEMORY_*` / `RANK_SIGNAL_*` 写入 `_YAML_FALLBACKS`（selfManaged 回退）并导出契约（env.json 58 键）；宿主新增 `MCPConfig` 字段与 `memoryEnvironment()`，两个注入点同时生效
 - 2026-11-02 公开发布改造：`README.md` 重写为完整英文对外文档，新增 `README.zh.md` 中文镜像（章节一一对应）；新增 MIT `LICENSE`；`pyproject.toml` 补 `readme` / `license` / `license-files` / `keywords` / `classifiers` / `urls` 并把 hatchling 提到 `>=1.27`（PEP 639）；profile 改 public / MIT。验证：477 测试通过、ruff 通过、wheel 元数据含 `License-Expression: MIT`、资源已打包
+- 2026-11-02 project_notes 可靠性：查询路径永不嵌入（`NOTE_QUERY_EMBED_BUDGET=0`），缓存锁改按项目、忙时只读打开并调度后台预热；扫描排除 `tests/eval` 与 `.pytest_cache`；嵌入按 8 文件批次提交并逐批记日志；handler 加 20s 硬超时返回 `status=partial`+`timeout`；`_enforce_embedder_identity` 在未设 `EMBEDDER_MODEL` 时拒绝清库。实测 gateway 缓存 3663→603 chunks（清掉 3058 条 eval 脏数据），查询 66–464ms。全量 484 通过（1 例 token_proxy 基线失败）
 
 ## 下一步
 

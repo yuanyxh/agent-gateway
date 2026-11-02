@@ -51,8 +51,11 @@ memory = [
     "qdrant-client>=1.13.0",
 ]
 # MCP server and the HTTP layer it runs on
+# mcp 2.x replaced the lowlevel decorators; server.py still registers tools
+# with @server.list_tools()/@server.call_tool(), so an unbounded range breaks
+# startup on any fresh install.
 server = [
-    "mcp>=1.6.0",
+    "mcp>=1.6.0,<2",
     "uvicorn>=0.34.0",
     "starlette>=0.46.0",
     "anyio>=4.0",
