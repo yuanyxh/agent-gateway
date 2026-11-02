@@ -358,8 +358,26 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(payload["tool"], "recall")
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["passes"][0]["arms"][0]["hits"][0]["id"], "x")
+        self.assertEqual(payload["returned"][0]["id"], "x")
+        self.assertEqual(payload["returned"][0]["score_kind"], "dense")
         self.assertEqual(payload["lead"]["id"], "x")
         self.assertTrue(out["trace_id"].startswith("rt_"))
+
+    def test_trace_returned_lists_only_delivered_items(self):
+        """Adoption analysis must not credit candidates that were cut by the limit."""
+        pipeline = self._pipeline(
+            [
+                FakeArm(
+                    "a",
+                    [item("first", 0.9), item("second", 0.8), item("dropped", 0.7)],
+                )
+            ]
+        )
+        with mock.patch.object(trace, "record") as recorder:
+            pipeline.run("q", limit=2)
+
+        returned = [row["id"] for row in recorder.call_args[0][0]["returned"]]
+        self.assertEqual(returned, ["first", "second"])
 
     def test_semantic_query_runs_a_second_pass_and_rrf_merges_it(self):
         seen: list[str] = []

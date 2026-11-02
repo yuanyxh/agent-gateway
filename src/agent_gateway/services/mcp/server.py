@@ -429,6 +429,7 @@ async def _handle_project_notes(arguments: dict) -> list[TextContent]:
                         "total_chunks": arm.total_chunks,
                         "status": out["status"],
                         "errors": out.get("errors") or [],
+                        "trace_id": out["trace_id"],
                     }
                 ),
             )

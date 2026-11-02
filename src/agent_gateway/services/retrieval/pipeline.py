@@ -264,6 +264,20 @@ class Pipeline:
                 }
                 for label, arms in passes
             ],
+            # What the caller actually received, with locators. Adoption analysis
+            # needs these fingerprints to check later references; hits include
+            # candidates that were fused away or cut by the limit.
+            "returned": [
+                {
+                    "id": item.id,
+                    "kind": item.kind,
+                    "layer": item.layer,
+                    "score": float(item.score),
+                    "score_kind": item.score_kind,
+                    "locator": item.locator,
+                }
+                for item in top
+            ],
             # The lead hit is what the caller is most likely to adopt; keeping it
             # separate makes "was the top result the right one" answerable later
             # without re-deriving the order.
