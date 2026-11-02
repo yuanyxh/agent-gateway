@@ -75,8 +75,8 @@ target:
     - 不写入签名包内文件
 
 governance:
-  openness: private
-  license: internal
+  openness: public
+  license: MIT
   contribution: direct
   security_contact: ""
 

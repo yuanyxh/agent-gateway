@@ -1,12 +1,27 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "agent-gateway"
 version = "0.1.0"
-description = "AI capability layer: MCP memory, LLM gateway and desktop services"
+description = "Self-hosted AI capability layer: MCP memory, code graph, web access and model gateway"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+keywords = ["mcp", "memory", "llm", "gateway", "code-graph", "agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "httpx>=0.28.0",
     "pathspec>=0.12.0",
@@ -46,6 +61,11 @@ server = [
 
 [project.scripts]
 agent-gateway = "agent_gateway.cli.minod:main"
+
+[project.urls]
+Homepage = "https://github.com/yuanyxh/agent-gateway"
+Repository = "https://github.com/yuanyxh/agent-gateway"
+Issues = "https://github.com/yuanyxh/agent-gateway/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_gateway"]

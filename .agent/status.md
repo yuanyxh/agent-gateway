@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-完成项目基座（init 产物），随后进入 G2：让 macOS 宿主改用 wheel 分发。
+完成公开发布准备：双语 README、MIT 许可证与打包元数据；提交与推送由用户决定。
 
 ## 进行中
 
@@ -51,11 +51,12 @@
 - 2026-11-01 多信号排序补数据链路：热臂 `extra` 补 `heat_score`/`access_count`/`last_accessed_at`，`relevance` 由图库回填；`recall` 对热层 top 结果 `access_count += 1`；100 条 known-item 评测（`scripts/eval_rank_signals.py`）显示只有 recency 0.2 略有提升（hit@1 0.69→0.72），默认权重保持 0
 - 2026-11-01 摘要预算折叠：日任务末尾按 `MEMORY_MAX_SUMMARIES` / `MEMORY_MAX_SUMMARIES_PER_EPISODE` 折叠超预算摘要（保留最新 `cap-1`，其余合并为一条 `level+1`，上限 3 层），旧摘要软归档并写 `derived_from`；预算为 0 时不折叠；新增 4 例测试；全量 379 例通过
 - 2026-11-01 跨仓配置链打通：`MEMORY_*` / `RANK_SIGNAL_*` 写入 `_YAML_FALLBACKS`（selfManaged 回退）并导出契约（env.json 58 键）；宿主新增 `MCPConfig` 字段与 `memoryEnvironment()`，两个注入点同时生效
+- 2026-11-02 公开发布改造：`README.md` 重写为完整英文对外文档，新增 `README.zh.md` 中文镜像（章节一一对应）；新增 MIT `LICENSE`；`pyproject.toml` 补 `readme` / `license` / `license-files` / `keywords` / `classifiers` / `urls` 并把 hatchling 提到 `>=1.27`（PEP 639）；profile 改 public / MIT。验证：477 测试通过、ruff 通过、wheel 元数据含 `License-Expression: MIT`、资源已打包
 
 ## 下一步
 
-1. 打包部署记忆体第二轮改进并复验（近邻候选耗时、dry-run 不落盘、归档过滤后的召回）
-2. 评估 `project_search` 中文/无词法锚点查询的 `weak_match` 阈值
+1. 用户确认后提交并推送公开发布改造
+2. 打包部署记忆体第二轮改进并复验（近邻候选耗时、dry-run 不落盘、归档过滤后的召回）
 3. utility 侧打包与整机回归通过后发版
 4. 归档条目物理迁出热层：未开始，细节与触发条件见 utility 仓 `.claude/plans/memory-system.md` 的「待办」章节
 
@@ -93,6 +94,8 @@
 | 2026-10-30 | 开关组合评测（固定快照，正例 20 + 负例 20） | base/split/relative 负例 ok 均为 0；term_split 曾把负例 weak 从 6 提到 14，改为词法臂用原句后归零 |
 | 2026-10-30 | 标注集导出（368 条 recall query，分层按语言） | 0 错误、平均 245ms；每 query 5 条结果，定位带短 id 保证唯一 |
 | 2026-10-30 | 基线评测（368 条标注 → 249 条 gold → 244 条 specific） | Recall@5 1.0 / MRR@10 0.887 / nDCG@10 0.878 / precision@5 0.421 / top1 相关率 0.393 / 平均相关 0.88 条 |
+| 2026-11-02 | `ruff format --check` / `ruff check` / `.venv/bin/python -m unittest discover -s tests -t .` | 通过（227 文件 / 0 条 / 477 例） |
+| 2026-11-02 | `.venv/bin/python -m build` | 通过；wheel 元数据 `License-Expression: MIT`，LICENSE、提示词、语言包与 ast-js 已打包 |
 
 ## 已知问题
 
