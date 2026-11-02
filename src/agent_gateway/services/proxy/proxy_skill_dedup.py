@@ -24,13 +24,13 @@ from agent_gateway.core.l10n import t
 
 API_OPENAI = "openai"
 
-#: Placeholder when the tool name cannot be mapped, avoiding rendering "skill  loaded above"
-UNKNOWN_NAME = "?"
+#: Placeholder when the first occurrence carries no id, avoiding a dangling "tool result"
+UNKNOWN_REF = "?"
 
 
-def note_for(name: str, lang: str) -> str:
-    """Render the short note in the given language via the shared catalog."""
-    return t("proxy.dedup.note", lang=lang, name=name or UNKNOWN_NAME)
+def note_for(ref: str, lang: str) -> str:
+    """Render the short note, pointing at the first occurrence's tool result id."""
+    return t("proxy.dedup.note", lang=lang, id=ref or UNKNOWN_REF)
 
 
 def _tool_result_text(block: dict) -> str | None:
@@ -61,36 +61,8 @@ def _set_tool_result_text(block: dict, text: str) -> None:
         block["content"] = [{"type": "text", "text": text}]
 
 
-def _resolve_anthropic_names(messages: list[dict]) -> dict[str, str]:
-    """tool_use_id → tool name (the name is on the tool_use block of the assistant message)."""
-    names: dict[str, str] = {}
-    for msg in messages:
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                names[block.get("id", "")] = block.get("name", "")
-    return names
-
-
-def _resolve_openai_names(messages: list[dict]) -> dict[str, str]:
-    """tool_call_id → tool name (the name is in the assistant message's tool_calls)."""
-    names: dict[str, str] = {}
-    for msg in messages:
-        for call in msg.get("tool_calls") or []:
-            if not isinstance(call, dict):
-                continue
-            fn = call.get("function")
-            names[call.get("id", "")] = (
-                fn.get("name", "") if isinstance(fn, dict) else ""
-            )
-    return names
-
-
 def _dedup_anthropic(messages: list[dict], lang: str) -> int:
-    names = _resolve_anthropic_names(messages)
-    seen: set[str] = set()
+    first_id: dict[str, str] = {}
     replaced = 0
     for msg in messages:
         content = msg.get("content")
@@ -102,18 +74,16 @@ def _dedup_anthropic(messages: list[dict], lang: str) -> int:
             text = _tool_result_text(block)
             if text is None or not text.strip():
                 continue
-            if text in seen:
-                name = names.get(block.get("tool_use_id", ""), "")
-                _set_tool_result_text(block, note_for(name, lang))
+            if text in first_id:
+                _set_tool_result_text(block, note_for(first_id[text], lang))
                 replaced += 1
             else:
-                seen.add(text)
+                first_id[text] = block.get("tool_use_id", "")
     return replaced
 
 
 def _dedup_openai(messages: list[dict], lang: str) -> int:
-    names = _resolve_openai_names(messages)
-    seen: set[str] = set()
+    first_id: dict[str, str] = {}
     replaced = 0
     for msg in messages:
         if msg.get("role") != "tool":
@@ -121,12 +91,11 @@ def _dedup_openai(messages: list[dict], lang: str) -> int:
         content = msg.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
-        if content in seen:
-            name = names.get(msg.get("tool_call_id", ""), "")
-            msg["content"] = note_for(name, lang)
+        if content in first_id:
+            msg["content"] = note_for(first_id[content], lang)
             replaced += 1
         else:
-            seen.add(content)
+            first_id[content] = msg.get("tool_call_id", "")
     return replaced
 
 

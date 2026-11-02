@@ -48,7 +48,7 @@
   "mcp.summary.truncation_markers": "内容截断，保留已有信息\n内容截断，仅保留已有信息\n内容截断，仅保留此信息\n内容截断，保留此信息\n内容截断仅保留已有信息\n内容截断仅保留此信息\n已截断，保留已有信息\n截断，保留已有信息\n截断，仅保留已有信息\n仅保留已有信息\n仅保留此信息\n（内容截断）保留已有信息\n内容截断（保留已有信息）\n导致响应内容截断（保留已有信息）\n当内容截断时，保留已有信息\n内容截断，此处保留已有信息\n相关内容截断保留",
   "mcp.summary.uncategorized": "未分類",
   "mcp.summary.unknown_date": "日期未知",
-  "proxy.dedup.note": "{name} 的结果已存在，见上文",
+  "proxy.dedup.note": "本次运行结果与上次结果相同（工具结果 {id}）",
   "proxy.filter.truncated": "\n[... 已截断 {n} 字节 ...]\n",
   "proxy.note.applied": "已执行: {parts}",
   "proxy.note.context": "上下文 {ctx}",

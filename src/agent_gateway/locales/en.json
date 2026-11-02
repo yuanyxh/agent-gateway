@@ -48,7 +48,7 @@
   "mcp.summary.truncation_markers": "content truncated, existing information kept\ncontent truncated, only existing information kept\ntruncated, existing information kept\ntruncated, only existing information kept\nonly existing information kept\nonly existing information retained\nonly this information retained\n(content truncated) existing information kept\ncontent truncated (existing information kept)\nresponse truncated (existing information kept)\nwhen content is truncated, existing information kept",
   "mcp.summary.uncategorized": "Uncategorized",
   "mcp.summary.unknown_date": "unknown date",
-  "proxy.dedup.note": "{name} result already exists; see above",
+  "proxy.dedup.note": "This result is the same as the previous one (tool result {id})",
   "proxy.filter.truncated": "\n[... {n} bytes truncated ...]\n",
   "proxy.note.applied": "applied: {parts}",
   "proxy.note.context": "{ctx} context",
