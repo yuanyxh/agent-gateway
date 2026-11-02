@@ -13,10 +13,15 @@ from agent_gateway.services.mcp.search_constants import (
     NOTE_KEYWORD_FLOOR,
     NOTE_MAX_RESULTS,
     NOTE_PREVIEW_LEN,
+    NOTE_QUERY_EMBED_BUDGET,
     NOTE_SIMILARITY_THRESHOLD,
     logger,
 )
-from agent_gateway.services.mcp.search_notes_cache import _ensure_note_cache
+from agent_gateway.services.mcp.search_notes_cache import (
+    _ensure_note_cache,
+    _open_note_cache_readonly,
+    schedule_project_notes_prewarm,
+)
 from agent_gateway.services.retrieval.text.analyzer import split_terms
 from agent_gateway.services.mcp.search_notes_io import (
     _chunk_md_text,
@@ -33,7 +38,7 @@ def _keyword_search_uncached(project_path: str, query: str, limit: int) -> dict:
     chunks directly without persisting to SQLite. Repeated queries against directories
     like notes leave no disk residue.
     """
-    tokens = [t for t in query.split() if t]
+    tokens = [t.lower() for t in split_terms(query)] or [t for t in query.split() if t]
     results: list[dict] = []
     seen: set[tuple[str, int]] = set()
 
@@ -85,10 +90,27 @@ def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
         return _keyword_search_uncached(project_path, query, limit)
 
     try:
-        conn, db_path, total_chunks = _ensure_note_cache(project_path)
+        ensured = _ensure_note_cache(
+            project_path, max_files=NOTE_QUERY_EMBED_BUDGET, wait=False
+        )
     except Exception as e:
         logger.error(f"[project_notes] cache init failed: {e}")
         return {"error": f"Cache init failed: {e}", "results": [], "count": 0}
+
+    if ensured is None:
+        ensured = _open_note_cache_readonly(project_path)
+        logger.info(
+            f"[project_notes] {project_path}: cache busy, serving existing chunks"
+        )
+    if ensured is None:
+        return _keyword_search_uncached(project_path, query, limit)
+    conn, db_path, total_chunks = ensured
+
+    if total_chunks == 0:
+        conn.close()
+        schedule_project_notes_prewarm(project_path)
+        logger.info(f"[project_notes] {project_path}: empty cache, keyword fallback")
+        return _keyword_search_uncached(project_path, query, limit)
 
     try:
         rows = conn.execute(
@@ -100,6 +122,8 @@ def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
         return {"error": f"DB error: {e}", "results": [], "count": 0}
 
     conn.close()
+    # Anything this query capped is finished in the background.
+    schedule_project_notes_prewarm(project_path)
 
     if not rows:
         return {"results": [], "count": 0, "total_chunks": total_chunks}

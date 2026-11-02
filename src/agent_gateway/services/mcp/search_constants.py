@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import threading
 
 from agent_gateway.core.log_utils import setup_logging
 # ---------------------------------------------------------------------------
@@ -76,7 +75,9 @@ PROJECT_MARKER_FILE_SUFFIXES = (".csproj", ".sln")
 PROJECT_MARKER_DIR_SUFFIXES = (".xcodeproj", ".xcworkspace")
 # Number of texts fed to the embedder per call (ONNX inference is batched to avoid building an oversized batch at once)
 _EMBED_BATCH_SIZE = 32
-_note_cache_lock = threading.Lock()
+#: A query never embeds: one file takes seconds, so embedding in the request
+#: thread is what made callers time out. The background prewarm owns this work.
+NOTE_QUERY_EMBED_BUDGET = 0
 
 logger = setup_logging("server")
 

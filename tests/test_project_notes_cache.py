@@ -258,6 +258,10 @@ class ChineseKeywordQueryTest(unittest.TestCase):
                     "agent_gateway.services.mcp.search_notes_query.embed_query",
                     return_value=None,
                 ),
+                mock.patch(
+                    "agent_gateway.services.mcp.search_notes_query.schedule_project_notes_prewarm",
+                    return_value=False,
+                ),
             ):
                 result = _query_project_notes(root, "剪贴板管理", 5)
 
@@ -280,6 +284,65 @@ class ChunkMarkdownTest(unittest.TestCase):
         chunks = _chunk_md_text("word " * 400, "/tmp/long.md")
         self.assertGreater(len(chunks), 1)
         self.assertEqual([c["chunk_index"] for c in chunks], list(range(len(chunks))))
+
+
+class PerProjectLockTest(unittest.TestCase):
+    def test_locks_are_per_project(self):
+        self.assertIs(
+            search_notes_cache._project_lock("/tmp/a"),
+            search_notes_cache._project_lock("/tmp/a"),
+        )
+        self.assertIsNot(
+            search_notes_cache._project_lock("/tmp/a"),
+            search_notes_cache._project_lock("/tmp/b"),
+        )
+
+    def test_wait_false_returns_none_while_locked(self):
+        with tempfile.TemporaryDirectory() as root:
+            lock = search_notes_cache._project_lock(root)
+            lock.acquire()
+            try:
+                self.assertIsNone(_ensure_note_cache(root, wait=False))
+            finally:
+                lock.release()
+
+
+class QueryWhileBusyTest(unittest.TestCase):
+    def test_serves_existing_chunks_when_cache_is_busy(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = os.path.normpath(root)
+            Path(root, "package.json").write_text("{}", encoding="utf-8")
+            Path(root, "doc.md").write_text(
+                "第一章\n\n管理剪贴板的逻辑在这里说明，涉及面板与热键注册。\n\n"
+                "第二章\n\n其他无关内容，仅用于把文件撑到足够的长度。\n",
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "agent_gateway.services.mcp.search_notes_cache._get_shared_embedder",
+                return_value=None,
+            ):
+                conn, _, _ = _ensure_note_cache(root)
+                conn.close()
+
+            lock = search_notes_cache._project_lock(root)
+            lock.acquire()
+            try:
+                with (
+                    mock.patch(
+                        "agent_gateway.services.mcp.search_notes_query.schedule_project_notes_prewarm",
+                        return_value=False,
+                    ),
+                    mock.patch(
+                        "agent_gateway.services.mcp.search_notes_query.embed_query",
+                        return_value=None,
+                    ),
+                ):
+                    result = _query_project_notes(root, "剪贴板管理", 5)
+            finally:
+                lock.release()
+
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["file"], "doc.md")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,6 @@ from agent_gateway.services.mcp.search_constants import (
     NOTE_DB_FILENAME,
     NOTE_MAX_CHUNKS_PER_PROJECT,
     _EMBED_BATCH_SIZE,
-    _note_cache_lock,
     logger,
 )
 from agent_gateway.services.mcp.search_notes_io import (
@@ -28,6 +27,22 @@ from agent_gateway.services.mcp.search_notes_io import (
 )
 
 _prewarm_lock = threading.Lock()
+
+_project_locks: dict[str, threading.Lock] = {}
+_project_locks_guard = threading.Lock()
+
+
+def _project_lock(project_path: str) -> threading.Lock:
+    """One lock per project: a rebuild in one project must not stall another."""
+    key = os.path.normpath(project_path)
+    with _project_locks_guard:
+        lock = _project_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _project_locks[key] = lock
+        return lock
+
+
 _prewarm_inflight: set[str] = set()
 
 #: Prewarm runs on a daemon thread after every search call and cannot be cancelled
@@ -194,32 +209,39 @@ def schedule_prewarm_for_db(db_path: str) -> bool:
 def _ensure_note_cache(
     project_path: str,
     max_files: int | None = None,
-) -> tuple[sqlite3.Connection, str, int]:
+    *,
+    wait: bool = True,
+) -> tuple[sqlite3.Connection, str, int] | None:
     """Incremental cache update: scan .md files, diff mtime/size, embed only changed.
 
     ``max_files`` caps how many changed files are embedded in this call; files
     beyond the cap keep their old rows and are retried on the next call.
+    ``wait=False`` returns None when a rebuild is already running for this
+    project, so a request thread does not queue behind it.
     """
     project_path = os.path.normpath(project_path)
-    cache_dir = os.path.join(project_path, ".utility")
-    os.makedirs(cache_dir, exist_ok=True)
-    db_path = os.path.join(cache_dir, NOTE_DB_FILENAME)
-
-    conn = _get_note_db(db_path)
-
-    # This used to quick-skip via "project root dir mtime <= the max mtime of .md files
-    # in the cache", but the two have different semantics: the former is the project
-    # *root directory*'s mtime (changes only when direct children are added/removed),
-    # the latter is the mtime of each cached .md file (last write time). Distortion goes
-    # both ways — editing a deep existing file does not trigger a rescan (returning stale
-    # results), while adding/removing at the root triggers a full rescan.
-    # Changed to always scan + per-file diff: measured, scanning 453 .md files takes only
-    # 7ms, whereas a wrong staleness decision means re-embedding everything (6.3s
-    # average, 150s worst case). The scan cost is negligible.
-
-    # Serialized rebuild: when multiple requests arrive at once, embedding runs only once (ONNX inference is blocking and memory-intensive)
-    _note_cache_lock.acquire()
+    lock = _project_lock(project_path)
+    if not lock.acquire(blocking=wait):
+        return None
     try:
+        cache_dir = os.path.join(project_path, ".utility")
+        os.makedirs(cache_dir, exist_ok=True)
+        db_path = os.path.join(cache_dir, NOTE_DB_FILENAME)
+
+        conn = _get_note_db(db_path)
+
+        # This used to quick-skip via "project root dir mtime <= the max mtime of .md files
+        # in the cache", but the two have different semantics: the former is the project
+        # *root directory*'s mtime (changes only when direct children are added/removed),
+        # the latter is the mtime of each cached .md file (last write time). Distortion goes
+        # both ways — editing a deep existing file does not trigger a rescan (returning stale
+        # results), while adding/removing at the root triggers a full rescan.
+        # Changed to always scan + per-file diff: measured, scanning 453 .md files takes only
+        # 7ms, whereas a wrong staleness decision means re-embedding everything (6.3s
+        # average, 150s worst case). The scan cost is negligible.
+
+        # Serialized rebuild per project: concurrent requests share one
+        # embedding pass (ONNX inference is blocking and memory-intensive).
         md_files = _scan_md_files(project_path)
         cached = {}
         try:
@@ -377,4 +399,19 @@ def _ensure_note_cache(
         total_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         return conn, db_path, total_chunks
     finally:
-        _note_cache_lock.release()
+        lock.release()
+
+
+def _open_note_cache_readonly(
+    project_path: str,
+) -> tuple[sqlite3.Connection, str, int] | None:
+    """Read the current cache without updating it; None when it does not exist."""
+    project_path = os.path.normpath(project_path)
+    db_path = os.path.join(project_path, ".utility", NOTE_DB_FILENAME)
+    if not os.path.isfile(db_path):
+        return None
+    conn = sqlite3.connect(db_path, timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    return conn, db_path, total
