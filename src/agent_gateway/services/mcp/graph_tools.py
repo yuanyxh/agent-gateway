@@ -1,7 +1,8 @@
 """MCP project graph tools: symbol lookup and impact traversal.
 
-Both tools read graph.sqlite directly; the host owns the schema and writes.
-Results carry provenance (file, line, resolver, confidence).
+Both tools take a project root and read <root>/.utility/graph.sqlite; the host
+owns the schema and writes. Results carry provenance (file, line, resolver,
+confidence).
 """
 
 from __future__ import annotations
@@ -23,6 +24,14 @@ IMPACT_DEFAULT_DEPTH = arg_default("project_impact", "depth")
 DIRECTIONS = ("callers", "callees", "both")
 MAX_LIMIT = 500
 MAX_DEPTH = 10
+
+#: Graph database location under a project root; never resolved from env.
+GRAPH_DB_RELATIVE_PATH = os.path.join(".utility", "graph.sqlite")
+
+
+def _graph_db_path(project_path: str) -> str:
+    return os.path.join(project_path, GRAPH_DB_RELATIVE_PATH)
+
 
 #: Edge kinds the graph stores; anything else is a known blind spot.
 COVERAGE = {
@@ -203,14 +212,23 @@ def _query_files(connection, query: str, file_path: str, limit: int):
 
 
 def tool_project_lookup(
-    db_path: str,
+    project_path: str,
     query: str,
     kind: str = "",
     file_path: str = "",
     limit: int = LOOKUP_DEFAULT_LIMIT,
 ) -> dict:
     trace_id = _trace("gl")
+    project_path = (project_path or "").strip()
     query = (query or "").strip()
+    if not os.path.isdir(project_path):
+        return {
+            "status": "error",
+            "query": query,
+            "error": f"project directory not found: {project_path}",
+            "trace_id": trace_id,
+        }
+    db_path = _graph_db_path(project_path)
     if not os.path.isfile(db_path):
         return {
             "status": "error",
@@ -513,7 +531,7 @@ def _entries_to_groups(entries: list[dict], limit: int) -> tuple[list[dict], boo
 
 
 def tool_project_impact(
-    db_path: str,
+    project_path: str,
     target: str,
     direction: str = "callers",
     depth: int = IMPACT_DEFAULT_DEPTH,
@@ -521,6 +539,7 @@ def tool_project_impact(
     include_stale: bool = False,
 ) -> dict:
     trace_id = _trace("gi")
+    project_path = (project_path or "").strip()
     target = (target or "").strip()
     direction = direction if direction in DIRECTIONS else "callers"
     depth = _clamp(depth, 1, MAX_DEPTH)
@@ -534,6 +553,15 @@ def tool_project_impact(
             "error": "target must not be empty",
             "trace_id": trace_id,
         }
+    if not os.path.isdir(project_path):
+        return {
+            "status": "error",
+            "target": empty_target,
+            "direction": direction,
+            "error": f"project directory not found: {project_path}",
+            "trace_id": trace_id,
+        }
+    db_path = _graph_db_path(project_path)
     if not os.path.isfile(db_path):
         return {
             "status": "error",

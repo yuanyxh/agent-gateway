@@ -324,7 +324,8 @@ CREATE TABLE unresolved (
 
 
 def _make_db(root: str, symbols, edges, files=None) -> str:
-    path = os.path.join(root, "graph.sqlite")
+    path = os.path.join(root, ".utility", "graph.sqlite")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     connection = sqlite3.connect(path)
     try:
         connection.executescript(SCHEMA)
@@ -353,14 +354,14 @@ def _make_db(root: str, symbols, edges, files=None) -> str:
 class GraphToolRegressionTest(unittest.TestCase):
     def test_dotted_filename_lookup_hits_file(self):
         with tempfile.TemporaryDirectory() as root:
-            db = _make_db(root, [], [], files=["docs/README.md"])
-            result = graph_tools.tool_project_lookup(db, "README.md")
+            _make_db(root, [], [], files=["docs/README.md"])
+            result = graph_tools.tool_project_lookup(root, "README.md")
         self.assertEqual(result["results"][0]["kind"], "file")
         self.assertEqual(result["results"][0]["file"], "docs/README.md")
 
     def test_class_method_target_uses_owner_range(self):
         with tempfile.TemporaryDirectory() as root:
-            db = _make_db(
+            _make_db(
                 root,
                 [
                     ("s1", "pkg/a.py", "A", "class", 1, 20),
@@ -371,13 +372,13 @@ class GraphToolRegressionTest(unittest.TestCase):
                 [],
                 files=["pkg/a.py", "pkg/b.py"],
             )
-            result = graph_tools.tool_project_impact(db, "A.run")
+            result = graph_tools.tool_project_impact(root, "A.run")
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["target"]["file"], "pkg/a.py")
 
     def test_both_direction_keeps_callee_with_limit(self):
         with tempfile.TemporaryDirectory() as root:
-            db = _make_db(
+            _make_db(
                 root,
                 [
                     ("s1", "pkg/a.py", "target", "function", 1, 5),
@@ -423,7 +424,7 @@ class GraphToolRegressionTest(unittest.TestCase):
                 files=["pkg/a.py"],
             )
             result = graph_tools.tool_project_impact(
-                db, "target", direction="both", limit=1
+                root, "target", direction="both", limit=1
             )
         names = {
             item["symbol"] for group in result["groups"] for item in group["items"]
@@ -432,7 +433,7 @@ class GraphToolRegressionTest(unittest.TestCase):
 
     def test_callee_line_uses_symbol_start(self):
         with tempfile.TemporaryDirectory() as root:
-            db = _make_db(
+            _make_db(
                 root,
                 [
                     ("s1", "pkg/a.py", "target", "function", 1, 5),
@@ -443,14 +444,16 @@ class GraphToolRegressionTest(unittest.TestCase):
                 ],
                 files=["pkg/a.py"],
             )
-            result = graph_tools.tool_project_impact(db, "target", direction="callees")
+            result = graph_tools.tool_project_impact(
+                root, "target", direction="callees"
+            )
         item = result["groups"][0]["items"][0]
         self.assertEqual(item["symbol"], "callee")
         self.assertEqual(item["line"], 30)
 
     def test_stale_edge_counted_once_across_directions(self):
         with tempfile.TemporaryDirectory() as root:
-            db = _make_db(
+            _make_db(
                 root,
                 [
                     ("s1", "pkg/a.py", "T", "function", 1, 5),
@@ -485,7 +488,7 @@ class GraphToolRegressionTest(unittest.TestCase):
                 files=["pkg/a.py"],
             )
             result = graph_tools.tool_project_impact(
-                db, "T", direction="both", depth=2, include_stale=True
+                root, "T", direction="both", depth=2, include_stale=True
             )
         self.assertEqual(result["stale"], 1)
 

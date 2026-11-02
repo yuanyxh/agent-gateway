@@ -8,10 +8,7 @@ import sqlite3
 
 
 from agent_gateway.core.db import conn as dbconn
-from agent_gateway.services.mcp.search_constants import (
-    DEFAULT_PROJECT_SEARCH_LIMIT,
-    DEFAULT_PROJECT_STRUCTURE_LIMIT,
-)
+from agent_gateway.services.mcp.search_constants import DEFAULT_PROJECT_SEARCH_LIMIT
 from agent_gateway.services.mcp.search_symbols import (
     _search_files,
     _search_packages,
@@ -293,79 +290,3 @@ def _project_search_impl(
     limit: int = DEFAULT_PROJECT_SEARCH_LIMIT,
 ) -> dict:
     return _shape_payload(_project_search_raw(db_path, query, file_path, kind, limit))
-
-
-def tool_project_structure(
-    db_path: str, subpath: str = "", limit: int = DEFAULT_PROJECT_STRUCTURE_LIMIT
-) -> dict:
-    if not os.path.isfile(db_path):
-        return {"error": f"Database not found: {db_path}"}
-    subpath = (subpath or "").strip().strip("/")
-    with dbconn(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-
-        MAX_ITEMS = max(1, int(limit))
-        scanned = conn.execute("SELECT 1 FROM directories LIMIT 1").fetchone()
-        if scanned is None:
-            scanned = conn.execute("SELECT 1 FROM files LIMIT 1").fetchone()
-
-        path_exists = None
-        if subpath:
-            path_exists = conn.execute(
-                "SELECT 1 FROM directories WHERE path = ? LIMIT 1", (subpath,)
-            ).fetchone()
-            prefix = subpath + "/"
-            dirs = conn.execute(
-                "SELECT path, module_name, file_count, has_package_manifest "
-                "FROM directories WHERE path LIKE ? AND path NOT LIKE ? "
-                "ORDER BY path LIMIT ?",
-                (prefix + "%", prefix + "%/%", MAX_ITEMS + 1),
-            ).fetchall()
-            files = conn.execute(
-                "SELECT path, ext FROM files WHERE dir_path = ? ORDER BY path LIMIT ?",
-                (subpath, MAX_ITEMS + 1),
-            ).fetchall()
-        else:
-            dirs = conn.execute(
-                "SELECT path, module_name, file_count, has_package_manifest "
-                "FROM directories WHERE path NOT LIKE '%/%' "
-                "ORDER BY path LIMIT ?",
-                (MAX_ITEMS + 1,),
-            ).fetchall()
-            files = conn.execute(
-                "SELECT path, ext FROM files WHERE dir_path = '' ORDER BY path LIMIT ?",
-                (MAX_ITEMS + 1,),
-            ).fetchall()
-
-    result = {
-        "status": "ok",
-        "directories": [
-            {
-                "path": r["path"],
-                "name": r["module_name"],
-                "fileCount": r["file_count"],
-                "isManifest": bool(r["has_package_manifest"]),
-            }
-            for r in dirs[:MAX_ITEMS]
-        ],
-        "files": [{"path": f["path"], "ext": f["ext"]} for f in files[:MAX_ITEMS]],
-        "totalDirs": len(dirs),
-        "totalFiles": len(files),
-    }
-
-    if scanned is None:
-        result["status"] = "not_scanned"
-        result["hint"] = "The dependency database has no scanned files or directories"
-    elif not dirs and not files:
-        if subpath and path_exists is None:
-            result["status"] = "path_not_found"
-            result["hint"] = f"No scanned directory or file matches: {subpath}"
-        else:
-            result["status"] = "empty"
-            result["hint"] = "The selected directory has no scanned children or files"
-
-    if len(dirs) > MAX_ITEMS or len(files) > MAX_ITEMS:
-        result["truncated"] = True
-        result["hint"] = "Result truncated; pass a subpath to narrow it down"
-
-    return result

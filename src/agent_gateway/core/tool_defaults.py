@@ -31,7 +31,6 @@ TOOL_DEFAULTS_ENV_KEY = "MCP_TOOL_DEFAULTS"
 TOOL_ARG_DEFAULTS: dict[str, dict[str, int]] = {
     "recall": {"limit": 6},
     "catch_up": {"limit": 50, "max_chars": 24000},
-    "project_structure": {"limit": 15},
     "project_lookup": {"limit": 50},
     "project_impact": {"limit": 30, "depth": 2},
     "project_notes": {"limit": 5},

@@ -34,8 +34,10 @@ CREATE TABLE unresolved (
 """
 
 
-def _create_db(path: str) -> None:
-    connection = sqlite3.connect(path)
+def _create_db(project_root: str) -> str:
+    db_path = os.path.join(project_root, ".utility", "graph.sqlite")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    connection = sqlite3.connect(db_path)
     try:
         connection.executescript(SCHEMA)
         connection.execute(
@@ -123,14 +125,14 @@ def _create_db(path: str) -> None:
         connection.commit()
     finally:
         connection.close()
+    return db_path
 
 
 class LookupTest(unittest.TestCase):
     def test_returns_definition_and_caller_context(self):
         with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, "graph.sqlite")
-            _create_db(db)
-            result = graph_tools.tool_project_lookup(db, "ProjectScanner")
+            _create_db(root)
+            result = graph_tools.tool_project_lookup(root, "ProjectScanner")
         self.assertEqual(result["status"], "ok")
         hit = result["results"][0]
         self.assertEqual(hit["name"], "ProjectScanner")
@@ -145,37 +147,41 @@ class LookupTest(unittest.TestCase):
 
     def test_falls_back_to_file_lookup(self):
         with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, "graph.sqlite")
-            _create_db(db)
-            result = graph_tools.tool_project_lookup(db, "ProjectScanner.swift")
+            _create_db(root)
+            result = graph_tools.tool_project_lookup(root, "ProjectScanner.swift")
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["results"][0]["kind"], "file")
 
     def test_empty_query_returns_overview(self):
         with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, "graph.sqlite")
-            _create_db(db)
-            result = graph_tools.tool_project_lookup(db, "")
+            _create_db(root)
+            result = graph_tools.tool_project_lookup(root, "")
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["overview"]["files"], 2)
         self.assertEqual(result["overview"]["builtAt"], "2026-11-01T00:00:00Z")
         self.assertIn("call", result["overview"]["edgeKinds"])
 
     def test_missing_database_is_an_error(self):
-        result = graph_tools.tool_project_lookup("/nonexistent/graph.sqlite", "x")
+        with tempfile.TemporaryDirectory() as root:
+            result = graph_tools.tool_project_lookup(root, "x")
         self.assertEqual(result["status"], "error")
+        self.assertIn("graph database not found", result["error"])
+
+    def test_missing_project_directory_is_an_error(self):
+        result = graph_tools.tool_project_lookup("/nonexistent/project", "x")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("project directory not found", result["error"])
 
 
 class ImpactTest(unittest.TestCase):
-    def _db(self, root: str) -> str:
-        db = os.path.join(root, "graph.sqlite")
-        _create_db(db)
-        return db
+    def _project(self, root: str) -> str:
+        _create_db(root)
+        return root
 
     def test_callers_group_by_resolver_and_exclude_stale(self):
         with tempfile.TemporaryDirectory() as root:
-            db = self._db(root)
-            result = graph_tools.tool_project_impact(db, "ProjectScanner")
+            project = self._project(root)
+            result = graph_tools.tool_project_impact(project, "ProjectScanner")
         self.assertEqual(result["status"], "ok")
         self.assertEqual(
             result["target"],
@@ -199,9 +205,9 @@ class ImpactTest(unittest.TestCase):
 
     def test_include_stale_keeps_stale_items(self):
         with tempfile.TemporaryDirectory() as root:
-            db = self._db(root)
+            project = self._project(root)
             result = graph_tools.tool_project_impact(
-                db, "ProjectScanner", include_stale=True
+                project, "ProjectScanner", include_stale=True
             )
         statuses = [
             item["status"] for group in result["groups"] for item in group["items"]
@@ -210,9 +216,9 @@ class ImpactTest(unittest.TestCase):
 
     def test_callees_and_depth(self):
         with tempfile.TemporaryDirectory() as root:
-            db = self._db(root)
+            project = self._project(root)
             result = graph_tools.tool_project_impact(
-                db, "ProjectScanner", direction="callees", depth=1
+                project, "ProjectScanner", direction="callees", depth=1
             )
         names = [
             item["symbol"] for group in result["groups"] for item in group["items"]
@@ -221,16 +227,17 @@ class ImpactTest(unittest.TestCase):
 
     def test_reports_coverage_and_build_time(self):
         with tempfile.TemporaryDirectory() as root:
-            db = self._db(root)
-            result = graph_tools.tool_project_impact(db, "ProjectScanner")
+            project = self._project(root)
+            result = graph_tools.tool_project_impact(project, "ProjectScanner")
         self.assertIn("call", result["coverage"]["edges"])
         self.assertIn("multi_hop_re_export", result["coverage"]["not_covered"])
         self.assertEqual(result["builtAt"], "2026-11-01T00:00:00Z")
 
     def test_file_import_edge_is_traversed(self):
         with tempfile.TemporaryDirectory() as root:
-            db = self._db(root)
-            with sqlite3.connect(db) as connection:
+            project = self._project(root)
+            db_path = os.path.join(project, ".utility", "graph.sqlite")
+            with sqlite3.connect(db_path) as connection:
                 connection.execute(
                     "INSERT INTO edges (from_key,to_key,kind,path,start_line,"
                     "end_line,confidence,resolver,status) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -246,7 +253,7 @@ class ImpactTest(unittest.TestCase):
                         "ok",
                     ),
                 )
-            result = graph_tools.tool_project_impact(db, "ProjectScanner", depth=1)
+            result = graph_tools.tool_project_impact(project, "ProjectScanner", depth=1)
         imports = [
             item
             for group in result["groups"]
@@ -257,8 +264,8 @@ class ImpactTest(unittest.TestCase):
 
     def test_unknown_target_is_no_match(self):
         with tempfile.TemporaryDirectory() as root:
-            db = self._db(root)
-            result = graph_tools.tool_project_impact(db, "NoSuchSymbol")
+            project = self._project(root)
+            result = graph_tools.tool_project_impact(project, "NoSuchSymbol")
         self.assertEqual(result["status"], "no_match")
         self.assertEqual(result["groups"], [])
 

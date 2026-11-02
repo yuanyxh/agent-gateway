@@ -62,10 +62,6 @@ from agent_gateway.services.mcp.server_tool_schema import (
     DEFAULT_WEBSEARCH_MAX_CHARS,
     build_tools,
 )
-from agent_gateway.services.mcp.server_search import (
-    DEFAULT_PROJECT_STRUCTURE_LIMIT,
-    tool_project_structure,
-)
 from agent_gateway.services.mcp.graph_tools import (
     IMPACT_DEFAULT_DEPTH,
     IMPACT_DEFAULT_LIMIT,
@@ -274,7 +270,7 @@ async def _handle_memory_graph(arguments: dict) -> list[TextContent]:
 async def _handle_project_lookup(arguments: dict) -> list[TextContent]:
     result = await asyncio.to_thread(
         tool_project_lookup,
-        arguments["dbPath"],
+        arguments["path"],
         arguments.get("query", ""),
         arguments.get("kind", ""),
         arguments.get("file_path", ""),
@@ -287,7 +283,7 @@ async def _handle_project_lookup(arguments: dict) -> list[TextContent]:
 async def _handle_project_impact(arguments: dict) -> list[TextContent]:
     result = await asyncio.to_thread(
         tool_project_impact,
-        arguments["dbPath"],
+        arguments["path"],
         arguments["target"],
         arguments.get("direction", "callers"),
         int_arg(arguments, "depth", IMPACT_DEFAULT_DEPTH),
@@ -295,24 +291,6 @@ async def _handle_project_impact(arguments: dict) -> list[TextContent]:
         arguments.get("includeStale", False) is True,
     )
     return [TextContent(type="text", text=dumps(result))]
-
-
-@_register("project_structure")
-async def _handle_project_structure(arguments: dict) -> list[TextContent]:
-    try:
-        result = await asyncio.to_thread(
-            tool_project_structure,
-            arguments["dbPath"],
-            arguments.get("path", ""),
-            int_arg(arguments, "limit", DEFAULT_PROJECT_STRUCTURE_LIMIT),
-        )
-        schedule_prewarm_for_db(arguments["dbPath"])
-        return [TextContent(type="text", text=dumps(result))]
-    except Exception:
-        # Re-raise to handle_call_tool: returning {"error": ...} here makes the SDK treat
-        # it as success, so a real failure is read by the client as "found it, just no
-        # results". Logging is done uniformly by the fallback layer.
-        raise
 
 
 @_register("project_notes")
@@ -733,18 +711,6 @@ async def serve():
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
-    async def api_project_structure(request):
-        body = await request.json()
-        try:
-            result = tool_project_structure(
-                body.get("dbPath", ""),
-                body.get("path", ""),
-                int_arg(body, "limit", DEFAULT_PROJECT_STRUCTURE_LIMIT),
-            )
-            return JSONResponse(result)
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=500)
-
     async def api_project_notes_prewarm(request):
         body = await request.json()
         scheduled = schedule_prewarm_for_db(body.get("dbPath", ""))
@@ -919,11 +885,6 @@ async def serve():
             Route(
                 "/api/memories/status",
                 endpoint=api_memories_status,
-                methods=["POST"],
-            ),
-            Route(
-                "/api/project/structure",
-                endpoint=api_project_structure,
                 methods=["POST"],
             ),
             Route(

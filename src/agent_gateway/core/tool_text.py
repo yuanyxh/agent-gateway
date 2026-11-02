@@ -74,11 +74,6 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     ),
     "param.bit": "Bit index; 0 = summarized, 1 = retired",
     "param.bit_value": "1 = set, 0 = reset",
-    "param.db_path": "Required. Absolute path to .utility/deps.sqlite",
-    "param.graph_db_path": (
-        "Required. Absolute path to .utility/graph.sqlite; "
-        "the agent shell exposes it as $UTILITY_GRAPH_DB"
-    ),
     "param.graph_query": (
         "Optional. Symbol name or file path to locate; omit to return a graph overview"
     ),
@@ -94,7 +89,6 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     ),
     "param.file_path": "Optional. Restrict to a file path (fuzzy match)",
     "param.symbol_kind": "Optional. Restrict to a symbol kind (class/fun/val/...)",
-    "param.subpath": "Optional subpath; returns its next level",
     "param.notes_keyword": "Search keyword; natural language is supported",
     "param.project_dir": "Absolute path to the project directory",
     "param.parent_name": "Registered tool name, e.g. check/write/think",

@@ -178,44 +178,5 @@ class VectorOnlySearchTest(unittest.TestCase):
         self.assertEqual(result["rejected"], 1)
 
 
-class ProjectStructureStatusTest(unittest.TestCase):
-    def test_root_and_subpath_status(self):
-        with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, ".utility", "deps.sqlite")
-            _create_db(db)
-            root_result = project_tools.tool_project_structure(db)
-            sub_result = project_tools.tool_project_structure(db, "src/pkg")
-        self.assertEqual(root_result["status"], "ok")
-        self.assertEqual(sub_result["status"], "ok")
-        self.assertEqual(sub_result["files"][0]["path"], "src/pkg/mod.py")
-
-    def test_missing_subpath_is_not_empty_success(self):
-        with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, ".utility", "deps.sqlite")
-            _create_db(db)
-            result = project_tools.tool_project_structure(db, "missing")
-        self.assertEqual(result["status"], "path_not_found")
-
-    def test_existing_empty_directory_is_empty_not_missing(self):
-        with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, ".utility", "deps.sqlite")
-            _create_db(db)
-            conn = sqlite3.connect(db)
-            with conn:
-                conn.execute(
-                    "INSERT INTO directories VALUES ('empty', 'empty', '', 0, 0)"
-                )
-            conn.close()
-            result = project_tools.tool_project_structure(db, "empty")
-        self.assertEqual(result["status"], "empty")
-
-    def test_unscanned_database_is_explicit(self):
-        with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, ".utility", "deps.sqlite")
-            _create_db(db, scanned=False)
-            result = project_tools.tool_project_structure(db)
-        self.assertEqual(result["status"], "not_scanned")
-
-
 if __name__ == "__main__":
     unittest.main()

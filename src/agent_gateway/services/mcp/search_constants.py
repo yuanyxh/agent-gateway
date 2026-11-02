@@ -8,7 +8,6 @@ import threading
 import numpy as np
 
 from agent_gateway.core.log_utils import setup_logging
-from agent_gateway.core.tool_defaults import arg_default
 # ---------------------------------------------------------------------------
 # Configuration (same as pre-split server.py; NOTE_*/PROJECT_MARKER_* are server-specific)
 # ---------------------------------------------------------------------------
@@ -44,7 +43,6 @@ NOTE_MAX_RESULTS = 20
 NOTE_PREVIEW_LEN = 300
 #: Legacy search path (retrieval arm and its tests); the MCP tool was removed.
 DEFAULT_PROJECT_SEARCH_LIMIT = 15
-DEFAULT_PROJECT_STRUCTURE_LIMIT = arg_default("project_structure", "limit")
 PROJECT_MARKER_FILES = frozenset(
     {
         # JS/TS

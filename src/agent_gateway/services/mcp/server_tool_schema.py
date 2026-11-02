@@ -14,7 +14,6 @@ from agent_gateway.services.mcp.graph_tools import (
     IMPACT_DEFAULT_LIMIT,
     LOOKUP_DEFAULT_LIMIT,
 )
-from agent_gateway.services.mcp.server_search import DEFAULT_PROJECT_STRUCTURE_LIMIT
 from agent_gateway.services.mcp.server_skills import scan_skills
 from agent_gateway.services.summarize.text import DEFAULT_MAX_TOKENS
 from agent_gateway.core.tool_defaults import arg_default
@@ -55,7 +54,6 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "forget": "Trigger: user asks to delete a memory, or a memory is wrong/outdated. Deletes it permanently.",
     "project_lookup": "Locate a symbol or file and return its definition with one-hop caller context. Prefer over grep for definition lookup. Omit query for a graph overview (files, symbols, edges, languages).",
     "project_impact": "Find callers or callees of a symbol with multi-hop traversal. Prefer over grep to answer what a change affects.",
-    "project_structure": "Prefer over ls/find traversal to understand the project layout.",
     "project_notes": "Trigger: user asks to find a project's README, design doc, plan, or TODO without knowing the file name. Searches local project Markdown by meaning, not just exact keywords.",
     "tool_resource": "Load a file under references or a script under scripts when instructed.",
     "set_memory_processed": "Set or reset the processed bit of memories. Idempotent.",
@@ -376,9 +374,9 @@ def build_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "dbPath": {
+                    "path": {
                         "type": "string",
-                        "description": param_text("param.graph_db_path"),
+                        "description": param_text("param.project_dir"),
                     },
                     "query": {
                         "type": "string",
@@ -398,7 +396,7 @@ def build_tools() -> list[Tool]:
                         "description": param_text("param.max_results"),
                     },
                 },
-                "required": ["dbPath"],
+                "required": ["path"],
             },
         ),
         Tool(
@@ -407,9 +405,9 @@ def build_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "dbPath": {
+                    "path": {
                         "type": "string",
-                        "description": param_text("param.graph_db_path"),
+                        "description": param_text("param.project_dir"),
                     },
                     "target": {
                         "type": "string",
@@ -437,30 +435,7 @@ def build_tools() -> list[Tool]:
                         "description": param_text("param.graph_include_stale"),
                     },
                 },
-                "required": ["dbPath", "target"],
-            },
-        ),
-        Tool(
-            name="project_structure",
-            description=TOOL_DESCRIPTIONS["project_structure"],
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "dbPath": {
-                        "type": "string",
-                        "description": param_text("param.db_path"),
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": param_text("param.subpath"),
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": DEFAULT_PROJECT_STRUCTURE_LIMIT,
-                        "description": param_text("param.max_results"),
-                    },
-                },
-                "required": ["dbPath"],
+                "required": ["path", "target"],
             },
         ),
         Tool(
