@@ -204,19 +204,33 @@ def get_text(
     *,
     profile: str = "page",
     headers: dict | None = None,
-    timeout: int = TIMEOUT,
+    timeout: float = TIMEOUT,
     retries: int = 2,
     rate_key: str | None = None,
     interval: float = 0.0,
     detect_challenge: bool = True,
+    deadline: float | None = None,
 ) -> tuple[str, str, int]:
     """Fetch a URL as text, applying rate limiting and retry policy.
+
+    `deadline` (a `time.monotonic()` value) caps every attempt and the backoff
+    before the next one; past it the request fails instead of consuming more of
+    the caller's budget.
 
     Returns ``(final_url, text, status)``. Raises :class:`Blocked` when the
     response is a challenge page, and the original exception after retries.
     """
     last: Exception | None = None
+
+    def _can_wait(seconds: float) -> bool:
+        return deadline is None or time.monotonic() + seconds < deadline
+
     for attempt in range(retries + 1):
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("request deadline exceeded")
+            timeout = min(timeout, remaining)
         if rate_key:
             respect_rate(rate_key, interval)
         try:
@@ -229,7 +243,7 @@ def get_text(
             )
         except Blocked as exc:
             last = exc
-            if attempt < retries:
+            if attempt < retries and _can_wait(2.0 * (attempt + 1)):
                 time.sleep(2.0 * (attempt + 1))
                 continue
             raise
@@ -238,13 +252,14 @@ def get_text(
             if (
                 exc.code in (403, 408, 425, 429, 500, 502, 503, 504)
                 and attempt < retries
+                and _can_wait(_retry_delay(exc, attempt))
             ):
                 time.sleep(_retry_delay(exc, attempt))
                 continue
             raise
         except Exception as exc:
             last = exc
-            if attempt < retries:
+            if attempt < retries and _can_wait(1.0 * (attempt + 1)):
                 time.sleep(1.0 * (attempt + 1))
                 continue
             raise

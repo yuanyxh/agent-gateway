@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from agent_gateway.services.fetch import http
 from agent_gateway.services.search import engine_config
@@ -31,6 +31,7 @@ WIKI_MIN_CHARS = 600
 #: (for example Google through a browser helper) is injected by the caller; this
 #: module never discovers host binaries on its own.
 _ENGINES, _PROVIDERS, _ORDER = engine_config.load()
+_RUNTIME = engine_config.load_runtime()
 _ENDPOINTS = {name: spec.endpoint for name, spec in _ENGINES.items()}
 _HOME = {name: spec.home for name, spec in _ENGINES.items()}
 _MIN_INTERVAL = {name: spec.min_interval for name, spec in _ENGINES.items()}
@@ -45,7 +46,7 @@ _MIN_SCORE = 0.25
 #: CJK queries match on bigrams, so coverage runs lower than for ASCII words.
 _CJK_MIN_SCORE = 0.15
 ENGINE_COOLDOWN = 600.0
-SEARCH_BUDGET = 25.0
+SEARCH_BUDGET = _RUNTIME.timeout_seconds
 SEARCH_TIMEOUT = 12
 
 _CJK_RE = re.compile(r"[㐀-鿿]")
@@ -108,7 +109,13 @@ def _headers(engine: str) -> dict:
     return http.engine_headers(engine, _HOME.get(engine, ""))
 
 
-def _get(url: str, engine: str, timeout: int = TIMEOUT, retries: int = 2):
+def _get(
+    url: str,
+    engine: str,
+    timeout: int = TIMEOUT,
+    retries: int = 2,
+    deadline: float | None = None,
+):
     return http.get_text(
         url,
         profile=engine,
@@ -117,33 +124,40 @@ def _get(url: str, engine: str, timeout: int = TIMEOUT, retries: int = 2):
         retries=retries,
         rate_key=engine,
         interval=_MIN_INTERVAL.get(engine, 1.5),
+        deadline=deadline,
     )
 
 
-def _warm(engine: str) -> None:
+def _warm(engine: str, deadline: float | None = None) -> None:
     if engine not in _WARMUP:
         return
     with _warm_lock:
         if engine in _warmed:
             return
+    remaining = 10.0 if deadline is None else deadline - time.monotonic()
+    if remaining <= 0:
+        return
     try:
         http.get_text(
             _HOME[engine],
             profile=engine,
             headers=_headers(engine),
-            timeout=10,
+            timeout=min(10.0, remaining),
             retries=0,
             rate_key=engine,
             interval=_MIN_INTERVAL.get(engine, 1.5),
+            deadline=deadline,
         )
-        time.sleep(0.4)
+        time.sleep(min(0.4, max(0.0, remaining - 0.1)))
         with _warm_lock:
             _warmed.add(engine)
     except Exception:
         pass
 
 
-def _run_provider(engine: str, query: str, limit: int) -> list:
+def _run_provider(
+    engine: str, query: str, limit: int, timeout: float | None = None
+) -> list:
     """Run an injected provider command and parse its last JSON line."""
     spec = _PROVIDERS.get(engine)
     if spec is None:
@@ -152,7 +166,12 @@ def _run_provider(engine: str, query: str, limit: int) -> list:
         part.replace("{q}", query).replace("{limit}", str(limit))
         for part in spec.command
     ]
-    proc = subprocess.run(command, capture_output=True, text=True, timeout=spec.timeout)
+    proc = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=spec.timeout if timeout is None else timeout,
+    )
     if proc.returncode != 0:
         lines = (proc.stderr or proc.stdout or "").strip().splitlines()
         raise RuntimeError(
@@ -652,18 +671,24 @@ def _wiki_lookup(term: str, langs, min_chars: int):
 # ── jump resolution ─────────────────────────────────────────────────────────
 
 
-def _marginalia_retry(raw: str) -> str:
+def _marginalia_retry(raw: str, deadline: float | None = None) -> str:
     """Marginalia answers bots with a wait page; follow its manual link once."""
     if "barraged by queries" not in raw.lower():
         return raw
     match = re.search(r'href="(/search\?[^"]+sst=[^"]+)"', raw)
     if not match:
         return raw
+    remaining = 2.0 if deadline is None else deadline - time.monotonic()
+    if remaining <= 2.0:
+        return raw
     time.sleep(2.0)
     try:
         _, retried, _ = _get(
             "https://old-search.marginalia.nu" + htmlmod.unescape(match.group(1)),
             "marginalia",
+            timeout=max(1, int(min(SEARCH_TIMEOUT, remaining - 2.0))),
+            retries=0,
+            deadline=deadline,
         )
         return retried
     except Exception:
@@ -697,7 +722,7 @@ def _resolve_baidu_jump(url: str) -> str:
     return url
 
 
-def _resolve_jumps(results: list) -> list:
+def _resolve_jumps(results: list, deadline: float | None = None) -> list:
     targets = [
         r
         for r in results
@@ -707,9 +732,22 @@ def _resolve_jumps(results: list) -> list:
     ]
     if not targets:
         return results
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        for r, real in zip(targets, pool.map(lambda r: _resolve_one_jump(r), targets)):
-            r["url"] = real
+    remaining = None if deadline is None else deadline - time.monotonic()
+    if remaining is not None and remaining <= 1.0:
+        return results
+    pool = ThreadPoolExecutor(max_workers=3)
+    futures = {pool.submit(_resolve_one_jump, r): r for r in targets}
+    try:
+        for future in as_completed(futures, timeout=remaining):
+            r = futures[future]
+            try:
+                r["url"] = future.result()
+            except Exception:
+                pass
+    except TimeoutError:
+        pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     return results
 
 
@@ -830,6 +868,104 @@ def _order_for(query: str):
     return CJK_ORDER if _CJK_RE.search(query) else LATIN_ORDER
 
 
+def _run_engine(
+    engine: str, query: str, limit: int, deadline: float
+) -> tuple[list, dict]:
+    """Run one engine under the shared hard deadline; returns `(results, status)`."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return [], {"status": "skipped_budget"}
+
+    if engine in _PROVIDERS:
+        spec = _PROVIDERS[engine]
+        try:
+            parsed = _run_provider(
+                engine, query, limit, timeout=min(float(spec.timeout), remaining)
+            )
+        except subprocess.TimeoutExpired:
+            _record_failure(engine)
+            return [], {"status": "failed", "error": "timeout"}
+        except Exception as exc:
+            _record_failure(engine)
+            return [], {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        _record_success(engine)
+        for r in parsed:
+            r.setdefault("engine", engine)
+        return parsed, {"status": "ok", "parsed": len(parsed)}
+
+    if engine not in _PARSERS:
+        return [], {"status": "unknown_engine"}
+
+    _warm(engine, deadline)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return [], {"status": "skipped_budget"}
+    url = _ENDPOINTS[engine].format(q=urllib.parse.quote(query))
+    try:
+        _, raw, _ = _get(
+            url,
+            engine,
+            timeout=int(max(1, min(SEARCH_TIMEOUT, remaining))),
+            retries=1,
+            deadline=deadline,
+        )
+    except Exception as exc:
+        _record_failure(engine)
+        return [], {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+    _record_success(engine)
+    if engine == "marginalia":
+        raw = _marginalia_retry(raw, deadline)
+    try:
+        parsed = _PARSERS[engine](raw)
+    except Exception as exc:
+        return [], {"status": "parse_failed", "error": f"{type(exc).__name__}: {exc}"}
+    for r in parsed:
+        r.setdefault("engine", engine)
+    return parsed, {"status": "ok", "parsed": len(parsed)}
+
+
+def _cascade_parallel(
+    query: str, runnable: list, status: dict, deadline: float
+) -> tuple[list, int, str | None]:
+    """Fan out every runnable engine; unfinished ones are dropped at the deadline."""
+    out: list = []
+    stopped_at = None
+    pool = ThreadPoolExecutor(max_workers=_RUNTIME.concurrency)
+    futures = {
+        pool.submit(_run_engine, engine, query, _CANDIDATE_TARGET, deadline): engine
+        for engine in runnable
+    }
+    remaining = max(0.0, deadline - time.monotonic())
+    try:
+        for future in as_completed(futures, timeout=remaining):
+            engine = futures[future]
+            try:
+                parsed, info = future.result()
+            except Exception as exc:
+                parsed, info = (
+                    [],
+                    {
+                        "status": "failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+            status[engine] = info
+            out.extend(r for r in parsed if not _is_engine_page(r["url"]))
+            if len(out) >= _CANDIDATE_TARGET:
+                stopped_at = engine
+                break
+    except TimeoutError:
+        pass
+    finally:
+        # cancel 只移除未启动任务；已运行线程仍跑到内部 deadline，这里只延迟回收。
+        for future, engine in futures.items():
+            if engine not in status:
+                status[engine] = {"status": "skipped_budget"}
+                future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
+    return out, len(runnable), stopped_at
+
+
 def search_report(query: str, engines=None, min_results: int = 5):
     """Cascade engines and return `(results, report)`; the report explains failures."""
     if isinstance(engines, str):
@@ -841,83 +977,32 @@ def search_report(query: str, engines=None, min_results: int = 5):
     attempted = 0
     stopped_at = None
     deadline = time.monotonic() + SEARCH_BUDGET
+    runnable = []
     for engine in order:
-        if engine in _PROVIDERS:
-            if not _engine_ok(engine):
-                status[engine] = {"status": "cooldown"}
-                continue
+        if not _engine_ok(engine):
+            status[engine] = {"status": "cooldown"}
+        elif engine not in _PARSERS and engine not in _PROVIDERS:
+            status[engine] = {"status": "unknown_engine"}
+        else:
+            runnable.append(engine)
+
+    if _RUNTIME.parallel:
+        out, attempted, stopped_at = _cascade_parallel(
+            query, runnable, status, deadline
+        )
+    else:
+        for engine in runnable:
             if time.monotonic() >= deadline:
                 status[engine] = {"status": "skipped_budget"}
                 continue
             attempted += 1
-            try:
-                parsed = _run_provider(engine, query, _CANDIDATE_TARGET)
-            except Exception as exc:
-                _record_failure(engine)
-                status[engine] = {
-                    "status": "failed",
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-                continue
-            _record_success(engine)
-            status[engine] = {"status": "ok", "parsed": len(parsed)}
-            for r in parsed:
-                r.setdefault("engine", engine)
-            out.extend(parsed)
+            parsed, info = _run_engine(engine, query, _CANDIDATE_TARGET, deadline)
+            status[engine] = info
+            out.extend(r for r in parsed if not _is_engine_page(r["url"]))
             if len(out) >= _CANDIDATE_TARGET:
                 stopped_at = engine
                 break
-            continue
-        if engine not in _PARSERS:
-            status[engine] = {"status": "unknown_engine"}
-            continue
-        if not _engine_ok(engine):
-            status[engine] = {"status": "cooldown"}
-            continue
-        if time.monotonic() >= deadline:
-            status[engine] = {"status": "skipped_budget"}
-            continue
-        attempted += 1
-        _warm(engine)
-        if time.monotonic() >= deadline:
-            status[engine] = {"status": "skipped_budget"}
-            break
-        url = _ENDPOINTS[engine].format(q=urllib.parse.quote(query))
-        remaining = max(2.0, deadline - time.monotonic())
-        try:
-            _, raw, _ = _get(
-                url,
-                engine,
-                timeout=min(SEARCH_TIMEOUT, remaining),
-                retries=1,
-            )
-        except Exception as exc:
-            _record_failure(engine)
-            status[engine] = {
-                "status": "failed",
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            continue
-        _record_success(engine)
-        if engine == "marginalia":
-            raw = _marginalia_retry(raw)
-        try:
-            parsed = _PARSERS[engine](raw)
-        except Exception as exc:
-            parsed = []
-            status[engine] = {
-                "status": "parse_failed",
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-        else:
-            status[engine] = {"status": "ok", "parsed": len(parsed)}
-        for r in parsed:
-            r.setdefault("engine", engine)
-        out.extend(r for r in parsed if not _is_engine_page(r["url"]))
-        if len(out) >= _CANDIDATE_TARGET:
-            stopped_at = engine
-            break
-    ranked = _score_results(_resolve_jumps(_dedup(out)), query)
+    ranked = _score_results(_resolve_jumps(_dedup(out), deadline), query)
     # Jump resolution can land back on an engine's own result page (Sogou does
     # this for some queries), so the filter has to run again after resolution.
     ranked = [r for r in ranked if not is_engine_page(r["url"])]
@@ -926,7 +1011,7 @@ def search_report(query: str, engines=None, min_results: int = 5):
     for engine, info in status.items():
         if info.get("status") == "ok":
             info["kept"] = sum(1 for r in results if r.get("engine") == engine)
-    known = [e for e in order if e in _PARSERS or e == "google"]
+    known = [e for e in order if e in _PARSERS or e in _PROVIDERS]
     all_failed = bool(known) and all(
         status.get(engine, {}).get("status") in ("failed", "cooldown", "parse_failed")
         for engine in known

@@ -12,9 +12,13 @@ Config shape (all keys optional):
         google:
           command: ["/path/to/browser-helper", "websearch", "--query", "{q}", "--limit", "{limit}"]
           timeout: 15
+      runtime:
+        timeoutSeconds: 25   # hard ceiling for the whole cascade
+        parallel: false      # fan out engines concurrently
+        concurrency: 4
 
-Env overrides (highest priority): `GATEWAY_SEARCH_ENGINES`, `GATEWAY_SEARCH_PROVIDERS`
-and `GATEWAY_SEARCH_ORDER`, each holding the JSON object shown above.
+Env overrides (highest priority): `GATEWAY_SEARCH_ENGINES`, `GATEWAY_SEARCH_PROVIDERS`,
+`GATEWAY_SEARCH_ORDER` and `GATEWAY_SEARCH_RUNTIME`, each holding the JSON object shown above.
 """
 
 from __future__ import annotations
@@ -43,6 +47,15 @@ class EngineSpec:
 class ProviderSpec:
     command: tuple[str, ...]
     timeout: int = 15
+
+
+@dataclass(frozen=True)
+class SearchRuntime:
+    """Cascade-wide limits; every engine and provider is subject to the same rules."""
+
+    timeout_seconds: float = 25.0
+    parallel: bool = False
+    concurrency: int = 4
 
 
 DEFAULT_ENGINES: dict[str, EngineSpec] = {
@@ -169,6 +182,30 @@ def _available(
     order: tuple[str, ...], engines: dict, providers: dict
 ) -> tuple[str, ...]:
     return tuple(name for name in order if name in engines or name in providers)
+
+
+def load_runtime() -> SearchRuntime:
+    """Hard cascade timeout plus the optional parallel fan-out settings."""
+    raw = _as_dict(_as_dict(config_loader.value("search", {})).get("runtime"))
+    raw = {**raw, **_json_env("GATEWAY_SEARCH_RUNTIME")}
+
+    def _float(name: str, default: float, low: float) -> float:
+        try:
+            return max(low, float(raw.get(name, default)))
+        except (TypeError, ValueError):
+            return default
+
+    def _int(name: str, default: int, low: int, high: int) -> int:
+        try:
+            return max(low, min(int(raw.get(name, default)), high))
+        except (TypeError, ValueError):
+            return default
+
+    return SearchRuntime(
+        timeout_seconds=_float("timeoutSeconds", 25.0, 1.0),
+        parallel=bool(raw.get("parallel", False)),
+        concurrency=_int("concurrency", 4, 1, 8),
+    )
 
 
 def load() -> tuple[dict[str, EngineSpec], dict[str, ProviderSpec], dict[str, tuple]]:
