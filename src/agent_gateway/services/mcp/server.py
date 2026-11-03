@@ -49,10 +49,10 @@ from starlette.routing import Mount, Route
 
 from agent_gateway.services.mcp.server_embed import (
     EMBEDDER_DIMS,
-    FASTEMBED_CACHE_DIR,
     EMBEDDER_MODEL,
-    _get_shared_embedder,
+    FASTEMBED_CACHE_DIR,
     describe_dim_mismatch,
+    embedder_session,
 )
 from agent_gateway.services.mcp.server_tool_schema import (
     DEFAULT_PROJECT_NOTES_LIMIT,
@@ -630,15 +630,19 @@ async def serve():
 
     async def api_memory_add_knowledge(request):
         body = await request.json()
-        emb = _get_shared_embedder()
-        if not get_qdrant() or emb is None:
+        if not get_qdrant():
             return JSONResponse(
                 {"error": "Cold layer not initialized"}, status_code=500
             )
         content = body["content"]
+        with embedder_session() as emb:
+            if emb is None:
+                return JSONResponse(
+                    {"error": "Cold layer not initialized"}, status_code=500
+                )
+            vec = list(emb.embed(content))[0].tolist()
         source_file = str(body.get("source_file", ""))
         now_iso = datetime.now().isoformat()
-        vec = list(emb.embed(content))[0].tolist()
         # Deterministic id: the same source and body overwrite the same point instead
         # of appending a new uuid4 copy on every sync.
         point_id = memory_store.cold_point_id(source_file, content)

@@ -12,9 +12,12 @@ is unaffected.
 
 from __future__ import annotations
 
+import gc
 import os
 import threading
+import time
 from collections import OrderedDict
+from contextlib import contextmanager
 
 import numpy as np
 from fastembed import TextEmbedding
@@ -121,43 +124,139 @@ def describe_dim_mismatch(existing_dims: int | None, expected_dims: int) -> str 
     )
 
 
+def _int_env(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, "") or default))
+    except ValueError:
+        return default
+
+
+#: Seconds without an active session before the model is released; 0 = keep resident.
+IDLE_UNLOAD_SECONDS = _int_env("EMBEDDER_IDLE_UNLOAD_SECONDS", 0)
+
 _shared_embedder = None
+_embedder_users = 0
+_embedder_last_used = time.monotonic()
+_embedder_lock = threading.RLock()
+_unload_thread: threading.Thread | None = None
 
 
 def _get_shared_embedder():
-    """Single embedder instance, shared by the cold layer and project vector search to
-    avoid reloading the ONNX model.
+    """Load the model on first use.
 
     Optimizations: enable_cpu_mem_arena=False disables ONNX Runtime's CPU arena
     pre-allocation (which mallocs a ~1GB block by default); threads=1 limits the thread
     count; CPUExecutionProvider avoids the extra memory of the CoreML/Azure providers.
+    The lock keeps concurrent callers from loading a second copy.
     """
-    global _shared_embedder
-    if _shared_embedder is None:
-        try:
-            _shared_embedder = TextEmbedding(
-                model_name=EMBEDDER_MODEL,
-                cache_dir=FASTEMBED_CACHE_DIR,
-                threads=1,
-                providers=["CPUExecutionProvider"],
-                enable_cpu_mem_arena=False,
+    global _shared_embedder, _embedder_last_used
+    with _embedder_lock:
+        if _shared_embedder is None:
+            try:
+                _shared_embedder = TextEmbedding(
+                    model_name=EMBEDDER_MODEL,
+                    cache_dir=FASTEMBED_CACHE_DIR,
+                    threads=1,
+                    providers=["CPUExecutionProvider"],
+                    enable_cpu_mem_arena=False,
+                )
+                logger.info(f"Embedder loaded: {EMBEDDER_MODEL}")
+            except Exception as e:
+                logger.warning(f"Shared embedder init failed (retry on next call): {e}")
+        if _shared_embedder is not None:
+            _embedder_last_used = time.monotonic()
+        return _shared_embedder
+
+
+def _ensure_unload_thread():
+    global _unload_thread
+    if IDLE_UNLOAD_SECONDS <= 0:
+        return
+    with _embedder_lock:
+        if _unload_thread is None:
+            _unload_thread = threading.Thread(
+                target=_unload_loop, name="embedder-idle-unload", daemon=True
             )
-        except Exception as e:
-            logger.warning(f"Shared embedder init failed (retry on next call): {e}")
-    return _shared_embedder
+            _unload_thread.start()
+
+
+def _unload_loop():
+    interval = max(5.0, min(60.0, IDLE_UNLOAD_SECONDS / 2))
+    while True:
+        time.sleep(interval)
+        unload_if_idle()
+
+
+def unload_if_idle(now: float | None = None) -> bool:
+    """Release the model when unused for `IDLE_UNLOAD_SECONDS`; True when released."""
+    global _shared_embedder
+    if IDLE_UNLOAD_SECONDS <= 0:
+        return False
+    with _embedder_lock:
+        if _shared_embedder is None or _embedder_users > 0:
+            return False
+        current = time.monotonic() if now is None else now
+        if current - _embedder_last_used < IDLE_UNLOAD_SECONDS:
+            return False
+        released = _shared_embedder
+        _shared_embedder = None
+    del released
+    gc.collect()
+    logger.info(
+        f"Embedder released after {IDLE_UNLOAD_SECONDS}s idle: {EMBEDDER_MODEL}"
+    )
+    return True
+
+
+@contextmanager
+def embedder_session():
+    """Yield the shared embedder for the duration of one call.
+
+    The model is not unloaded while any session is active, so long batch jobs keep
+    their handle; releasing the last session restarts the idle timer.
+    """
+    global _embedder_users
+    _ensure_unload_thread()
+    with _embedder_lock:
+        emb = _get_shared_embedder()
+        if emb is not None:
+            _embedder_users += 1
+    if emb is None:
+        yield None
+        return
+    try:
+        yield emb
+    finally:
+        with _embedder_lock:
+            _embedder_users -= 1
+            _embedder_last_used = time.monotonic()
+
+
+class PooledEmbedder:
+    """mem0-facing handle that borrows the shared model per call instead of holding
+    its own copy."""
+
+    def __init__(self, embedding_size: int):
+        self.embedding_size = embedding_size
+
+    def embed(self, documents, **kwargs):
+        with embedder_session() as emb:
+            if emb is None:
+                raise RuntimeError("embedder unavailable")
+            yield from emb.embed(documents, **kwargs)
 
 
 def embed_texts(texts: list[str]) -> list[np.ndarray]:
     """Embed passages (document side); empty input or no embedder returns []."""
     if not texts:
         return []
-    emb = _get_shared_embedder()
-    if emb is None:
-        return []
-    return [
-        np.asarray(vec, dtype=np.float32)
-        for vec in emb.embed([EMBEDDER_SPEC.encode_doc(text) for text in texts])
-    ]
+    with embedder_session() as emb:
+        if emb is None:
+            return []
+        return [
+            np.asarray(vec, dtype=np.float32)
+            for vec in emb.embed([EMBEDDER_SPEC.encode_doc(text) for text in texts])
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +283,6 @@ def embed_query(text: str) -> np.ndarray | None:
     Returns a float32 ndarray. **Read-only for callers** — the object itself is stored
     in the cache.
     """
-    emb = _get_shared_embedder()
-    if emb is None:
-        return None
-
     if _QUERY_CACHE_SIZE > 0:
         with _query_cache_lock:
             hit = _query_cache.get(text)
@@ -195,9 +290,12 @@ def embed_query(text: str) -> np.ndarray | None:
                 _query_cache.move_to_end(text)
                 return hit
 
-    vec = np.asarray(
-        list(emb.embed([EMBEDDER_SPEC.encode_query(text)]))[0], dtype=np.float32
-    )
+    with embedder_session() as emb:
+        if emb is None:
+            return None
+        vec = np.asarray(
+            list(emb.embed([EMBEDDER_SPEC.encode_query(text)]))[0], dtype=np.float32
+        )
 
     if _QUERY_CACHE_SIZE > 0:
         with _query_cache_lock:

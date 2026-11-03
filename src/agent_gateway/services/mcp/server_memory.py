@@ -72,10 +72,10 @@ from agent_gateway.services.mcp.server_constants import (
 )
 from agent_gateway.services.mcp.server_embed import (
     EMBEDDER_DIMS,
-    EMBEDDER_SPEC,
     EMBEDDER_MODEL,
-    FASTEMBED_CACHE_DIR,
-    _get_shared_embedder,
+    EMBEDDER_SPEC,
+    PooledEmbedder,
+    embedder_session,
 )
 from agent_gateway.services.mcp.server_state import (
     get_hot_memory,
@@ -134,20 +134,14 @@ def _patch_mem0_fastembed():
     try:
         from mem0.embeddings.fastembed import FastEmbedEmbedding
         from mem0.embeddings.base import EmbeddingBase
-        import fastembed
 
         def _optimized_init(self, config=None):
             # Call EmbeddingBase.__init__ directly to set config, skipping the
             # unoptimized TextEmbedding creation in FastEmbedEmbedding's original init
             EmbeddingBase.__init__(self, config)
-            self.config.model = self.config.model or "thenlper/gte-large"
-            self.dense_model = fastembed.TextEmbedding(
-                model_name=self.config.model,
-                cache_dir=FASTEMBED_CACHE_DIR,
-                threads=1,
-                providers=["CPUExecutionProvider"],
-                enable_cpu_mem_arena=False,
-            )
+            self.config.model = self.config.model or EMBEDDER_MODEL
+            # Borrow the shared model so mem0 does not hold a second ~1GB copy.
+            self.dense_model = PooledEmbedder(EMBEDDER_DIMS)
             if not self.config.embedding_dims:
                 self.config.embedding_dims = self.dense_model.embedding_size
 
@@ -971,11 +965,11 @@ def spawn_contradiction_check(coro) -> None:
 async def contradiction_check_cold(content: str, point_id: str) -> None:
     if not get_qdrant():
         return
-    emb = _get_shared_embedder()
-    if emb is None:
-        return
     try:
-        vec = list(emb.embed(content))[0].tolist()
+        with embedder_session() as emb:
+            if emb is None:
+                return
+            vec = list(emb.embed(content))[0].tolist()
         resp = get_qdrant().query_points(
             collection_name=COLD_COLLECTION, query=vec, limit=CONTRADICTION_TOP_K
         )
