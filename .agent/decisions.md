@@ -56,3 +56,5 @@
 | 2026-11-01 | D3 | 摘要按预算折叠：保留最新 `cap-1`，其余合并为一条 `level+1` 摘要（上限 3 层），旧摘要软归档并写 `derived_from`；预算默认 0 即不折叠 | Agent | 摘要无上界增长会持续占用热层；按相似度聚类折叠只会引入新的拟合阈值，预算触发是唯一可解释的条件 | `MEMORY_MAX_SUMMARIES` 置 0 即停用；层级上限由 `SUMMARY_LEVEL_MAX` 控制 |
 | 2026-11-01 | D3 | 取代「`MEMORY_*`/`RANK_SIGNAL_*` 只读 env」一条：开关已接入宿主配置链（`MCPConfig` 字段 + `memoryEnvironment()` 两个注入点 + `_YAML_FALLBACKS`），并导出契约 | Agent | 用户要求同步配置；只读 env 的开关在宿主侧既不可见也无法启用 | 配置项保留默认 0，行为与未接入时一致 |
 | 2026-11-02 | D1 | 公开发布：仓库公开，`.agent/` 与 `CLAUDE.md` 作为开发者文档保留公开；许可证 MIT；`README.md` 为英文权威入口，`README.zh.md` 为中文镜像 | 用户 | 用户明确选择公开开源、保留内部文档与 MIT；双语为发布要求 | 改回私有需撤销远端公开与许可证声明 |
+| 2026-11-03 | D3 | `route_tier` 记录实际 provider 名，`route_reason` 记录 `model_match`/`default_provider`/`legacy_upstream`；不恢复旧 strong/weak 路由 | Agent | 当前仓只有 provider 选择，没有分层路由；旧列全空，按实际路由写入才能回答「这一轮走了哪个上游」 | 恢复留空即可；历史 strong/weak 行保留 |
+| 2026-11-03 | D3 | 基座升级到 agent-vibe 1.4.0：合并规则/技能，补 backlog/upgrades/plans；跳过 ship/deploy/ui；lockfile 暂为 none | Agent | 用户确认升级；画像 `deploy_target: none`、`has_ui: false`；项目按 pyproject extras 安装，无锁定文件 | 按 `.agent/plans/base-upgrade-1.4.0.md` 的清单与 git 历史回退 |

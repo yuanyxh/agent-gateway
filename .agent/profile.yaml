@@ -1,4 +1,4 @@
-seed_version: 1.0.0
+seed_version: 1.4.0
 project:
   name: agent-gateway
   one_liner: 为 Utility 客户端提供 AI 能力层：MCP 记忆、LLM 网关、token 代理与桌面自动化服务
@@ -12,6 +12,7 @@ stack:
   language: python
   framework: none
   package_manager: pip
+  lockfile: none
   runtime: ">=3.12"
 
 ui:
@@ -32,6 +33,7 @@ delivery:
   vcs: git
   repo_host: github
   branch_strategy: trunk
+  trunk_branch: master
   ci: github-actions
   deploy_target: none
   environments:
@@ -55,6 +57,7 @@ verify:
   typecheck: ""
   test: PYTHONPATH=src python -m unittest discover -s tests -t .
   run: agent-gateway --check
+  outdated: "pip list --outdated"
   audit: pip-audit
 
 dev:

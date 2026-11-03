@@ -7,14 +7,14 @@
 ## 开始任何任务前
 
 1. 缺少 `.agent/profile.yaml` 时先加载 `init`，不得直接选技术栈或写代码。
-2. 读一次 `.agent/status.md` 的当前目标与阻塞；不要遍历 `.agent/`。
+2. 读一次 `.agent/status.md` 的当前目标与阻塞；有活动计划时读 `.agent/plans/` 对应文件，未排期事项读 `.agent/backlog.md`；不要遍历 `.agent/`。
 3. 按下方加载策略取用本次任务命中的内容，未命中的不读。
-4. 做技术选型、升级、引入新依赖或新增技能前，读 `.agent/research.md` 的对应结论与来源。
+4. 做技术选型、升级、引入新依赖或新增技能前，读 `.agent/research.md` 的对应结论与来源；依赖升级另读 `.agent/upgrades.md`。
 
 ## 常驻约束
 
 <!-- core:start -->
-1. **单一事实源**：当前目标与进度只写 `.agent/status.md`，决策只写 `.agent/decisions.md`；其他文档引用不复制。
+1. **单一事实源**：目标与进度摘要只写 `.agent/status.md`，执行细节只写当前计划，未排期事项只写 `.agent/backlog.md`，决策只写 `.agent/decisions.md`；其他文档引用不复制。
 2. **事实优先**：代码、测试、构建输出与运行日志高于记忆；结论附命令输出或文件路径。
 3. **授权边界**：提交、推送、发布、删除、产生费用或外发数据前必须取得用户确认。
 4. **决策分级**：目标/范围/预算由用户定；技术选型与实现细节由 agent 决定并记入决策日志；只在不可逆、产生费用、隐私合规、目标冲突时暂停。
@@ -47,6 +47,8 @@
 | `.agent/domains/` | L3 | 涉及能力层关注点 | 按需读取 |
 | `.agent/knowledge/` | L3 | 命中索引主题 | 每次 1~3 篇 |
 | `.agent/decisions.md`、`lessons.md` | L3 | 需要历史依据或复盘 | 按需读取 |
+| `.agent/plans/`、`.agent/backlog.md` | L3 | 多步骤任务或选择下一项工作 | 按需读取 |
+| `.agent/upgrades.md` | L3 | 依赖升级或安全公告 | 按需读取 |
 | `.agent/environment.md` | L3 | 安装、构建失败或换环境 | 按需读取 |
 | `.agent/research.md` | L3 | 技术选型、升级或引入新依赖 | 按需读取 |
 | `.agent/memory/` | L3 | 需要跨会话结论 | 按需读取 |
@@ -63,12 +65,14 @@
 | `hunt` | 报错、崩溃、回归 |
 | `learn` | 沉淀经验、复盘 |
 | `upgrade` | 依赖与运行时升级 |
+| `delegate` | 子 agent、并行工作者或跨会话委派 |
+| `operate` | 运行状态、告警、成本与用户反馈 |
 
-未生成 `ship` / `operate` / `delegate`：当前 `deploy_target: none`，发布与运维流程随 workspace 开工后再生长。
+未生成 `ship`：当前 `deploy_target: none`，发布流程随 workspace 开工后再生长；`deploy` 规则同理跳过，`ui` 规则因 `has_ui: false` 跳过。
 
 ## 工作循环
 
-实现 → 自测 → 审查 → 更新状态。当前阶段无发布与线上运维。
+计划 → 实现 → 自测 → 审查 → 更新状态与待办。当前阶段无发布与线上运维。
 
 ## 提交规范
 
@@ -85,6 +89,7 @@
 | 测试 | `PYTHONPATH=src python -m unittest discover -s tests -t .` |
 | 构建 | `python -m build` |
 | 自检 | `agent-gateway --check` |
+| 版本检测 | `pip list --outdated` |
 | 漏洞扫描 | `pip-audit`（未安装时登记降级） |
 
 本地与 CI 执行同一组命令；CI 见 `.github/workflows/ci.yml`。
@@ -105,4 +110,5 @@
 | 静态检查 | `ruff check src tests scripts` |
 | 测试 | `PYTHONPATH=src python -m unittest discover -s tests -t .` |
 | 运行 | `agent-gateway --check` |
+| 版本检测 | `pip list --outdated` |
 | 契约导出 | `agent-gateway --export-contracts` |

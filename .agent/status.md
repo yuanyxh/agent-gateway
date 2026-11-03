@@ -53,13 +53,18 @@
 - 2026-11-01 跨仓配置链打通：`MEMORY_*` / `RANK_SIGNAL_*` 写入 `_YAML_FALLBACKS`（selfManaged 回退）并导出契约（env.json 58 键）；宿主新增 `MCPConfig` 字段与 `memoryEnvironment()`，两个注入点同时生效
 - 2026-11-02 公开发布改造：`README.md` 重写为完整英文对外文档，新增 `README.zh.md` 中文镜像（章节一一对应）；新增 MIT `LICENSE`；`pyproject.toml` 补 `readme` / `license` / `license-files` / `keywords` / `classifiers` / `urls` 并把 hatchling 提到 `>=1.27`（PEP 639）；profile 改 public / MIT。验证：477 测试通过、ruff 通过、wheel 元数据含 `License-Expression: MIT`、资源已打包
 - 2026-11-02 project_notes 可靠性：查询路径永不嵌入（`NOTE_QUERY_EMBED_BUDGET=0`），缓存锁改按项目、忙时只读打开并调度后台预热；扫描排除 `tests/eval` 与 `.pytest_cache`；嵌入按 8 文件批次提交并逐批记日志；handler 加 20s 硬超时返回 `status=partial`+`timeout`；`_enforce_embedder_identity` 在未设 `EMBEDDER_MODEL` 时拒绝清库。实测 gateway 缓存 3663→603 chunks（清掉 3058 条 eval 脏数据），查询 66–464ms。全量 484 通过（1 例 token_proxy 基线失败）
+- 2026-11-03 审查整改（#6-#14）：`gateway_log` 新增 `upstream` 列，代理的 4xx/5xx 与 502 写入 `error_type`/`error_message`/`upstream`，>60s 另打 `gateway_slow_request`；`api_usage` 写入 `route_tier`（provider）与 `route_reason`；同协议非流式响应开始记用量；`_marginalia_retry` 超时下限 1s 并补回归测试；`_cascade_parallel` 注明超时只延迟回收；`known_item_eval` 改用 `gateway_home()`；修复 tool_output 去重测试的固定日期。全量 502 通过
+- 2026-11-03 基座升级 1.0.0→1.4.0：补 `.agent/backlog.md`、`upgrades.md`、`plans/_template.md`；画像补 `stack.lockfile: none`、`delivery.trunk_branch: master`、`verify.outdated`；规则合并 CTX-04~06、VCS-07 并新增 observability；技能更新 build/review/init/learn/hunt/upgrade，新增 delegate/operate；启动契约与规则索引同步；跳过 ship/deploy/ui（画像不适用）。`verify-instantiation` 0 errors / 1 warning（lockfile）
+- 2026-11-03 部署复验：代理与 MCP 19:59 重启，安装副本 7 个改动模块均与工作区一致；`gateway_log` 已有 `upstream` 列；重启后 8 条 `api_usage` 全部写入路由字段（deepseek/model_match、mimo/default_provider）。重启后尚无 4xx/5xx 样本，502 字段待下一条错误复验
+- 2026-11-03 路由详情打点：`api_usage.route_detail` 记录 `requested=<原 model>`；未命中任何 provider 时额外打 `route_fallback` 警告；新增 2 例测试，全量 503 通过。20:24 已部署，摘要请求确认为 `claude-sonnet-5`
 
 ## 下一步
 
-1. 用户确认后提交并推送公开发布改造
-2. 打包部署记忆体第二轮改进并复验（近邻候选耗时、dry-run 不落盘、归档过滤后的召回）
-3. utility 侧打包与整机回归通过后发版
-4. 归档条目物理迁出热层：未开始，细节与触发条件见 utility 仓 `.claude/plans/memory-system.md` 的「待办」章节
+1. 用户确认后按主题提交工作区改动（公开改造、检索运行时、嵌入器卸载、审查整改分开）
+2. 用户确认后清理 `~/.config/agent-gateway` 残留与安装副本 `path_filter.py`/`router.py`（均已移出引用，待移入废纸篓）
+3. 打包部署记忆体第二轮改进并复验（近邻候选耗时、dry-run 不落盘、归档过滤后的召回）
+4. utility 侧打包与整机回归通过后发版
+5. 归档条目物理迁出热层：未开始，细节与触发条件见 utility 仓 `.claude/plans/memory-system.md` 的「待办」章节
 
 ## 最近验证
 
@@ -97,6 +102,14 @@
 | 2026-10-30 | 基线评测（368 条标注 → 249 条 gold → 244 条 specific） | Recall@5 1.0 / MRR@10 0.887 / nDCG@10 0.878 / precision@5 0.421 / top1 相关率 0.393 / 平均相关 0.88 条 |
 | 2026-11-02 | `ruff format --check` / `ruff check` / `.venv/bin/python -m unittest discover -s tests -t .` | 通过（227 文件 / 0 条 / 477 例） |
 | 2026-11-02 | `.venv/bin/python -m build` | 通过；wheel 元数据 `License-Expression: MIT`，LICENSE、提示词、语言包与 ast-js 已打包 |
+| 2026-11-03 | `ruff format --check` / `ruff check` / `.venv/bin/python -m unittest discover -s tests -t .` | 通过（230 文件 / 0 条 / 502 例） |
+| 2026-11-03 | 新增测试重复 5 轮（embedder_lifecycle + search_runtime） | 5/5 通过 |
+| 2026-11-03 | 线上 `tools/list` 直连 9001 | 28 个工具，无 `project_search`/`project_structure` |
+| 2026-11-03 | `agent-vibe/scripts/verify-instantiation.sh` | 0 errors / 1 warning（`stack.lockfile: none`） |
+| 2026-11-03 | 基座升级后 `ruff format --check` / `ruff check` / unittest | 通过（230 文件 / 0 条 / 502 例） |
+| 2026-11-03 | 部署比对（工作区 vs 安装副本） | 7 个改动模块全部 same；`/health` 正常 |
+| 2026-11-03 | 重启后 `api_usage` 路由字段 | 8/8 有值；deepseek/model_match、mimo/default_provider |
+| 2026-11-03 | 路由详情打点后 `unittest discover` | 通过（503 例） |
 
 ## 已知问题
 
@@ -109,3 +122,10 @@
 - `recall` 的正例 `weak_match` 多为 notes-only；调用方应按 `status` 判断，不应把 notes 当语义记忆命中。
 - 2026-11-01 记忆折叠审查修复（11 项）：`level`/`importance`/`protected` 进 `node_meta` 白名单并在去重分支传播；折叠排除已命中摘要、跳过 protected、按 bucket 分组、cap=1 全折叠、只归档已读到正文的节点；`set_memory_status` 增加 `db_path`；热臂图库回填失败不再丢弃结果；`_touch_hot_access` 移到截断之后并走 to_thread；评测脚本默认走 `GATEWAY_HOME` 且校验样本与连通性；新增不 mock `_write_memory` 的折叠集成测试；全量 387 例通过
 - 2026-11-01 部署验证与两处修正：`memory_protect_importance()` 在配置为 0 时返回 None（原先返回 0 让每条记忆都被判为受保护，周任务矛盾检测静默归零）；`tests/__init__.py` 把 `GATEWAY_CACHE` 指向临时目录，测试不再写进生产的 `~/.cache/utility/server.log`，`test_mcp_environment_defaults` 改为断言 `paths.gateway_cache()` 派生；按 CI 命令 `discover -s tests -t .` 全量 391 例通过
+- 2026-11-03 `cache_write_tokens` 仍恒 0：当前 deepseek/mimo 的 anthropic 端点不返回 `cache_creation_input_tokens`；resolver 已支持该字段，属上游限制而非采集缺失
+- 2026-11-03 live MCP 曾出现 `project_search`/`project_structure`：直连 9001 `tools/list` 已无这两项，来源是客户端旧会话缓存，重启客户端即消失
+- 2026-11-03 `~/.config/agent-gateway` 残留与安装副本 `path_filter.py`/`router.py` 已确认无引用；已移入废纸篓
+- 2026-11-03 基座校验保留 1 条 warning：`stack.lockfile: none`。项目按 pyproject extras 安装，暂无锁定文件；策略见 `.agent/backlog.md` todo-20261103-005
+- 2026-11-03 依赖升级扫描已写入 `.agent/upgrades.md`；本轮未升级任何依赖，批次待用户确认
+- 2026-11-03 路由详情已上线：`<transcript>` 后台摘要请求实际 `requested=claude-sonnet-5`（20:24 后 12/17 条），回退到 `mimo-v2.6-flash`；用户判定这是 Claude 客户端请求，无需处理（todo-20261103-007 dropped）。主循环 deepseek-flash 均为 `model_match`
+- 2026-11-03 重启后尚无 4xx/5xx 请求，`gateway_log` 的 `error_type`/`upstream` 线上样本待补；历史 502 行仍为空属预期

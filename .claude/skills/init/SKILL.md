@@ -29,7 +29,7 @@ description: 当用户提出任何从零开始的项目、产品、游戏、网�
 - 项目骨架与工程化配置可执行。
 - 用户已确认基座。
 - 项目内不包含业务功能代码（最小骨架除外）。
-- `protocols/verify.md` 全部通过。
+- `protocols/zh/verify.md` 全部通过。
 
 ## 步骤
 
@@ -45,7 +45,7 @@ description: 当用户提出任何从零开始的项目、产品、游戏、网�
 
 ### 2. 循环提问
 
-按 `seeds/questions/project-profile.md` 的轮次提问。规则：
+按 `seeds/zh/questions/project-profile.md` 的轮次提问。规则：
 
 - 每轮最多四问，只问缺失字段。
 - 问题按依赖分层：只问前置已定的问题；事实类问题先自行查证，不抛给用户。
@@ -54,13 +54,13 @@ description: 当用户提出任何从零开始的项目、产品、游戏、网�
 - 用户回答“按推荐”时采用默认值。
 - 每轮结束更新字段状态表：已问、已推断、默认、缺失。
 - 必填字段未全有值时必须继续提问，不得因用户回答了技术栈就直接进入生成。
-- 按 `seeds/questions/domain-questions.md` 覆盖该领域的最低必问项；未覆盖不得进入生成。
+- 按 `seeds/zh/questions/domain-questions.md` 覆盖该领域的最低必问项；未覆盖不得进入生成。
 - 按 REQ-01 至 REQ-04 处理回答：示例与目标分开记录，清单之外按问题本身补问，范围确认时列出非目标。
 - 领域定义生成后，把其中的 `questions` 并入提问队列逐条确认。
 
 ### 3. 研究与对齐
 
-技术栈、形态与领域确定后，按 `protocols/research.md` 查证当前最佳实践：
+技术栈、形态与领域确定后，按 `protocols/zh/research.md` 查证当前最佳实践：
 
 - 版本基线、支持窗口、弃用与迁移指南。
 - 官方推荐的项目结构、测试、静态检查、格式化与构建组合。
@@ -92,26 +92,26 @@ description: 当用户提出任何从零开始的项目、产品、游戏、网�
 
 ### 6. 生成基座（不写业务功能）
 
-按 `protocols/bootstrap.md` 与 `protocols/grow.md` 执行。init 只到基座为止，业务功能由后续 `build` 完成。
+按 `protocols/zh/bootstrap.md` 与 `protocols/zh/grow.md` 执行。init 只到基座为止，业务功能由后续 `build` 完成。
 
 先把第 3 步的研究结论写入 `.agent/research.md`，再执行以下步骤。
 
 1. 在目标路径创建目录；目标路径不得是种子仓库。
-2. `.agent/profile.yaml`、`status.md`、`decisions.md`、`lessons.md`、`memory/README.md`。
-3. 执行 `protocols/environment.md` 的环境探测，写入 `.agent/environment.md`。
-4. 项目骨架：优先使用 `packs/` 中匹配的技术包；没有匹配包时按 `seeds/scaffolds/README.md` 的结构要求现场生成，并在报告中标注“未使用技术包”。
-5. 版本控制：按画像初始化仓库，生成忽略规则，覆盖构建产物、依赖、本地配置与验证数据；首次提交需用户授权。
+2. `.agent/profile.yaml`、`status.md`、`backlog.md`、`upgrades.md`、`decisions.md`、`lessons.md`、`memory/README.md`；`.agent/plans/_template.md` 为计划模板，任务计划按需从模板创建。探测 `stack.lockfile`，推导 `verify.outdated` 与 `verify.audit`；把首次扫描写入 `upgrades.md`，不可用时填 `none` 并记录原因。
+3. 执行 `protocols/zh/environment.md` 的环境探测，写入 `.agent/environment.md`。
+4. 项目骨架：优先使用 `packs/zh/` 中匹配的技术包；没有匹配包时按 `seeds/scaffolds/README.md` 的结构要求现场生成，并在报告中标注“未使用技术包”。
+5. 版本控制：探测默认分支并记录为 `delivery.trunk_branch`；按画像初始化仓库，生成忽略规则，覆盖构建产物、依赖、本地配置与验证数据；首次提交需用户授权。
 6. 工程化配置：生成格式化、静态检查、类型检查与本地钩子配置，命令与 `verify.*` 一致。
-7. 能力生长：逐项检查 `seeds/capabilities/`，按 `triggers` 与画像决定生成、跳过或待生长；研究类能力已在第 3 步完成，登记为已生成，不重复执行。上下文未确定的维度不生成，登记原因。知识包按 `seeds/knowledge/INDEX.md` 选取相关主题，写入项目索引。
-8. 领域生长：为每个 `project.domain` 解析定义——`seeds/domains/` 有匹配则复用，否则按 `seeds/domains/_schema.md` 现场生成并写入项目 `.agent/domains/`；逐条覆盖 `core_concerns`，未覆盖项登记原因。
-9. 规则：按 `applies_when` 筛选，排除非 active 与过期条目；按 `protocols/loading.md` 分层：`always` 合并内联进契约（≤ 60 行），`path` 生成带路径范围的规则文件，`skill` 写入 `.agent/rules/` 且由技能正文引用，`read` 在契约标记降级。剥离种子元数据，只保留正文。
+7. 能力生长：逐项检查 `seeds/zh/capabilities/`，按 `triggers` 与画像决定生成、跳过或待生长；研究类能力已在第 3 步完成，登记为已生成，不重复执行。上下文未确定的维度不生成，登记原因。知识包按 `seeds/zh/knowledge/INDEX.md` 选取相关主题，写入项目索引。
+8. 领域生长：为每个 `project.domain` 解析定义——`seeds/zh/domains/` 有匹配则复用，否则按 `seeds/zh/domains/_schema.md` 现场生成并写入项目 `.agent/domains/`；逐条覆盖 `core_concerns`，未覆盖项登记原因。
+9. 规则：按 `applies_when` 筛选，排除非 active 与过期条目；按 `protocols/zh/loading.md` 分层：`always` 合并内联进契约（≤ 60 行），`path` 生成带路径范围的规则文件，`skill` 写入 `.agent/rules/` 且由技能正文引用，`read` 在契约标记降级。剥离种子元数据，只保留正文。
 10. 技能：逐文件写入目标位置，每个 `SKILL.md` 必须有正文，并写明执行前要读取的规则；禁止只建目录。
 11. 启动契约：写入常驻约束、加载策略、技能索引、工作循环与验证命令；只写索引与摘要，不复制规则全文。
 12. 由当前平台的适配器把上述逻辑产物解析为物理路径并落盘。
 
 ### 7. 基座校验门
 
-执行 `protocols/verify.md` 与 `protocols/bootstrap.md` 的校验：
+执行 `protocols/zh/verify.md` 与 `protocols/zh/bootstrap.md` 的校验：
 
 - 画像、领域、环境、记忆、研究、规则、技能、契约全部存在且非空。
 - 研究结论有来源、版本与查询日期，采纳项能映射到生成物。
@@ -126,7 +126,7 @@ description: 当用户提出任何从零开始的项目、产品、游戏、网�
 
 输出基座清单，等待用户确认。确认后输出：
 
-```
+```text
 基座已就绪：<目标路径>
 后续开发请在该目录执行 build。
 ```
@@ -149,4 +149,4 @@ init 到此结束。不得在 init 内继续实现业务功能或游戏逻辑。
 
 ## 加载维护
 
-按 `protocols/loading.md` 分层落盘。契约只写路径、触发与机制，不复制全文。生成后核对常驻预算，以及每个 on-demand 项是否有真实可执行的加载方式。
+按 `protocols/zh/loading.md` 分层落盘。契约只写路径、触发与机制，不复制全文。生成后核对常驻预算，以及每个 on-demand 项是否有真实可执行的加载方式。

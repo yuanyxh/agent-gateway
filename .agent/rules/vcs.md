@@ -47,3 +47,11 @@
 **禁止**：把开发过程中的临时提交直接合入主干。
 
 **验证**：主干历史可按提交粒度理解项目演进。
+
+## VCS-07 任务分支隔离
+
+**规则**：开始需求或缺陷前，运行 `git status --porcelain` 与 `git branch --show-current`。`feature-branch` 策略下，用 `git switch <主干> && git pull --ff-only && git switch -c <type>/<task-slug>` 从最新主干创建短生命周期分支（`type` 取 feat / fix / refactor / docs / chore），该任务的全部改动只在此分支进行；`trunk` 策略下，确认当前在主干并与远端同步后再开始，跨会话或需要隔离的任务使用任务分支。工作区不干净时先停下，确认改动是否属于本任务、需要提交还是暂存，禁止静默携带。合并后删除任务分支。
+
+**禁止**：在主干或无关分支上直接开发；从过期主干开始；把无关的未提交改动混入任务分支。
+
+**验证**：分支名与基点有记录；开始前工作区干净或改动归属已获用户确认；合并前 `git merge-base --is-ancestor origin/<主干> HEAD` 通过。
