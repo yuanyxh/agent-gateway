@@ -57,14 +57,14 @@
 - 2026-11-03 基座升级 1.0.0→1.4.0：补 `.agent/backlog.md`、`upgrades.md`、`plans/_template.md`；画像补 `stack.lockfile: none`、`delivery.trunk_branch: master`、`verify.outdated`；规则合并 CTX-04~06、VCS-07 并新增 observability；技能更新 build/review/init/learn/hunt/upgrade，新增 delegate/operate；启动契约与规则索引同步；跳过 ship/deploy/ui（画像不适用）。`verify-instantiation` 0 errors / 1 warning（lockfile）
 - 2026-11-03 部署复验：代理与 MCP 19:59 重启，安装副本 7 个改动模块均与工作区一致；`gateway_log` 已有 `upstream` 列；重启后 8 条 `api_usage` 全部写入路由字段（deepseek/model_match、mimo/default_provider）。重启后尚无 4xx/5xx 样本，502 字段待下一条错误复验
 - 2026-11-03 路由详情打点：`api_usage.route_detail` 记录 `requested=<原 model>`；未命中任何 provider 时额外打 `route_fallback` 警告；新增 2 例测试，全量 503 通过。20:24 已部署，摘要请求确认为 `claude-sonnet-5`
+- 2026-11-03 按主题提交 8 个 commit（607f80c..d9bef06），工作区干净；未推送
 
 ## 下一步
 
-1. 用户确认后按主题提交工作区改动（公开改造、检索运行时、嵌入器卸载、审查整改分开）
-2. 用户确认后清理 `~/.config/agent-gateway` 残留与安装副本 `path_filter.py`/`router.py`（均已移出引用，待移入废纸篓）
-3. 打包部署记忆体第二轮改进并复验（近邻候选耗时、dry-run 不落盘、归档过滤后的召回）
-4. utility 侧打包与整机回归通过后发版
-5. 归档条目物理迁出热层：未开始，细节与触发条件见 utility 仓 `.claude/plans/memory-system.md` 的「待办」章节
+1. 推送已提交的 8 个 commit（需用户授权）
+2. 打包部署记忆体第二轮改进并复验（近邻候选耗时、dry-run 不落盘、归档过滤后的召回）
+3. utility 侧打包与整机回归通过后发版
+4. 归档条目物理迁出热层：未开始，细节与触发条件见 utility 仓 `.claude/plans/memory-system.md` 的「待办」章节
 
 ## 最近验证
 
