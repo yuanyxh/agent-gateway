@@ -294,10 +294,10 @@ value wins over the built-in default.
 | `GATEWAY_CACHE` | Cache root; defaults to `~/.cache/agent-gateway` |
 | `UTILITY_DATA_DIR` | Legacy alias for the state root |
 | `MCP_PORT`, `MODEL_PROXY_PORT` | Service ports |
-| `QDRANT_PATH`, `FASTEMBED_CACHE_PATH`, `EMBEDDER_MODEL` | Vector storage and embedder |
+| `QDRANT_PATH`, `FASTEMBED_CACHE_PATH`, `EMBEDDER_MODEL`, `EMBEDDER_IDLE_UNLOAD_SECONDS` | Vector storage and embedder (`0` keeps the model resident) |
 | `AI_API_KEY`, `AI_LLM_TIMEOUT`, `SUMMARY_MODEL`, `SUMMARY_API_URL` | Model access |
 | `RETRIEVAL_TRACE`, `RETRIEVAL_TRACE_DAYS` | Retrieval tracing |
-| `GATEWAY_SEARCH_ENGINES`, `GATEWAY_SEARCH_ORDER`, `GATEWAY_SEARCH_PROVIDERS` | Search overrides |
+| `GATEWAY_SEARCH_ENGINES`, `GATEWAY_SEARCH_ORDER`, `GATEWAY_SEARCH_PROVIDERS`, `GATEWAY_SEARCH_RUNTIME` | Search overrides (runtime: hard timeout / parallel) |
 
 Main `config.yaml` sections:
 
