@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -23,6 +24,10 @@ from agent_gateway.services.mcp.search_notes_cache import (
 )
 from agent_gateway.services.mcp.search_notes_query import _query_project_notes
 from agent_gateway.services.mcp.search_notes_io import _chunk_md_text
+
+
+def _no_embedder():
+    return nullcontext(None)
 
 
 class ProjectRootFromDbPathTest(unittest.TestCase):
@@ -61,8 +66,8 @@ class NoteCachePruneTest(unittest.TestCase):
             conn.close()
 
             with mock.patch(
-                "agent_gateway.services.mcp.search_notes_cache._get_shared_embedder",
-                return_value=None,
+                "agent_gateway.services.mcp.search_notes_cache.embedder_session",
+                side_effect=_no_embedder,
             ):
                 conn, _, total = _ensure_note_cache(root)
             paths = {
@@ -222,8 +227,8 @@ class PrewarmFileCapTest(unittest.TestCase):
                     fh.write("# Title\n\n" + ("content sentence. " * 20))
 
             with mock.patch(
-                "agent_gateway.services.mcp.search_notes_cache._get_shared_embedder",
-                return_value=None,
+                "agent_gateway.services.mcp.search_notes_cache.embedder_session",
+                side_effect=_no_embedder,
             ):
                 conn, _, _ = _ensure_note_cache(root, max_files=1)
                 first = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
@@ -256,8 +261,8 @@ class ChineseKeywordQueryTest(unittest.TestCase):
 
             with (
                 mock.patch(
-                    "agent_gateway.services.mcp.search_notes_cache._get_shared_embedder",
-                    return_value=None,
+                    "agent_gateway.services.mcp.search_notes_cache.embedder_session",
+                    side_effect=_no_embedder,
                 ),
                 mock.patch(
                     "agent_gateway.services.mcp.search_notes_query.embed_query",
@@ -323,8 +328,8 @@ class QueryWhileBusyTest(unittest.TestCase):
                 encoding="utf-8",
             )
             with mock.patch(
-                "agent_gateway.services.mcp.search_notes_cache._get_shared_embedder",
-                return_value=None,
+                "agent_gateway.services.mcp.search_notes_cache.embedder_session",
+                side_effect=_no_embedder,
             ):
                 conn, _, _ = _ensure_note_cache(root)
                 conn.close()
