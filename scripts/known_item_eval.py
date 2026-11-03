@@ -21,12 +21,14 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-#: Samples are verbatim memory text, so they live in the data dir, never in the
-#: repo: committing them would publish real names and business details.
-DATA_DIR = Path.home() / ".config" / "agent-gateway"
-ITEMS = DATA_DIR / "known_items.jsonl"
-BASELINE = DATA_DIR / "known_item_baseline.json"
 METRICS = ("hit@1", "hit@3", "hit@5", "hit@10", "mrr")
+
+
+def _data_dir() -> Path:
+    """遵循 GATEWAY_HOME，隔离评测不写默认目录。"""
+    from agent_gateway.core.paths import gateway_home
+
+    return gateway_home()
 
 
 def post(url: str, body: dict, session: str = "") -> tuple[str, str]:
@@ -94,11 +96,14 @@ def score(ranks: list[int | None]) -> dict[str, float]:
 
 
 def main() -> int:
+    data_dir = _data_dir()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://127.0.0.1:9001/mcp")
-    parser.add_argument("--items", type=Path, default=ITEMS)
+    parser.add_argument("--items", type=Path, default=data_dir / "known_items.jsonl")
     parser.add_argument("--limit", type=int, default=10)
-    parser.add_argument("--baseline", type=Path, default=BASELINE)
+    parser.add_argument(
+        "--baseline", type=Path, default=data_dir / "known_item_baseline.json"
+    )
     parser.add_argument("--max-drop", type=float, default=0.05)
     parser.add_argument("--update-baseline", action="store_true")
     parser.add_argument("--min-samples", type=int, default=50)
