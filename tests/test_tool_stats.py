@@ -137,10 +137,10 @@ class ToolOutputDedupeTest(unittest.TestCase):
                 );
                 INSERT INTO tool_output_log
                     (api_usage_id, timestamp, tool_name, tool_call_id)
-                VALUES (1, '2026-10-29T00:00:00+00:00', 'Read', 'call_1');
+                VALUES (1, strftime('%Y-%m-%dT%H:%M:%S+00:00','now'), 'Read', 'call_1');
                 INSERT INTO tool_output_log
                     (api_usage_id, timestamp, tool_name, tool_call_id)
-                VALUES (2, '2026-10-29T00:00:01+00:00', 'Read', 'call_1');
+                VALUES (2, strftime('%Y-%m-%dT%H:%M:%S+00:00','now'), 'Read', 'call_1');
                 """
             )
             conn.close()
