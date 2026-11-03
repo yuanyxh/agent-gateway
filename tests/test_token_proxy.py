@@ -155,6 +155,126 @@ class PassthroughTests(ProxyTestBase):
         self.assertGreaterEqual(await self._wait_for_usage(1), 1)
 
 
+class RoutingRecordTests(ProxyTestBase):
+    provider_format = "openai"
+
+    async def test_provider_and_reason_are_recorded(self) -> None:
+        self.upstream.enqueue_json(
+            {
+                "id": "chatcmpl-route",
+                "model": "test-model",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            }
+        )
+        resp = await self.proxy.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        self.assertEqual(resp.status, 200)
+        self.assertGreaterEqual(await self._wait_for_usage(1), 1)
+        with sqlite3.connect(proxy_usage.DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT route_tier, route_reason, route_detail FROM api_usage "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(row, ("fake", "model_match", "requested=test-model"))
+
+    async def test_unknown_model_records_fallback_detail(self) -> None:
+        self.upstream.enqueue_json(
+            {
+                "id": "chatcmpl-fallback",
+                "model": "test-model",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            }
+        )
+        resp = await self.proxy.post(
+            "/v1/chat/completions",
+            json={
+                "model": "unlisted-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self.upstream.requests[0]["body"]["model"], "test-model")
+        self.assertGreaterEqual(await self._wait_for_usage(1), 1)
+        with sqlite3.connect(proxy_usage.DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT route_tier, route_reason, route_detail FROM api_usage "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(row, ("fake", "default_provider", "requested=unlisted-model"))
+
+
+class UpstreamErrorLogTests(ProxyTestBase):
+    provider_format = "anthropic"
+
+    async def test_upstream_http_error_records_body_message(self) -> None:
+        self.upstream.enqueue_json(
+            {"error": {"message": "context too long"}}, status=400
+        )
+        resp = await self.proxy.post(
+            "/v1/messages",
+            json={
+                "model": "test-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        self.assertEqual(resp.status, 400)
+        with sqlite3.connect(proxy_usage.DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT error_type, error_message, upstream FROM gateway_log "
+                "WHERE path='/v1/messages' AND status_code=400 "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(row[0], "UpstreamHTTP400")
+        self.assertIn("context too long", row[1])
+        self.assertIn("127.0.0.1", row[2])
+
+    async def test_connect_error_records_type_message_and_upstream(self) -> None:
+        proxy_config.PROVIDERS = [
+            {
+                "name": "dead",
+                "url": "http://127.0.0.1:1",
+                "apiFormat": "anthropic",
+                "apiKey": "",
+                "models": ["test-model"],
+            }
+        ]
+        resp = await self.proxy.post(
+            "/v1/messages",
+            json={
+                "model": "test-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        self.assertEqual(resp.status, 502)
+        with sqlite3.connect(proxy_usage.DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT error_type, error_message, upstream FROM gateway_log "
+                "WHERE path='/v1/messages' AND status_code=502 "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertTrue(row[0])
+        self.assertTrue(row[1])
+        self.assertIn("127.0.0.1:1", row[2])
+
+
 class ConversionTests(ProxyTestBase):
     provider_format = "openai"
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 from agent_gateway.llm import client as llm_client
@@ -41,6 +42,7 @@ from typing import TYPE_CHECKING
 
 from agent_gateway.services.proxy.proxy_config import (
     DEFAULT_ANTHROPIC_VERSION,
+    GATEWAY_ERROR_KEY,
     OUTPUT_FILTER_JSON,
     RESPONSE_NOTE_ENABLED,
     SKILL_DEDUP_ENABLED,
@@ -52,6 +54,23 @@ from agent_gateway.services.proxy.proxy_config import (
 
 if TYPE_CHECKING:
     from agent_gateway.services.proxy.proxy_state import _ProxyState
+
+
+def _safe_upstream(url: str) -> str:
+    """去掉 query，避免把凭据写进 gateway_log。"""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def _body_error_message(body: bytes) -> str:
+    try:
+        parsed = json.loads(body.decode("utf-8", errors="replace"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return ""
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    if isinstance(error, dict):
+        return str(error.get("message") or error)
+    return str(error) if error else ""
 
 
 def _apply_rewrites(state: _ProxyState) -> None:
@@ -335,6 +354,14 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
                             async for chunk in upstream_resp.content.iter_any():
                                 last_chunk_at = time.monotonic()
                                 raw_body.extend(chunk)
+                            if upstream_resp.status >= 400:
+                                state.request[GATEWAY_ERROR_KEY] = {
+                                    "error_type": f"UpstreamHTTP{upstream_resp.status}",
+                                    "error_message": _body_error_message(
+                                        bytes(raw_body)
+                                    ),
+                                    "upstream": _safe_upstream(state.upstream),
+                                }
                             try:
                                 resp_json = json.loads(bytes(raw_body))
                                 converted = (
@@ -369,11 +396,8 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
                                     )
                             async for chunk in upstream_resp.content.iter_any():
                                 last_chunk_at = time.monotonic()
-                                # Collect SSE chunks to extract usage; error responses such
-                                # as 400 are non-SSE JSON, also collected to record the
-                                # response body for locating the error (temporary enhancement)
-                                if is_sse or upstream_resp.status >= 400:
-                                    collected_body.extend(chunk)
+                                # 留体用于用量解析与错误定位（含非流式 200）。
+                                collected_body.extend(chunk)
                                 if note_sink is not None:
                                     out = note_sink.feed(chunk)
                                     if out:
@@ -460,6 +484,16 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
 
                     # Extract usage / output preview / tool name
                     sse_bytes = bytes(collected_body) if collected_body else b""
+                    if (
+                        upstream_resp.status >= 400
+                        and GATEWAY_ERROR_KEY not in state.request
+                    ):
+                        state.request[GATEWAY_ERROR_KEY] = {
+                            "error_type": f"UpstreamHTTP{upstream_resp.status}",
+                            "error_message": _body_error_message(sse_bytes)
+                            or stream_error,
+                            "upstream": _safe_upstream(state.upstream),
+                        }
                     if converter is not None:
                         # The converter normalizes usage to input_tokens/output_tokens; the
                         # converted stream is in the client's protocol.
@@ -494,13 +528,21 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
                             }
                         out_format = state.api_format
                     else:
-                        usage_data = (
-                            _extract_usage_from_sse(
+                        if is_sse and sse_bytes:
+                            usage_data = _extract_usage_from_sse(
                                 sse_bytes, api_format=state.api_format
                             )
-                            if is_sse and sse_bytes
-                            else None
-                        )
+                        elif sse_bytes:
+                            # 同协议非流式响应也要记用量，直接从 JSON 体取。
+                            try:
+                                parsed = json.loads(
+                                    sse_bytes.decode("utf-8", errors="replace")
+                                )
+                            except (json.JSONDecodeError, UnicodeDecodeError):
+                                parsed = None
+                            usage_data = parsed if isinstance(parsed, dict) else None
+                        else:
+                            usage_data = None
                         out_format = state.api_format
 
                     if usage_data:
@@ -536,20 +578,7 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
                         # Extract error info (stream-interruption exception first, then the upstream error body)
                         error_message = stream_error
                         if not error_message and upstream_resp.status >= 400:
-                            try:
-                                error_body = json.loads(
-                                    sse_bytes.decode("utf-8", errors="replace")
-                                )
-                                if "error" in error_body:
-                                    error_data = error_body["error"]
-                                    if isinstance(error_data, dict):
-                                        error_message = error_data.get(
-                                            "message", str(error_data)
-                                        )
-                                    else:
-                                        error_message = str(error_data)
-                            except (json.JSONDecodeError, UnicodeDecodeError):
-                                pass
+                            error_message = _body_error_message(sse_bytes)
                         # Tool outputs (the latest round of tool_result) are persisted
                         # together with usage. The two tables belong to different DB files, and
                         # only here can the api_usage auto-increment id be obtained; writing
@@ -572,6 +601,9 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
                                 tool_names_override=tool_names,
                                 api_format=state.api_format,
                                 tool_outputs=tool_outputs,
+                                route_tier=state.route_tier,
+                                route_reason=state.route_reason,
+                                route_detail=state.route_detail,
                             )
                         )
                         _BACKGROUND_TASKS.add(task)
@@ -647,6 +679,11 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
                     }
                 )
             )
+            state.request[GATEWAY_ERROR_KEY] = {
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "upstream": _safe_upstream(state.upstream),
+            }
             return web.json_response(
                 {"error": f"upstream_error: {e}"},
                 status=502,

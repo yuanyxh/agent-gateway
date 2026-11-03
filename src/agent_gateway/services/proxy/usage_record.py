@@ -79,6 +79,9 @@ async def record_usage(
     tool_names_override: list[str] | None = None,
     api_format: str = "anthropic",
     tool_outputs: list[dict] | None = None,
+    route_tier: str = "",
+    route_reason: str = "",
+    route_detail: str = "",
 ):
     """Record the token usage of one API call.
 
@@ -140,6 +143,9 @@ async def record_usage(
         "tool_name": tool_name,
         "tool_names": tool_names_json,
         "parent_id": None,
+        "route_tier": route_tier,
+        "route_reason": route_reason,
+        "route_detail": route_detail,
         "error_message": error_message,
     }
 
@@ -151,8 +157,9 @@ async def record_usage(
                 "input_preview, actual_user_input, input_message_count, has_tool_result, output_preview, "
                 "output_type, stop_reason, response_valid, model, input_tokens, "
                 "output_tokens, cache_read_tokens, cache_write_tokens, "
-                "latency_ms, api_format, request_level, tool_name, tool_names, parent_id, error_message) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "latency_ms, api_format, request_level, tool_name, tool_names, parent_id, "
+                "route_tier, route_reason, route_detail, error_message) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     record["timestamp"],
                     record["request_type"],
@@ -176,6 +183,9 @@ async def record_usage(
                     record["tool_name"],
                     record["tool_names"],
                     record["parent_id"],
+                    record["route_tier"],
+                    record["route_reason"],
+                    record["route_detail"],
                     record["error_message"],
                 ),
             )

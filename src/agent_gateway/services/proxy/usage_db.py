@@ -77,6 +77,7 @@ def init_db():
             status_code INTEGER,
             error_type TEXT,
             error_message TEXT,
+            upstream TEXT,
             latency_ms INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_gateway_log_timestamp ON gateway_log(timestamp);
@@ -127,6 +128,14 @@ def init_db():
     # points cannot be distinguished from the data side.
     if "route_detail" not in columns:
         conn.execute("ALTER TABLE api_usage ADD COLUMN route_detail TEXT")
+        conn.commit()
+
+    # 上游地址：失败时定位是哪个 provider，不把 query 与凭据写进日志。
+    gateway_columns = [
+        row[1] for row in conn.execute("PRAGMA table_info(gateway_log)").fetchall()
+    ]
+    if "upstream" not in gateway_columns:
+        conn.execute("ALTER TABLE gateway_log ADD COLUMN upstream TEXT")
         conn.commit()
 
     # Migration: remove three deprecated fields (session_id/project_path/estimated_cost_usd)
@@ -237,7 +246,14 @@ _gateway_log_write_count = 0
 
 
 def record_gateway_log(
-    method, path, content_length, status_code, error_type, error_message, latency_ms
+    method,
+    path,
+    content_length,
+    status_code,
+    error_type,
+    error_message,
+    latency_ms,
+    upstream=None,
 ):
     """Write the gateway log: non-2xx responses + oversized request bodies. Retained 90 days; expired data is deleted every 200 writes."""
     global _gateway_log_write_count
@@ -247,7 +263,8 @@ def record_gateway_log(
         with dbconn(DB_PATH) as c:
             c.execute(
                 "INSERT INTO gateway_log (timestamp, method, path, content_length, status_code, "
-                "error_type, error_message, latency_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "error_type, error_message, upstream, latency_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     datetime.now(timezone.utc).isoformat(),
                     method,
@@ -256,6 +273,7 @@ def record_gateway_log(
                     status_code,
                     error_type,
                     error_message,
+                    upstream,
                     latency_ms,
                 ),
             )

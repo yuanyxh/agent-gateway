@@ -75,6 +75,9 @@ UPSTREAM_ACCEPT_ENCODING = "gzip, deflate, br, zstd"
 
 logger = setup_logging("token_proxy", json_format=True)
 
+#: 代理在响应阶段写入、由网关日志中间件读取的错误详情。
+GATEWAY_ERROR_KEY = web.RequestKey("gateway_error", dict)
+
 #: Strong-reference pool for background tasks. asyncio's event loop holds only **weak
 #: references** to create_task; under fire-and-forget usage a task may be garbage-collected
 #: before it finishes, manifesting as randomly lost usage records (the official docs

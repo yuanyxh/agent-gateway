@@ -49,6 +49,10 @@ class _ProxyState:
     upstream: str
     #: Transparent entry (`/raw/*`): skip every content rewrite, recording still applies.
     raw: bool
+    #: 实际命中的 provider 与选择原因，写入 api_usage 供追溯路由。
+    route_tier: str
+    route_reason: str
+    route_detail: str
 
 
 async def handle_proxy(request: web.Request) -> web.StreamResponse:
@@ -108,8 +112,28 @@ async def _prepare_request(
                 )
             )
 
-    provider, upstream_model = _resolve_provider(request_body.get("model", ""))
+    requested_model = request_body.get("model", "")
+    provider, upstream_model = _resolve_provider(requested_model)
     request_body["model"] = upstream_model
+    if not PROVIDERS:
+        route_tier = provider.get("name") or "legacy"
+        route_reason = "legacy_upstream"
+    else:
+        route_tier = provider.get("name") or "unknown"
+        matched = any(requested_model in p.get("models", []) for p in PROVIDERS)
+        route_reason = "model_match" if matched else "default_provider"
+        if not matched:
+            logger.warning(
+                json.dumps(
+                    {
+                        "msg": "route_fallback",
+                        "requested": requested_model,
+                        "provider": route_tier,
+                        "upstream_model": upstream_model,
+                    }
+                )
+            )
+    route_detail = f"requested={requested_model or '<empty>'}"
 
     provider_format = api_format_of(provider)
     body_bytes = json.dumps(request_body).encode()
@@ -228,4 +252,7 @@ async def _prepare_request(
         note_parts=note_parts,
         upstream=upstream,
         raw=raw,
+        route_tier=route_tier,
+        route_reason=route_reason,
+        route_detail=route_detail,
     )

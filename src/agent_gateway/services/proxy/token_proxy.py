@@ -16,6 +16,7 @@ from agent_gateway.services.proxy.proxy_usage import (
 
 
 from agent_gateway.services.proxy.proxy_config import (
+    GATEWAY_ERROR_KEY,
     PORT,
     PROVIDERS,
     UPSTREAM_URL,
@@ -36,6 +37,9 @@ from agent_gateway.services.proxy.proxy_state import handle_proxy
 # this entry point only keeps the middleware that catches exceptions and calls it, no longer
 # maintaining the connection boilerplate separately.
 # ---------------------------------------------------------------------------
+
+#: 超过该时长的请求单独打点，供后续决定超时策略。
+SLOW_REQUEST_MS = 60_000
 
 
 @web.middleware
@@ -62,6 +66,12 @@ async def gateway_log_middleware(request, handler):
         raise
     finally:
         latency_ms = int((time.monotonic() - start) * 1000)
+        # handler 返回错误响应时不抛异常，错误细节由代理写入 request。
+        handled = request.get(GATEWAY_ERROR_KEY) or {}
+        upstream = handled.get("upstream") if isinstance(handled, dict) else None
+        if not error_type and isinstance(handled, dict):
+            error_type = handled.get("error_type")
+            error_message = handled.get("error_message")
         record_gateway_log(
             method,
             path,
@@ -70,7 +80,20 @@ async def gateway_log_middleware(request, handler):
             error_type,
             error_message,
             latency_ms,
+            upstream=upstream,
         )
+        if latency_ms >= SLOW_REQUEST_MS:
+            logger.warning(
+                json.dumps(
+                    {
+                        "msg": "gateway_slow_request",
+                        "path": path,
+                        "status": status_code,
+                        "latency_ms": latency_ms,
+                        "upstream": upstream,
+                    }
+                )
+            )
     return resp
 
 
