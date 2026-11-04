@@ -24,9 +24,9 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.28.0",
-    "pathspec>=0.12.0",
-    "PyYAML>=6.0",
-    "tree-sitter>=0.25,<0.26",
+    "pathspec>=1.1",
+    "PyYAML>=6.0.3",
+    "tree-sitter>=0.26,<0.27",
     "tree-sitter-python>=0.25,<0.26",
     # Graph parsers pin their own grammars; none ship in the language pack.
     "tree-sitter-swift>=0.7.4,<0.8",
@@ -39,26 +39,24 @@ dependencies = [
 [project.optional-dependencies]
 # Model proxy only (aiohttp plus upstream br/zstd decompression)
 proxy = [
-    "aiohttp>=3.10.0",
+    "aiohttp>=3.14",
     "Brotli>=1.2",
     "backports.zstd",
 ]
 # Vector memory: the heavy wheels (onnx runtime, qdrant client)
 memory = [
-    "mem0ai>=2.0,<3.0",
-    "fastembed>=0.8.0",
-    "numpy>=1.24.0",
-    "qdrant-client>=1.13.0",
+    "mem0ai>=2.2,<3.0",
+    "fastembed>=0.9",
+    "numpy>=2.5",
+    "qdrant-client>=1.20",
 ]
 # MCP server and the HTTP layer it runs on
-# mcp 2.x replaced the lowlevel decorators; server.py still registers tools
-# with @server.list_tools()/@server.call_tool(), so an unbounded range breaks
-# startup on any fresh install.
+# mcp 2.x removed the lowlevel decorators; server.py now builds an MCPServer.
 server = [
-    "mcp>=1.6.0,<2",
-    "uvicorn>=0.34.0",
-    "starlette>=0.46.0",
-    "anyio>=4.0",
+    "mcp>=2,<3",
+    "uvicorn>=0.54",
+    "starlette>=1.10",
+    "anyio>=4.16",
     "trafilatura>=2.3",
 ]
 

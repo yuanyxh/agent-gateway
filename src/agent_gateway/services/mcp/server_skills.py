@@ -8,9 +8,13 @@ skipped so only the skill itself is registered. Shared by the tool schema and
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 
 from agent_gateway.core.config import notes_dir
+
+logger = logging.getLogger(__name__)
 
 SKILLS_DIR = os.path.join(notes_dir(), "MCP", "Skills")
 
@@ -84,6 +88,42 @@ def scan_skills() -> dict[str, dict]:
     except Exception:
         pass
     return skills
+
+
+def _skill_reader(name: str):
+    """Read the skill body on every call so edits to SKILL.md take effect without a restart."""
+
+    async def _read_skill() -> str:
+        started = time.perf_counter()
+        ok = True
+        try:
+            skill = scan_skills().get(name)
+            if skill is None:
+                ok = False
+                raise ValueError(f"Unknown skill: {name}")
+            return skill["content"]
+        except Exception as e:
+            ok = False
+            logger.error(f"Error in {name}: {e}", exc_info=True)
+            raise
+        finally:
+            logger.info(
+                f"tool_call name={name} ok={ok} "
+                f"elapsed_ms={int((time.perf_counter() - started) * 1000)}"
+            )
+
+    return _read_skill
+
+
+def register_skill_tools(mcp) -> None:
+    """Register each enabled skill as a no-argument tool returning its Markdown."""
+    for name, skill in scan_skills().items():
+        mcp.add_tool(
+            _skill_reader(name),
+            name=name,
+            description=skill["description"],
+            structured_output=False,
+        )
 
 
 def find_skill_dir(name: str) -> str | None:

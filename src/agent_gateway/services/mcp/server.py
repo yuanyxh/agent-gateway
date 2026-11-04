@@ -23,8 +23,8 @@ os.environ["MEM0_TELEMETRY"] = "False"
 
 import time
 import asyncio
+import functools
 import logging
-import anyio
 from datetime import datetime, timedelta
 
 from qdrant_client import QdrantClient
@@ -34,18 +34,13 @@ from qdrant_client.models import (
     Distance,
     PointStruct,
 )
-from mcp.server import Server
-from mcp.server import InitializationOptions
-from mcp.server.models import ServerCapabilities
-from mcp.server.streamable_http import StreamableHTTPServerTransport
+from mcp.server import MCPServer
 from mcp.types import (
-    Tool,
     TextContent,
-    ToolsCapability,
 )
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
-from starlette.routing import Mount, Route
+from starlette.routing import Route
 
 from agent_gateway.services.mcp.server_embed import (
     EMBEDDER_DIMS,
@@ -59,8 +54,8 @@ from agent_gateway.services.mcp.server_tool_schema import (
     DEFAULT_WEBSEARCH_FETCH_TOP,
     DEFAULT_WEBSEARCH_LIMIT,
     DEFAULT_WEBSEARCH_MAX_CHARS,
-    build_tools,
 )
+from agent_gateway.services.mcp.server_tools import register_tools
 from agent_gateway.services.mcp.graph_tools import (
     IMPACT_DEFAULT_DEPTH,
     IMPACT_DEFAULT_LIMIT,
@@ -138,8 +133,7 @@ from agent_gateway.services.mcp.server_constants import (
 from agent_gateway.services.mcp.server_skills import (
     SKILL_SKIP_DIRS,
     find_skill_dir,
-    normalize_name,
-    scan_skills,
+    register_skill_tools,
 )
 from agent_gateway.services.read.read_service import read_url
 from agent_gateway.services.search import web_search
@@ -243,15 +237,32 @@ except Exception as e:
 # unused by the model or always the same value; inside metadata, archived is already
 
 
-server = Server(SERVER_NAME)
+mcp = MCPServer(SERVER_NAME, version=SERVER_VERSION)
 
 
-@server.list_tools()
-async def handle_list_tools() -> list[Tool]:
-    return build_tools()
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request):
+    return JSONResponse({"status": "ok", "service": SERVER_NAME})
 
 
 HANDLERS: dict[str, callable] = dict(MEMORY_HANDLERS)
+
+
+async def _dispatch_tool(name: str, arguments: dict) -> list[TextContent]:
+    """Single dispatch point so every tool call keeps its timing log."""
+    started = time.perf_counter()
+    ok = True
+    try:
+        return await HANDLERS[name](arguments)
+    except Exception as e:
+        ok = False
+        logger.error(f"Error in {name}: {e}", exc_info=True)
+        raise
+    finally:
+        logger.info(
+            f"tool_call name={name} ok={ok} "
+            f"elapsed_ms={int((time.perf_counter() - started) * 1000)}"
+        )
 
 
 def _register(name: str):
@@ -565,39 +576,25 @@ async def _handle_read_url(arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=dumps(result))]
 
 
-@server.call_tool()
-async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
-    started = time.perf_counter()
-    ok = True
-    try:
-        handler = HANDLERS.get(name)
-        if handler:
-            return await handler(arguments)
-        skills = scan_skills()
-        if name in skills:
-            return [TextContent(type="text", text=skills[name]["content"])]
-        normalized = normalize_name(name)
-        if normalized in skills:
-            return [TextContent(type="text", text=skills[normalized]["content"])]
-        ok = False
-        return [
-            TextContent(type="text", text=dumps({"error": f"Unknown tool: {name}"}))
-        ]
-    except Exception as e:
-        # Must keep re-raising: returning a {"error": ...} TextContent here is, to the
-        # SDK, "the tool returned normally" with isError staying False — a real failure is
-        # treated as success by the client, just with an extra error field in the result,
-        # leaving the caller no basis to retry or degrade. After re-raising, the SDK's
-        # call_tool fallback turns it into isError=True.
-        ok = False
-        logger.error(f"Error in {name}: {e}", exc_info=True)
-        raise
-    finally:
-        # Measurement anchor for latency auditing: round-trip time and success/failure of each tool call
-        logger.info(
-            f"tool_call name={name} ok={ok} "
-            f"elapsed_ms={int((time.perf_counter() - started) * 1000)}"
-        )
+register_tools(
+    mcp, {name: functools.partial(_dispatch_tool, name) for name in HANDLERS}
+)
+register_skill_tools(mcp)
+
+
+def build_asgi(rest_app: Starlette) -> Starlette:
+    app = mcp.streamable_http_app(
+        streamable_http_path="/",
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+    )
+    # Scripts under scripts/ default to /mcp; the v1 transport accepted every path,
+    # so the same endpoint is mounted there to keep them working.
+    root = next(route for route in app.router.routes if route.path == "/")
+    app.router.routes.append(Route("/mcp", endpoint=root.endpoint))
+    app.router.routes[:0] = rest_app.routes
+    return app
 
 
 def main() -> None:
@@ -624,25 +621,6 @@ async def serve():
         await asyncio.to_thread(autocalibrate.run, tag)
 
     asyncio.create_task(auto_calibrate_on_start())
-
-    transport = StreamableHTTPServerTransport(
-        mcp_session_id=None, is_json_response_enabled=True
-    )
-
-    async def health_check(scope, receive, send):
-        """Health check endpoint for process manager monitoring."""
-        response = JSONResponse({"status": "ok", "service": SERVER_NAME})
-        await response(scope, receive, send)
-
-    async def mcp_asgi_app(scope, receive, send):
-        if scope["path"] == "/health":
-            await health_check(scope, receive, send)
-            return
-        if scope["path"].startswith("/api/"):
-            rest_scope = dict(scope)
-            await rest_app(rest_scope, receive, send)
-            return
-        await transport.handle_request(scope, receive, send)
 
     async def api_memory_add_knowledge(request):
         body = await request.json()
@@ -1031,24 +1009,9 @@ async def serve():
         ]
     )
 
-    app = Starlette(routes=[Mount("/", app=mcp_asgi_app)])
+    app = build_asgi(rest_app)
     config = uvicorn.Config(app, host="127.0.0.1", port=MCP_PORT, log_level="info")
-    uvi_server = uvicorn.Server(config)
-
-    async with transport.connect() as streams:
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(
-                server.run,
-                streams[0],
-                streams[1],
-                InitializationOptions(
-                    server_name=SERVER_NAME,
-                    server_version=SERVER_VERSION,
-                    capabilities=ServerCapabilities(tools=ToolsCapability()),
-                ),
-            )
-            await anyio.sleep(0.1)
-            await uvi_server.serve()
+    await uvicorn.Server(config).serve()
 
 
 if __name__ == "__main__":

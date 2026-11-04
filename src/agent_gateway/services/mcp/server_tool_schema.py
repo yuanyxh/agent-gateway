@@ -14,7 +14,6 @@ from agent_gateway.services.mcp.graph_tools import (
     IMPACT_DEFAULT_LIMIT,
     LOOKUP_DEFAULT_LIMIT,
 )
-from agent_gateway.services.mcp.server_skills import scan_skills
 from agent_gateway.services.summarize.text import DEFAULT_MAX_TOKENS
 from agent_gateway.core.tool_defaults import arg_default
 from agent_gateway.core.tool_text import param_text
@@ -44,6 +43,61 @@ DEFAULT_GRAPH_LIMIT = 50
 #: recall shares catch_up's budget so both tools bound their response the same way.
 DEFAULT_RECALL_MAX_CHARS = DEFAULT_CATCH_UP_MAX_CHARS
 DEFAULT_SUMMARIZE_MAX_TOKENS = DEFAULT_MAX_TOKENS
+
+#: One batch item. Shared by build_tools and the registered tool signature so the
+#: per-item descriptions and defaults stay single-sourced.
+MEMORY_ITEM_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "content": {
+            "type": "string",
+            "description": param_text("param.memory_content"),
+        },
+        "context": {
+            "type": "string",
+            "description": param_text("param.memory_context"),
+        },
+        "type": {
+            "type": "string",
+            "description": param_text("param.memory_type"),
+        },
+        "source_files": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": param_text("param.source_files"),
+        },
+        "source_url": {
+            "type": "string",
+            "description": param_text("param.source_url"),
+        },
+        "agent_id": {"type": "string", "default": "unknown"},
+        "visibility": {
+            "type": "string",
+            "enum": ["all", "agent-specific", "user-only"],
+            "default": "all",
+        },
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"type": "number", "default": 1.0},
+        "importance": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5,
+            "description": param_text("param.memory_importance"),
+        },
+        "protected": {
+            "type": "boolean",
+            "default": False,
+            "description": param_text("param.memory_protected"),
+        },
+        "supersedes": {"type": "array", "items": {"type": "string"}},
+        "episode_id": {
+            "type": "string",
+            "description": "Optional group key; memories sharing it are recalled together.",
+        },
+    },
+    "required": ["content"],
+}
 
 #: Fixed English tool descriptions; parameter guidance lives in `tool_text.PARAM_DESCRIPTIONS`.
 TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -132,63 +186,7 @@ def build_tools() -> list[Tool]:
                     "memories": {
                         "type": "array",
                         "description": param_text("param.memories"),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "content": {
-                                    "type": "string",
-                                    "description": param_text("param.memory_content"),
-                                },
-                                "context": {
-                                    "type": "string",
-                                    "description": param_text("param.memory_context"),
-                                },
-                                "type": {
-                                    "type": "string",
-                                    "description": param_text("param.memory_type"),
-                                },
-                                "source_files": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                    "description": param_text("param.source_files"),
-                                },
-                                "source_url": {
-                                    "type": "string",
-                                    "description": param_text("param.source_url"),
-                                },
-                                "agent_id": {"type": "string", "default": "unknown"},
-                                "visibility": {
-                                    "type": "string",
-                                    "enum": ["all", "agent-specific", "user-only"],
-                                    "default": "all",
-                                },
-                                "tags": {"type": "array", "items": {"type": "string"}},
-                                "confidence": {"type": "number", "default": 1.0},
-                                "importance": {
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 10,
-                                    "default": 5,
-                                    "description": param_text(
-                                        "param.memory_importance"
-                                    ),
-                                },
-                                "protected": {
-                                    "type": "boolean",
-                                    "default": False,
-                                    "description": param_text("param.memory_protected"),
-                                },
-                                "supersedes": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "episode_id": {
-                                    "type": "string",
-                                    "description": "Optional group key; memories sharing it are recalled together.",
-                                },
-                            },
-                            "required": ["content"],
-                        },
+                        "items": MEMORY_ITEM_SCHEMA,
                     },
                 },
                 "required": ["memories"],
@@ -537,12 +535,4 @@ def build_tools() -> list[Tool]:
             },
         ),
     ]
-    for skill_name, skill in scan_skills().items():
-        tools.append(
-            Tool(
-                name=skill_name,
-                description=skill["description"],
-                inputSchema={"type": "object", "properties": {}},
-            )
-        )
     return tools
