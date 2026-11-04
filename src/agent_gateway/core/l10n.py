@@ -2,7 +2,7 @@
 
 The catalog is owned by this package: `agent_gateway/locales/<lang>.json`, one flat
 `{key: text}` map per language. Keys are namespaced (`mcp.*`, `proxy.*`). The language comes
-from `config.ui_language()` ← `UTILITY_LANG` ← Swift `general.language`, normalised by the same
+from `config.ui_language()` ← `GATEWAY_LANG` ← host language, normalised by the same
 rule as `L10n.resolvedLanguage` so both sides agree on "which language is active".
 
 Placeholders use the shared grammar: `{name}` (string), `{name:d}` (int), `{name:.Nf}` (double).

@@ -6,5 +6,6 @@ dist/
 node_modules/
 .DS_Store
 .utility/
+.agent-gateway/
 # Annotation exports quote real notes and memories; keep them local.
 tests/eval/

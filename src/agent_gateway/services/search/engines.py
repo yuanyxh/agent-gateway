@@ -1,7 +1,7 @@
 """Engine search layer: turn a query into ranked result links.
 
 Parsers, engine ordering, cooldowns, relevance ranking, and the Wikipedia source
-live here. HTTP work is delegated to :mod:`utility.services.fetch.http`, so this
+live here. HTTP work is delegated to :mod:`agent_gateway.services.fetch.http`, so this
 module contains no proxy, cookie, or retry logic.
 """
 
@@ -556,7 +556,7 @@ _PARSERS = {
 
 _WIKI_GAP = 1.2
 _wiki_clock = [0.0]
-WIKI_UA = "utility-knowledge-panel/1.0 (personal use)"
+WIKI_UA = "agent-gateway/0.1 (personal use)"
 
 
 def _wiki_get(url: str, retries: int = 2) -> dict:

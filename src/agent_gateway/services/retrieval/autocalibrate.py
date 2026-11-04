@@ -19,7 +19,7 @@ from agent_gateway.services.retrieval.gate.thresholds import (
     override_path,
 )
 
-logger = logging.getLogger("utility.retrieval")
+logger = logging.getLogger("agent_gateway.retrieval")
 
 #: Records sampled per layer; enough for a stable 5th percentile, small enough
 #: that a first start stays in seconds.

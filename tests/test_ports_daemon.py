@@ -102,11 +102,11 @@ class RuntimeStateTest(unittest.TestCase):
         daemon.clear_state(daemon.SERVICE_MCP)
         self.assertIsNone(daemon.read_state(daemon.SERVICE_MCP))
 
-    def test_missing_root_degrades(self):
-        with mock.patch.dict(os.environ, {"UTILITY_DATA_DIR": ""}):
-            self.assertIsNone(daemon.state_dir())
-            self.assertIsNone(daemon.write_state(daemon.SERVICE_PROXY, 8613))
-            self.assertIsNone(daemon.read_state(daemon.SERVICE_PROXY))
+    def test_missing_root_uses_default_home(self):
+        env = {"UTILITY_DATA_DIR": "", "GATEWAY_HOME": self._tmp.name}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(daemon.state_dir(), Path(self._tmp.name) / "runtime")
+            self.assertIsNotNone(daemon.write_state(daemon.SERVICE_PROXY, 8613))
 
     def test_corrupt_state_reads_as_none(self):
         daemon.write_state(daemon.SERVICE_MCP, 9001)

@@ -25,7 +25,7 @@ from agent_gateway.services.summarize.constants import (
     SUMMARY_EXCLUDE_DIRS,
     SUMMARY_GIT_TIMEOUT,
     SUMMARY_NOTE_EXTENSIONS,
-    UTILITY_DATA_DIR,
+    GATEWAY_HOME_DIR,
 )
 
 
@@ -36,7 +36,7 @@ def _cold_already_synced(content: str, source_file: str) -> bool:
     """Dedup by source_file+content hash: skip content already synced, to avoid duplicate writes to the cold layer."""
     h = hashlib.sha256(f"{source_file}|{content}".encode("utf-8")).hexdigest()
     try:
-        UTILITY_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        GATEWAY_HOME_DIR.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(COLD_SYNC_DB))
         try:
             conn.execute(

@@ -1,7 +1,7 @@
 """Logging module shared by all Python subprocesses.
 Usage:
     from agent_gateway.core.log_utils import setup_logging, write_error_log
-    logger = setup_logging("server")       # → ~/.cache/utility/server.log
+    logger = setup_logging("server")       # → ~/.cache/agent-gateway/server.log
     logger = setup_logging("token_proxy", json_format=True)  # → JSON Lines
 """
 

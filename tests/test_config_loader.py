@@ -32,14 +32,14 @@ class ConfigLoaderTest(unittest.TestCase):
     def test_nested_value_and_missing_level(self):
         self._write("ai:\n  apiKey: secret\n  model: m1\n")
         data = config_loader.load(self.root / "config.yaml")
-        self.assertEqual(data["ai"]["apiKey"], "secret")
-        self.assertEqual(config_loader.value("ai.model"), None)
+        self.assertEqual(data["llm"]["apiKey"], "secret")
+        self.assertEqual(config_loader.value("llm.model"), None)
 
     def test_dotted_value_reads_loaded_file(self):
         self._write("general:\n  language: en\n")
         with mock.patch.dict(os.environ, {"UTILITY_DATA_DIR": str(self.root)}):
             config_loader.reset_cache()
-            self.assertEqual(config_loader.value("general.language"), "en")
+            self.assertEqual(config_loader.value("language"), "en")
 
     def test_invalid_yaml_falls_back_to_empty(self):
         self._write("ai: [unclosed\n")
@@ -52,9 +52,9 @@ class ConfigLoaderTest(unittest.TestCase):
     def test_cache_invalidates_when_file_changes(self):
         self._write("ai:\n  model: first\n")
         path = self.root / "config.yaml"
-        self.assertEqual(config_loader.load(path)["ai"]["model"], "first")
+        self.assertEqual(config_loader.load(path)["llm"]["model"], "first")
         self._write("ai:\n  model: second-longer-name\n")
-        self.assertEqual(config_loader.load(path)["ai"]["model"], "second-longer-name")
+        self.assertEqual(config_loader.load(path)["llm"]["model"], "second-longer-name")
 
 
 class ConfigFallbackTest(unittest.TestCase):

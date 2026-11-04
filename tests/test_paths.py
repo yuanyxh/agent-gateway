@@ -38,7 +38,8 @@ class ConfigFileTest(unittest.TestCase):
     def test_defaults_to_home_config(self):
         with patch.dict(os.environ, {"GATEWAY_HOME": "/tmp/gh"}, clear=True):
             self.assertEqual(
-                config_loader.config_file(), _resolved("/tmp/gh") / "config.yaml"
+                config_loader.config_file(),
+                _resolved("/tmp/gh") / "agent-gateway.yaml",
             )
 
     def test_gateway_config_wins(self):

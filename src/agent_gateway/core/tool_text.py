@@ -1,6 +1,6 @@
 """Fixed-English MCP tool parameter descriptions.
 
-Tool and parameter descriptions are always English; this layer is not tied to `UTILITY_LANG`.
+Tool and parameter descriptions are always English; this layer is not tied to `GATEWAY_LANG`.
 Keys are semantic, so text shared by several tools is defined once.
 """
 

@@ -16,23 +16,21 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+from agent_gateway.core import paths
+
 SERVICE_MCP = "mcp"
 SERVICE_PROXY = "proxy"
 
 _STATE_DIR = "runtime"
 
 
-def state_dir() -> Path | None:
-    """`<config root>/runtime`; None when the root was not injected."""
-    root = os.environ.get("UTILITY_DATA_DIR", "").strip()
-    if not root:
-        return None
-    return Path(os.path.expanduser(root)) / _STATE_DIR
+def state_dir() -> Path:
+    """`<GATEWAY_HOME>/runtime`; the default home is always resolvable."""
+    return paths.gateway_home() / _STATE_DIR
 
 
-def state_path(service: str) -> Path | None:
-    root = state_dir()
-    return root / f"{service}.json" if root else None
+def state_path(service: str) -> Path:
+    return state_dir() / f"{service}.json"
 
 
 def write_state(

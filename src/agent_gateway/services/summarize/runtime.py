@@ -7,10 +7,10 @@ import time
 from agent_gateway.core.log_utils import setup_logging as _log_setup
 
 from agent_gateway.services.summarize.constants import (
+    GATEWAY_HOME_DIR,
     LAST_RUN_FILE,
     LOCK_FILE,
     MIN_RUN_INTERVAL,
-    UTILITY_DATA_DIR,
 )
 
 
@@ -20,7 +20,7 @@ logger = _log_setup("summarize")
 def _acquire_single_instance() -> bool:
     """Acquire the single-instance file lock. Returns False when an instance is already running (the caller exits)."""
     try:
-        UTILITY_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        GATEWAY_HOME_DIR.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -40,7 +40,7 @@ def _throttle_ai_run() -> bool:
     retry impossible within the 6h window after a failure.
     """
     try:
-        UTILITY_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        GATEWAY_HOME_DIR.mkdir(parents=True, exist_ok=True)
         now = time.time()
         last = (
             float(LAST_RUN_FILE.read_text().strip()) if LAST_RUN_FILE.exists() else 0.0
@@ -58,7 +58,7 @@ def _throttle_ai_run() -> bool:
 def _mark_run_success() -> None:
     """Record last_run after a summary completes successfully, starting a new duplicate-prevention cooldown."""
     try:
-        UTILITY_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        GATEWAY_HOME_DIR.mkdir(parents=True, exist_ok=True)
         LAST_RUN_FILE.write_text(str(time.time()))
     except Exception:
         pass

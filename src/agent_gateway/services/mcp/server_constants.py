@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 from agent_gateway.services.retrieval.config import index_name, model_tag
+from agent_gateway.core import env_compat
 from agent_gateway.core.config import (
     ai_api_key,
     note_exclude_dirs,
@@ -120,8 +121,8 @@ def err_bit_out_of_range(bit: int | None = None) -> str:
 ARCHIVE_DAYS = 90
 ARCHIVE_INTERVAL_HOURS = 24
 
-# Empty string = injected by the Swift layer (current system username)
-DEFAULT_USER_ID = os.environ.get("UTILITY_USER_ID", "")
+# Empty string = injected by the host (current system username)
+DEFAULT_USER_ID = env_compat.get("GATEWAY_USER_ID") or ""
 
 # Contradiction candidates sit in a similarity band: too close and they are the same
 # fact, too far apart and they are unrelated. The band is the reference implementation's

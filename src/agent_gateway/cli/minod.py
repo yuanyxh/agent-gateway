@@ -19,8 +19,8 @@ MIN_PYTHON = (3, 12)
 
 #: service -> (config key for an explicit port, default start port)
 SERVICE_PORTS = {
-    daemon.SERVICE_MCP: ("mcp.port", 9001),
-    daemon.SERVICE_PROXY: ("modelProxy.port", 8613),
+    daemon.SERVICE_MCP: ("server.mcp.port", 9001),
+    daemon.SERVICE_PROXY: ("server.proxy.port", 8613),
 }
 
 #: service -> module exposing `main()`
@@ -98,11 +98,11 @@ def check() -> int:
     ok = _report(bool(root), f"config root: {root}") and ok
 
     path = config_loader.config_file()
-    exists = path is not None and path.is_file()
-    ok = _report(exists, f"config file: {path or 'unresolved'}") and ok
-    if exists:
+    if path.is_file():
         parsed, message = _config_parses(path)
         ok = _report(parsed, message) and ok
+    else:
+        _report(True, f"config file: {path} (missing, defaults in use)")
 
     version = ".".join(str(part) for part in sys.version_info[:3])
     ok = (
@@ -182,7 +182,39 @@ def serve(services: list[str]) -> int:
         _shutdown(children)
 
 
+def graph_command(argv: list[str]) -> int:
+    """`agent-gateway graph index|status --root <path>`."""
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(prog="agent-gateway graph")
+    action = parser.add_subparsers(dest="action", required=True)
+    for name in ("index", "status"):
+        sub = action.add_parser(name)
+        sub.add_argument("--root", required=True)
+        sub.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    from agent_gateway.services.graph import indexer, project_scan
+
+    if args.action == "index":
+        result = project_scan.sync(
+            args.root, indexer.ENGINE_VERSION, indexer.SCHEMA_VERSION
+        )
+    else:
+        result = indexer.handle_line(json.dumps({"op": "status", "root": args.root}))
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(f"[agent-gateway] graph {args.action}: {result}")
+    return 0 if result.get("ok") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
+    args_in = list(sys.argv[1:] if argv is None else argv)
+    if args_in[:1] == ["graph"]:
+        return graph_command(args_in[1:])
+
     parser = argparse.ArgumentParser(
         prog="agent-gateway", description="AI capability layer for Utility clients"
     )

@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import os
 
-from agent_gateway.core import config_loader, paths
+from agent_gateway.core import config_loader, env_compat, paths
 
 # Empty string = injected by the Swift layer via env var; when not injected, the related feature is disabled
 _DEFAULT_SUMMARY_MODEL = ""
@@ -40,26 +40,26 @@ _DEFAULT_DATA_DIR = ""
 
 #: env name -> (config.yaml dotted path, serialization). Only read when Swift did not inject the env.
 _YAML_FALLBACKS: dict[str, tuple[str, str]] = {
-    "AI_API_KEY": ("ai.apiKey", "text"),
-    "AI_LLM_TIMEOUT": ("ai.llmTimeout", "text"),
-    "UTILITY_LANG": ("general.language", "text"),
-    "SUMMARY_MODEL": ("ai.model", "text"),
-    "SUMMARY_API_URL": ("ai.baseURL", "text"),
-    "NOTES_DIR": ("mcp.knowledgeBasePath", "text"),
-    "SUMMARY_EXCLUDE_TAGS": ("mcp.excludeTags", "csv"),
-    "UTILITY_LOG_MAX_SIZE": ("general.logMaxSize", "text"),
-    "UTILITY_LOG_BACKUP_COUNT": ("general.logBackupCount", "text"),
-    "NOTE_EXCLUDE_DIRS": ("mcp.noteExcludeDirs", "json"),
-    "NOTE_EXTENSIONS": ("mcp.noteExtensions", "json"),
-    "MEMORY_PROTECT_IMPORTANCE": ("mcp.memoryProtectImportance", "text"),
-    "MEMORY_MAX_CONTENT_CHARS": ("mcp.memoryMaxContentChars", "text"),
-    "MEMORY_MAX_SUMMARIES": ("mcp.memoryMaxSummaries", "text"),
-    "MEMORY_MAX_SUMMARIES_PER_EPISODE": ("mcp.memoryMaxSummariesPerEpisode", "text"),
-    "RANK_SIGNAL_RECENCY": ("mcp.rankSignalRecency", "text"),
-    "RANK_SIGNAL_ACCESS": ("mcp.rankSignalAccess", "text"),
-    "RANK_SIGNAL_QUALITY": ("mcp.rankSignalQuality", "text"),
+    "AI_API_KEY": ("llm.apiKey", "text"),
+    "AI_LLM_TIMEOUT": ("llm.timeout", "text"),
+    "GATEWAY_LANG": ("language", "text"),
+    "SUMMARY_MODEL": ("llm.model", "text"),
+    "SUMMARY_API_URL": ("llm.baseURL", "text"),
+    "NOTES_DIR": ("notes.dir", "text"),
+    "SUMMARY_EXCLUDE_TAGS": ("notes.excludeTags", "csv"),
+    "GATEWAY_LOG_MAX_SIZE": ("logging.maxSize", "text"),
+    "GATEWAY_LOG_BACKUP_COUNT": ("logging.backupCount", "text"),
+    "NOTE_EXCLUDE_DIRS": ("notes.excludeDirs", "json"),
+    "NOTE_EXTENSIONS": ("notes.extensions", "json"),
+    "MEMORY_PROTECT_IMPORTANCE": ("memory.protectImportance", "text"),
+    "MEMORY_MAX_CONTENT_CHARS": ("memory.maxContentChars", "text"),
+    "MEMORY_MAX_SUMMARIES": ("memory.maxSummaries", "text"),
+    "MEMORY_MAX_SUMMARIES_PER_EPISODE": ("memory.maxSummariesPerEpisode", "text"),
+    "RANK_SIGNAL_RECENCY": ("memory.rankSignal.recency", "text"),
+    "RANK_SIGNAL_ACCESS": ("memory.rankSignal.access", "text"),
+    "RANK_SIGNAL_QUALITY": ("memory.rankSignal.quality", "text"),
     "KNOWLEDGE_TOPICS": ("knowledge.topics", "json"),
-    "KNOWLEDGE_TOPIC_TARGET": ("knowledge.poolTargetTopic", "text"),
+    "KNOWLEDGE_TOPIC_TARGET": ("knowledge.topicTarget", "text"),
     "KNOWLEDGE_MAX_FAIL_STREAK": ("knowledge.maxFailStreak", "text"),
     "KNOWLEDGE_RETENTION_DAYS": ("knowledge.retentionDays", "text"),
 }
@@ -77,8 +77,8 @@ def _serialize(node: object, kind: str) -> str:
 
 
 def get(key: str, default: str = "") -> str:
-    """Unified config read: env first, config.yaml fallback, then `default`."""
-    raw = os.environ.get(key)
+    """Unified config read: env first, native YAML fallback, then `default`."""
+    raw = env_compat.get(key)
     if raw is not None:
         return raw
     spec = _YAML_FALLBACKS.get(key)
@@ -120,14 +120,14 @@ def llm_timeout(default: float = 120.0) -> float:
 
 
 def ui_language(default: str = "") -> str:
-    """UI/prompt language (`zh-Hans` / `en`). Swift injects `UTILITY_LANG` from `general.language`.
+    """UI/prompt language (`zh-Hans` / `en`), injected as `GATEWAY_LANG`.
 
     The prompt directory is selected by it (`prompts/<lang>/<feature>.md`), so
     it must share the same source as the UI language. When not injected it
     returns an empty string, and the caller (prompt_loader) falls back to the
     baseline language.
     """
-    return get("UTILITY_LANG", default)
+    return get("GATEWAY_LANG", default)
 
 
 def summary_model(default: str = _DEFAULT_SUMMARY_MODEL) -> str:
@@ -150,8 +150,8 @@ def notes_dir(default: str = _DEFAULT_NOTES_DIR) -> str:
 
 
 def data_dir(default: str = _DEFAULT_DATA_DIR) -> str:
-    """State root: `GATEWAY_HOME` first, legacy config value second, then the default home."""
-    raw = os.environ.get("GATEWAY_HOME", "").strip() or get("UTILITY_DATA_DIR", default)
+    """State root: `GATEWAY_HOME`, then `default`, then the package home."""
+    raw = (env_compat.get("GATEWAY_HOME") or default or "").strip()
     if not raw:
         return str(paths.gateway_home())
     return os.path.abspath(os.path.expanduser(raw))
@@ -234,14 +234,14 @@ def _int(raw: str, default: int) -> int:
 
 
 def log_max_size(default: int = 10 * 1024 * 1024) -> int:
-    """Log file size limit before rotation (`general.logMaxSize`, injected by Swift)."""
-    value = _int(get("UTILITY_LOG_MAX_SIZE", ""), default)
+    """Log file size limit before rotation (`logging.maxSize`)."""
+    value = _int(get("GATEWAY_LOG_MAX_SIZE", ""), default)
     return value if value > 0 else default
 
 
 def log_backup_count(default: int = 3) -> int:
-    """Number of rotated log backups kept (`general.logBackupCount`, injected by Swift)."""
-    value = _int(get("UTILITY_LOG_BACKUP_COUNT", ""), default)
+    """Number of rotated log backups kept (`logging.backupCount`)."""
+    value = _int(get("GATEWAY_LOG_BACKUP_COUNT", ""), default)
     return value if value > 0 else default
 
 

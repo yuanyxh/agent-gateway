@@ -5,8 +5,8 @@ appends to the live `~/.cache/utility/server.log`, which makes production logs
 and test output indistinguishable.
 
 Only the cache root is redirected: `GATEWAY_HOME` stays free because several
-tests point `UTILITY_DATA_DIR` at their own temp root and rely on that being
-what the config layer resolves.
+tests point it at their own temp root and rely on that being what the config
+layer resolves.
 """
 
 from __future__ import annotations

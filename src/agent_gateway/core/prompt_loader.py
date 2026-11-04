@@ -17,10 +17,9 @@ user controls**——the person writing the prompt has only one native language,
 directory it goes in" depend on the UI language is both meaningless and would break when the
 language is switched.
 
-The config dir reuses the **existing** env contract: the `UTILITY_DATA_DIR` injected by Swift is
-`~/.config/utility` (`AppPaths.configDir`), so no new env item is added.
+The config dir is `GATEWAY_HOME`; without a host it defaults to `~/.config/agent-gateway`.
 
-The language comes from `UTILITY_LANG` (Swift sets it from `general.language`, empty falls back to
+The language comes from `GATEWAY_LANG` (empty falls back to
 the system primary); the default is `zh-Hans`; when the language has no such file it **falls back
 to the `zh-Hans` baseline** and logs a warning——a not-yet-translated feature should not stall the
 feature, but it must not be silent either (otherwise "the translation didn't take effect" would be
@@ -92,7 +91,7 @@ def _builtin_root() -> Path:
 
 
 def _override_root() -> Path | None:
-    """User override root directory (config dir). None when `UTILITY_DATA_DIR` is not injected."""
+    """User override root directory under `GATEWAY_HOME`; never None."""
     base = data_dir()
     return Path(base) / "prompts" if base else None
 

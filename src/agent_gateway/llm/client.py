@@ -42,7 +42,7 @@ from agent_gateway.core.config import (
 )
 from agent_gateway.core.log_utils import setup_logging
 
-# Dedicated log file (~/.cache/utility/llm_client.log): the single cross-process
+# Dedicated log file (~/.cache/agent-gateway/llm_client.log): the single cross-process
 # observability surface for LLM failures, distinguishing call sites by `label`.
 # `json_format=True` because this module outputs only JSON structures.
 logger = setup_logging("llm_client", json_format=True)

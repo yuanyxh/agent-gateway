@@ -140,12 +140,12 @@ _QUALITY_CN_STATE_VERBS = (
 _QUALITY_QUOTE_PAIRS = [("“", "”"), ("「", "」"), ("『", "』"), ("'", "'"), ('"', '"')]
 
 
-UTILITY_DATA_DIR = Path(data_dir())
+GATEWAY_HOME_DIR = Path(data_dir())
 
-LOCK_FILE = UTILITY_DATA_DIR / "summarize.lock"
+LOCK_FILE = GATEWAY_HOME_DIR / "summarize.lock"
 
-LAST_RUN_FILE = UTILITY_DATA_DIR / "summarize_last_run"
+LAST_RUN_FILE = GATEWAY_HOME_DIR / "summarize_last_run"
 
 MIN_RUN_INTERVAL = 6 * 3600
 
-COLD_SYNC_DB = UTILITY_DATA_DIR / "cold_sync.sqlite"
+COLD_SYNC_DB = GATEWAY_HOME_DIR / "cold_sync.sqlite"

@@ -1,9 +1,9 @@
 """Compatibility facade for the three-layer web pipeline.
 
 Layers:
-- engine search: :mod:`utility.services.search.engines`
-- fetch: :mod:`utility.services.fetch.http`
-- HTML → Markdown: :mod:`utility.services.markdown.html`
+- engine search: :mod:`agent_gateway.services.search.engines`
+- fetch: :mod:`agent_gateway.services.fetch.http`
+- HTML → Markdown: :mod:`agent_gateway.services.markdown.html`
 
 Existing callers import this module; new code should import the layer it needs
 directly. Keeping this facade means the knowledge pipeline, RSS, MCP server,
