@@ -55,5 +55,5 @@
   "proxy.note.context_hint": " · consider a new session",
   "proxy.note.empty": "no rewrite",
   "proxy.note.part.output_filter": "bash filter",
-  "proxy.note.part.skill_dedup": "skill dedup"
+  "proxy.note.part.tool_output_dedup": "tool output dedup"
 }

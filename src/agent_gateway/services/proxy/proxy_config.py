@@ -5,6 +5,7 @@ import os
 
 import aiohttp
 from aiohttp import web
+from agent_gateway.core import env_compat
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.services.proxy.proxy_client import (
     load_client_accel,
@@ -37,13 +38,12 @@ PROVIDERS_JSON = os.environ.get("MODEL_PROXY_PROVIDERS", "")
 # config.yaml modelProxy.clientAccel; empty string by default → proxy_client uses the
 # built-in default allowlist, i.e. historical behavior)
 CLIENT_ACCEL_JSON = os.environ.get("MODEL_PROXY_CLIENT_ACCEL", "")
-# skill full-text dedup switch (config.yaml modelProxy.skillDedupEnabled → env). On by
-# default: when the same skill is called repeatedly, the whole SKILL.md is re-injected each
-# time, pure waste.
-SKILL_DEDUP_ENABLED = os.environ.get("MODEL_PROXY_SKILL_DEDUP", "1") != "0"
-# Tool-output slimming config (config.yaml modelProxy.outputFilter → env, JSON string).
+# Byte-identical tool_result dedup switch (server.proxy.toolOutputDedup → env). On by
+# default: repeated identical tool output is collapsed to a short note after the first copy.
+TOOL_OUTPUT_DEDUP_ENABLED = env_compat.flag("MODEL_PROXY_TOOL_OUTPUT_DEDUP", True)
+# Tool-output slimming config (server.proxy.outputFilter → env, JSON string).
 # Empty string by default means the Python-side built-in default (on, max_bytes 8000),
-# isomorphic with skill dedup.
+# isomorphic with tool-output dedup.
 OUTPUT_FILTER_JSON = os.environ.get(OUTPUT_FILTER_ENV_KEY, "")
 # Response-side append of "what was rewritten this turn" (config.yaml modelProxy.responseAnnotation → env).
 RESPONSE_NOTE_ENABLED = os.environ.get(RESPONSE_NOTE_ENV_KEY, "1") != "0"

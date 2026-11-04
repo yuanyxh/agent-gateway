@@ -30,7 +30,7 @@ from agent_gateway.services.proxy.proxy_response_note import (
     SSENoteInjector,
     strip_notes_from_messages,
 )
-from agent_gateway.services.proxy.proxy_skill_dedup import dedup_tool_results
+from agent_gateway.services.proxy.proxy_tool_output_dedup import dedup_tool_results
 from agent_gateway.services.proxy.usage_extract import extract_response_tool_names
 from agent_gateway.services.proxy.proxy_usage import (
     extract_tool_outputs,
@@ -45,7 +45,7 @@ from agent_gateway.services.proxy.proxy_config import (
     GATEWAY_ERROR_KEY,
     OUTPUT_FILTER_JSON,
     RESPONSE_NOTE_ENABLED,
-    SKILL_DEDUP_ENABLED,
+    TOOL_OUTPUT_DEDUP_ENABLED,
     UPSTREAM_ACCEPT_ENCODING,
     _BACKGROUND_TASKS,
     _SharedSession,
@@ -75,21 +75,20 @@ def _body_error_message(body: bytes) -> str:
 
 def _apply_rewrites(state: _ProxyState) -> None:
     """Client-format rewrites before forwarding; the record copy stays untouched."""
-    # skill full-text dedup: from the second copy onward replace with a short note (the
-    # criterion is byte-identical content; the proxy cannot see the skill list). Must be
-    # after record — the record layer must keep the original, otherwise the measurement
-    # yardstick destroys itself.
-    if SKILL_DEDUP_ENABLED and not state.raw:
+    # Byte-identical tool_result dedup: from the second copy onward replace with a short
+    # note. Must be after record — the record layer must keep the original, otherwise the
+    # measurement yardstick destroys itself.
+    if TOOL_OUTPUT_DEDUP_ENABLED and not state.raw:
         deduped = dedup_tool_results(
             state.request_body, state.api_format, ui_language()
         )
         if deduped:
-            state.note_parts.append("skillDedup")
+            state.note_parts.append("toolOutputDedup")
             state.body_bytes = json.dumps(state.request_body).encode()
             logger.info(
                 json.dumps(
                     {
-                        "msg": "skill_dedup",
+                        "msg": "tool_output_dedup",
                         "replaced": deduped,
                         "api_format": state.api_format,
                     }

@@ -95,7 +95,7 @@ class ProxyTestBase(unittest.IsolatedAsyncioTestCase):
             module.PROVIDERS = providers
         proxy_config.UPSTREAM_URL = ""
         proxy_state.UPSTREAM_URL = ""
-        proxy_rewrite.SKILL_DEDUP_ENABLED = False
+        proxy_rewrite.TOOL_OUTPUT_DEDUP_ENABLED = False
         proxy_rewrite.RESPONSE_NOTE_ENABLED = False
         proxy_rewrite._logged_first_body = True
 

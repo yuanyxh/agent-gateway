@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from agent_gateway.services.proxy.proxy_skill_dedup import dedup_tool_results
+from agent_gateway.services.proxy.proxy_tool_output_dedup import dedup_tool_results
 
 
 def _anthropic_round(tool_id: str, name: str, text: str) -> list[dict]:

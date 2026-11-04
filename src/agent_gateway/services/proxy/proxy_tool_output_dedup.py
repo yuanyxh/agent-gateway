@@ -1,15 +1,12 @@
-"""De-duplication of tool_result content in inbound requests.
+"""De-duplication of repeated tool_result content in inbound requests.
 
-When the same skill (MCP tool) is called repeatedly within one session, the
-whole SKILL.md is re-inserted each time — measured: 6 byte-identical copies of
-15184 B. This module replaces the second copy onward with a short note, keeping
-the first (the model can still read the full content above).
+When identical output is returned repeatedly within one session, this module
+replaces the second copy onward with a short note, keeping the first (the model
+can still read the full content above).
 
-The criterion is **byte-identical content**, not the tool name: the proxy cannot
-see the skill list (that list lives inside the MCP server), and identical
-content means identical semantics. A side effect is that repeated non-skill
-output (two identical `ls`) is also collapsed — harmless and token-saving all
-the same.
+The criterion is **byte-identical content**, not the tool name. A skill reload
+and two identical `ls` calls are both collapsed; the proxy cannot see which tool
+produced the text.
 
 Placed at the proxy layer rather than the MCP server layer: the server has no
 view of session history and can only track "already returned" via in-process

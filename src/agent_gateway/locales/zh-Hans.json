@@ -55,5 +55,5 @@
   "proxy.note.context_hint": " · 建议新开会话",
   "proxy.note.empty": "无改写",
   "proxy.note.part.output_filter": "Bash 过滤",
-  "proxy.note.part.skill_dedup": "Skill 短提示"
+  "proxy.note.part.tool_output_dedup": "工具输出去重"
 }

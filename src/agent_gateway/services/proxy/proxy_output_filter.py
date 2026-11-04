@@ -14,9 +14,9 @@ explicitly asked for, and truncating them is corruption; shell output is the sou
 of "commands vary wildly and results are unpredictable". See `_shell_kind` for
 detection.
 
-Isomorphic with proxy_skill_dedup: both modify messages in place before the proxy
-forwards, and both are called after record (the record layer keeps the original
-text, otherwise the measurement yardstick destroys itself).
+Isomorphic with proxy_tool_output_dedup: both modify messages in place before the
+proxy forwards, and both are called after record (the record layer keeps the
+original text, otherwise the measurement yardstick destroys itself).
 """
 
 from __future__ import annotations

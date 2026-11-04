@@ -38,7 +38,7 @@ SEG_JOIN = " | "
 #: Request-side stat name -> catalog key (the stats are internal identifiers; the text is not).
 _PART_KEYS: dict[str, str] = {
     "outputFilter": "proxy.note.part.output_filter",
-    "skillDedup": "proxy.note.part.skill_dedup",
+    "toolOutputDedup": "proxy.note.part.tool_output_dedup",
 }
 
 #: Above this many context tokens the line suggests starting a new session; 0 disables the hint.
