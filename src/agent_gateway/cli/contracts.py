@@ -12,7 +12,10 @@ from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
-_ENV_CALLS = {"get", "setdefault", "_json_env"}
+_ENV_CALLS = {"get", "setdefault", "_json_env", "env_get", "flag"}
+
+#: Read through a constant rather than an ``env[...]`` assignment.
+_EXTRA_ENV = {"GATEWAY_CONFIG_FORMAT"}
 
 #: Modules the host launches by name. Keys are the host-facing stable names
 #: (`GatewayEntry` in the macOS host); renaming one is a contract change.
@@ -66,7 +69,7 @@ def collect_env_names() -> list[str]:
             names |= _env_names(path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):
             continue
-    return sorted(names)
+    return sorted(names | _EXTRA_ENV)
 
 
 def _module_path(module: str) -> Path:
@@ -98,8 +101,26 @@ def check_entries() -> list[str]:
     return problems
 
 
+def graph_contract() -> dict:
+    from agent_gateway.core.project_paths import DEFAULT_STATE_DIR
+    from agent_gateway.services.graph.constants import (
+        ENGINE_VERSION,
+        EXTENSIONS,
+        SCHEMA_VERSION,
+    )
+
+    return {
+        "package": "agent-gateway",
+        "engine_version": ENGINE_VERSION,
+        "schema_version": SCHEMA_VERSION,
+        "state_dir": DEFAULT_STATE_DIR,
+        "languages": sorted(set(EXTENSIONS.values())),
+        "extensions": dict(EXTENSIONS),
+    }
+
+
 def export(dest: Path | None = None) -> Path:
-    """Write `env.json` and `entries.json` into `dest`; defaults to `<cwd>/contracts`."""
+    """Write `env.json`, `entries.json` and `graph.json` into `dest`."""
     problems = check_entries()
     if problems:
         raise SystemExit("entry contract broken:\n" + "\n".join(problems))
@@ -123,6 +144,11 @@ def export(dest: Path | None = None) -> Path:
             indent=2,
         )
         + "\n",
+        encoding="utf-8",
+    )
+    graph_path = target / "graph.json"
+    graph_path.write_text(
+        json.dumps(graph_contract(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     return target

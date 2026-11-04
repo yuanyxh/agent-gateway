@@ -31,7 +31,7 @@ from agent_gateway.services.mcp.search_notes_io import (
 
 
 def _keyword_search_uncached(project_path: str, query: str, limit: int) -> dict:
-    """Degraded path for non-dev projects: in-memory-only keyword search, no .utility
+    """Degraded path for non-dev projects: in-memory-only keyword search, no .agent-gateway
     cache created.
 
     Same logic as _query_project_notes's keyword fallback, but scans files and matches
@@ -82,7 +82,7 @@ def _query_project_notes(project_path: str, query: str, limit: int) -> dict:
     """
     limit = max(1, min(limit, NOTE_MAX_RESULTS))
 
-    # Non-dev project (no marker files): no .utility cache persisted, in-memory-only keyword search
+    # Non-dev project (no marker files): no .agent-gateway cache persisted, in-memory-only keyword search
     if not is_dev_project(project_path):
         logger.info(
             f"[project_notes] non-dev project, uncached keyword search: {project_path}"

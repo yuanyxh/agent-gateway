@@ -9,13 +9,13 @@ import time
 
 import numpy as np
 
+from agent_gateway.core import project_paths
 from agent_gateway.services.mcp.server_embed import (
     EMBEDDER_SPEC,
     embedder_session,
 )
 
 from agent_gateway.services.mcp.search_constants import (
-    NOTE_DB_FILENAME,
     NOTE_EMBED_FILES_PER_COMMIT,
     NOTE_MAX_CHUNKS_PER_PROJECT,
     _EMBED_BATCH_SIZE,
@@ -148,17 +148,6 @@ def _embed_in_batches(emb, texts: list[str]) -> list:
     return out
 
 
-def project_root_from_db_path(db_path: str) -> str | None:
-    """Return the project root for `<root>/.utility/deps.sqlite`, else None."""
-    norm = os.path.normpath(db_path)
-    if os.path.basename(norm) != "deps.sqlite":
-        return None
-    utility_dir = os.path.dirname(norm)
-    if os.path.basename(utility_dir) != ".utility":
-        return None
-    return os.path.dirname(utility_dir)
-
-
 def prewarm_project_notes(project_path: str) -> dict:
     """Warm the note vector cache; non-dev projects and empty doc sets are skipped."""
     project_path = os.path.normpath(project_path)
@@ -208,14 +197,6 @@ def schedule_project_notes_prewarm(project_path: str) -> bool:
     return True
 
 
-def schedule_prewarm_for_db(db_path: str) -> bool:
-    """Schedule prewarm from a `.utility/deps.sqlite` path."""
-    project_path = project_root_from_db_path(db_path)
-    if not project_path:
-        return False
-    return schedule_project_notes_prewarm(project_path)
-
-
 def _ensure_note_cache(
     project_path: str,
     max_files: int | None = None,
@@ -234,9 +215,12 @@ def _ensure_note_cache(
     if not lock.acquire(blocking=wait):
         return None
     try:
-        cache_dir = os.path.join(project_path, ".utility")
-        os.makedirs(cache_dir, exist_ok=True)
-        db_path = os.path.join(cache_dir, NOTE_DB_FILENAME)
+        project_paths.ensure_state_dir(project_path)
+        db_path = str(project_paths.note_cache_path(project_path))
+        project_paths.copy_legacy(
+            project_paths.legacy_note_cache_path(project_path),
+            project_paths.note_cache_path(project_path),
+        )
 
         conn = _get_note_db(db_path)
 
@@ -427,7 +411,7 @@ def _open_note_cache_readonly(
 ) -> tuple[sqlite3.Connection, str, int] | None:
     """Read the current cache without updating it; None when it does not exist."""
     project_path = os.path.normpath(project_path)
-    db_path = os.path.join(project_path, ".utility", NOTE_DB_FILENAME)
+    db_path = str(project_paths.readable_note_cache(project_path))
     if not os.path.isfile(db_path):
         return None
     conn = sqlite3.connect(db_path, timeout=5.0)

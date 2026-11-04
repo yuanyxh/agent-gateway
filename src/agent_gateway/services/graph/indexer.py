@@ -7,7 +7,6 @@ Every response is one JSON object; failures are ok:false with a stable reason.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -15,33 +14,16 @@ import time
 import traceback
 import uuid
 
+from agent_gateway.core import project_paths
 from agent_gateway.core.log_utils import setup_logging
-from agent_gateway.services.graph import resolver
+from agent_gateway.services.graph import project_scan, resolver, store
+from agent_gateway.services.graph.analysis import ProjectIndex, sha1
+from agent_gateway.services.graph.constants import (
+    ENGINE_VERSION as ENGINE_VERSION,
+    SCHEMA_VERSION as SCHEMA_VERSION,
+)
 from agent_gateway.services.graph.model import FileAnalysis, ParseError
 from agent_gateway.services.graph.parsers import EXTENSIONS, PARSERS
-
-ENGINE_VERSION = "2"
-SCHEMA_VERSION = "1"
-
-SKIP_DIRS = frozenset(
-    {
-        ".git",
-        ".hg",
-        ".svn",
-        ".build",
-        ".gradle",
-        ".next",
-        ".nuxt",
-        ".utility",
-        ".venv",
-        "DerivedData",
-        "Pods",
-        "__pycache__",
-        "coverage",
-        "dist",
-        "node_modules",
-    }
-)
 
 logger = setup_logging("graph", json_format=True)
 _INDEXES: dict[str, "ProjectIndex"] = {}
@@ -55,153 +37,6 @@ class ProtocolError(Exception):
         self.reason = reason
         self.detail = detail or reason
         self.path = path
-
-
-def _sha1(data: bytes) -> str:
-    return hashlib.sha1(data).hexdigest()
-
-
-def _walk_files(root: str):
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = sorted(
-            name
-            for name in dirnames
-            if name not in SKIP_DIRS and not name.startswith(".")
-        )
-        for name in sorted(filenames):
-            if os.path.splitext(name)[1].lower() in EXTENSIONS:
-                yield os.path.join(dirpath, name)
-
-
-class ProjectIndex:
-    """In-memory symbol table for one project root."""
-
-    def __init__(self, root: str) -> None:
-        self.root = root
-        self.analyses: dict[str, FileAnalysis] = {}
-        self.by_name: dict[str, list] = {}
-        self.file_paths: set[str] = set()
-        self.exports: dict[str, list[str]] = {}
-        self.failed_files: list[str] = []
-        self._hashes: dict[str, str] = {}
-        self._langs: dict[str, str] = {}
-        self._loaded = False
-
-    def prepare(self, paths: set[str]) -> int:
-        """Load exactly the host's file set; drop files the host no longer has."""
-        for path in list(self.analyses):
-            if path not in paths:
-                self.remove(path)
-        self._loaded = True
-        for rel in sorted(paths):
-            if rel in self.analyses:
-                continue
-            lang = EXTENSIONS.get(os.path.splitext(rel)[1].lower())
-            if lang is None or lang not in PARSERS:
-                continue
-            try:
-                with open(os.path.join(self.root, rel), "rb") as handle:
-                    data = handle.read()
-                analysis = PARSERS[lang](data, rel)
-            except Exception as exc:
-                self.failed_files.append(rel)
-                logger.warning(
-                    json.dumps(
-                        {"event": "index_failed", "file": rel, "error": str(exc)}
-                    )
-                )
-                continue
-            self.analyses[rel] = analysis
-            self._hashes[rel] = _sha1(data)
-            self._langs[rel] = lang
-            self._add_symbols(analysis)
-        return len(self.analyses)
-
-    def remove(self, path: str) -> None:
-        """Removes a file, or every file under a directory path."""
-        prefix = path.rstrip("/") + "/"
-        for rel in [
-            item for item in self.analyses if item == path or item.startswith(prefix)
-        ]:
-            analysis = self.analyses.pop(rel)
-            self._drop_symbols(analysis)
-            self._hashes.pop(rel, None)
-            self._langs.pop(rel, None)
-            self.file_paths.discard(rel)
-        self._hashes.pop(path, None)
-        self._langs.pop(path, None)
-        self.file_paths.discard(path)
-
-    def ensure_loaded(self) -> None:
-        if self._loaded:
-            return
-        for full in _walk_files(self.root):
-            rel = os.path.relpath(full, self.root).replace(os.sep, "/")
-            lang = EXTENSIONS.get(os.path.splitext(rel)[1].lower())
-            if lang is None or lang not in PARSERS:
-                continue
-            try:
-                with open(full, "rb") as handle:
-                    data = handle.read()
-                analysis = PARSERS[lang](data, rel)
-            except Exception as exc:
-                self.failed_files.append(rel)
-                logger.warning(
-                    json.dumps(
-                        {"event": "index_failed", "file": rel, "error": str(exc)}
-                    )
-                )
-                continue
-            self.analyses[rel] = analysis
-            self._hashes[rel] = _sha1(data)
-            self._add_symbols(analysis)
-        self._loaded = True
-
-    def _add_symbols(self, analysis: FileAnalysis) -> None:
-        self.file_paths.add(analysis.path)
-        for symbol in analysis.symbols:
-            self.by_name.setdefault(symbol.name, []).append(symbol)
-        exported = [
-            item.raw_name for item in analysis.references if item.kind == "export"
-        ]
-        if exported:
-            self.exports[analysis.path] = exported
-
-    def _drop_symbols(self, analysis: FileAnalysis) -> None:
-        self.exports.pop(analysis.path, None)
-        for name in {symbol.name for symbol in analysis.symbols}:
-            remaining = [
-                item
-                for item in self.by_name.get(name, ())
-                if item.path != analysis.path
-            ]
-            if remaining:
-                self.by_name[name] = remaining
-            else:
-                self.by_name.pop(name, None)
-
-    def apply(self, analysis: FileAnalysis, digest: str) -> None:
-        previous = self.analyses.get(analysis.path)
-        if previous is not None:
-            self._drop_symbols(previous)
-        self.analyses[analysis.path] = analysis
-        self._hashes[analysis.path] = digest
-        self._add_symbols(analysis)
-
-    def analyze_bytes(
-        self, rel_path: str, lang: str, data: bytes
-    ) -> tuple[FileAnalysis, str]:
-        digest = _sha1(data)
-        cached = self.analyses.get(rel_path)
-        if (
-            cached is not None
-            and self._hashes.get(rel_path) == digest
-            and self._langs.get(rel_path) == lang
-        ):
-            return cached, digest
-        analysis = PARSERS[lang](data, rel_path)
-        self._langs[rel_path] = lang
-        return analysis, digest
 
 
 def _index_for(req: dict) -> ProjectIndex:
@@ -257,7 +92,7 @@ def _read_source(index: ProjectIndex, rel_path: str, full: str, req: dict) -> by
         data = handle.read()
     expected = req.get("content_hash")
     if isinstance(expected, str) and expected:
-        if _sha1(data) != expected:
+        if sha1(data) != expected:
             raise ProtocolError(
                 "content_hash_mismatch",
                 f"content hash differs for {rel_path}",
@@ -299,15 +134,77 @@ def _result(index: ProjectIndex, analysis: FileAnalysis) -> dict:
     }
 
 
+def _store_path(index: ProjectIndex) -> str:
+    path = str(project_paths.graph_db_path(index.root))
+    if os.path.isfile(path):
+        with store.GraphStore(path, readonly=True) as db:
+            if db.is_up_to_date(index.root, ENGINE_VERSION, SCHEMA_VERSION):
+                return path
+    project_scan.sync(index.root, ENGINE_VERSION, SCHEMA_VERSION)
+    return path
+
+
+def _write_file(
+    index: ProjectIndex,
+    rel_path: str,
+    lang: str,
+    data: bytes,
+    analysis: FileAnalysis,
+    result: dict,
+    db: store.GraphStore | None = None,
+) -> None:
+    full = os.path.join(index.root, rel_path)
+    try:
+        mtime = os.stat(full).st_mtime
+    except OSError:
+        mtime = 0.0
+    symbols = [
+        store.SymbolRow(
+            sym_key=store.sym_key(
+                rel_path, item.name, item.kind, item.signature, item.start_line
+            ),
+            path=rel_path,
+            name=item.name,
+            kind=item.kind,
+            signature=item.signature,
+            start_line=item.start_line,
+            end_line=item.end_line,
+        )
+        for item in analysis.symbols
+    ]
+    file_row = store.FileRow(
+        path=rel_path,
+        lang=lang,
+        size=len(data),
+        mtime=mtime,
+        content_hash=store.sha1(data),
+    )
+    edges = project_scan._edge_rows(analysis, result.get("edges") or [])
+    unresolved = project_scan._unresolved_rows(analysis, result.get("unresolved") or [])
+    if db is not None:
+        db.replace_file(file_row, symbols, edges, unresolved)
+        return
+    with store.GraphStore(_store_path(index)) as store_db:
+        store_db.replace_file(file_row, symbols, edges, unresolved)
+
+
 def _index_file(req: dict) -> dict:
     index = _index_for(req)
     rel_path, full = _normalize_path(index, req.get("path"))
     lang = _language(req, rel_path)
     data = _read_source(index, rel_path, full, req)
+    digest = store.sha1(data)
+    db_path = str(project_paths.graph_db_path(index.root))
+    if req.get("force") is False and os.path.isfile(db_path):
+        with store.GraphStore(db_path, readonly=True) as db:
+            if db.file_hash(rel_path) == digest:
+                return {"ok": True, "path": rel_path, "unchanged": True}
     index.ensure_loaded()
     analysis, digest = _analyze(index, rel_path, lang, data)
     index.apply(analysis, digest)
-    return _result(index, analysis)
+    result = _result(index, analysis)
+    _write_file(index, rel_path, lang, data, analysis, result)
+    return result
 
 
 def _index_batch(req: dict) -> dict:
@@ -317,7 +214,7 @@ def _index_batch(req: dict) -> dict:
     index = _index_for(req)
     index.ensure_loaded()
     results: list[dict | None] = [None] * len(files)
-    parsed: list[tuple[int, FileAnalysis, str]] = []
+    parsed: list[tuple[int, FileAnalysis, str, str, bytes]] = []
     for position, item in enumerate(files):
         path = item.get("path") if isinstance(item, dict) else None
         try:
@@ -327,7 +224,7 @@ def _index_batch(req: dict) -> dict:
             lang = _language(item, rel_path)
             data = _read_source(index, rel_path, full, item)
             analysis, digest = _analyze(index, rel_path, lang, data)
-            parsed.append((position, analysis, digest))
+            parsed.append((position, analysis, digest, lang, data))
         except ProtocolError as exc:
             results[position] = {
                 "ok": False,
@@ -343,10 +240,13 @@ def _index_batch(req: dict) -> dict:
                 "reason": "parse_failed",
             }
     # Apply the whole batch before resolving: bindings must not depend on input order.
-    for _, analysis, digest in parsed:
+    for _, analysis, digest, _, _ in parsed:
         index.apply(analysis, digest)
-    for position, analysis, _ in parsed:
-        results[position] = _result(index, analysis)
+    with store.GraphStore(_store_path(index)) as db:
+        for position, analysis, _, lang, data in parsed:
+            result = _result(index, analysis)
+            _write_file(index, analysis.path, lang, data, analysis, result, db=db)
+            results[position] = result
     return {"ok": True, "op": "index_batch", "results": results}
 
 
@@ -366,7 +266,56 @@ def _remove_file(req: dict) -> dict:
     index = _index_for(req)
     rel_path, _ = _normalize_path(index, req.get("path"))
     index.remove(rel_path)
+    db_path = str(project_paths.graph_db_path(index.root))
+    if os.path.isfile(db_path):
+        with store.GraphStore(db_path) as db:
+            db.delete_path_subtree(rel_path)
     return {"ok": True, "op": "remove_file", "path": rel_path}
+
+
+def _root(req: dict) -> str:
+    root = req.get("root")
+    if not isinstance(root, str) or not root.strip():
+        raise ProtocolError("bad_request", "root is required")
+    root = os.path.realpath(root)
+    if not os.path.isdir(root):
+        raise ProtocolError("root_not_found", f"not a directory: {root}")
+    return root
+
+
+def _sync(req: dict) -> dict:
+    root = _root(req)
+    result = project_scan.sync(root, ENGINE_VERSION, SCHEMA_VERSION)
+    return {"ok": True, "op": "sync", **result}
+
+
+def _status(req: dict) -> dict:
+    root = _root(req)
+    db_path = str(project_paths.graph_db_path(root))
+    if not os.path.isfile(db_path):
+        return {
+            "ok": True,
+            "op": "status",
+            "up_to_date": False,
+            "db_path": db_path,
+            "stats": {
+                "nodes": 0,
+                "edges": 0,
+                "stale": 0,
+                "files": 0,
+                "symbols": 0,
+                "unresolved": 0,
+            },
+        }
+    with store.GraphStore(db_path, readonly=True) as db:
+        return {
+            "ok": True,
+            "op": "status",
+            "up_to_date": db.is_up_to_date(root, ENGINE_VERSION, SCHEMA_VERSION),
+            "db_path": db_path,
+            "stats": db.stats(),
+            "meta": db.meta(),
+        }
 
 
 def _dispatch(req: dict) -> dict:
@@ -388,6 +337,10 @@ def _dispatch(req: dict) -> dict:
         return _prepare(req)
     if op == "remove_file":
         return _remove_file(req)
+    if op == "sync":
+        return _sync(req)
+    if op == "status":
+        return _status(req)
     raise ProtocolError("unknown_op", f"unknown op: {op!r}")
 
 

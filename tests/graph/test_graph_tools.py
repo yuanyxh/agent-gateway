@@ -35,7 +35,7 @@ CREATE TABLE unresolved (
 
 
 def _create_db(project_root: str) -> str:
-    db_path = os.path.join(project_root, ".utility", "graph.sqlite")
+    db_path = os.path.join(project_root, ".agent-gateway", "graph.sqlite")
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     connection = sqlite3.connect(db_path)
     try:
@@ -236,7 +236,7 @@ class ImpactTest(unittest.TestCase):
     def test_file_import_edge_is_traversed(self):
         with tempfile.TemporaryDirectory() as root:
             project = self._project(root)
-            db_path = os.path.join(project, ".utility", "graph.sqlite")
+            db_path = os.path.join(project, ".agent-gateway", "graph.sqlite")
             with sqlite3.connect(db_path) as connection:
                 connection.execute(
                     "INSERT INTO edges (from_key,to_key,kind,path,start_line,"

@@ -16,6 +16,7 @@ NOTE_EXCLUDE_DIRS = frozenset(
         "node_modules",
         "dist",
         ".git",
+        ".agent-gateway",
         ".utility",
         "Pods",
         ".venv",

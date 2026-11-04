@@ -70,7 +70,6 @@ from agent_gateway.services.mcp.graph_tools import (
     tool_project_lookup,
 )
 from agent_gateway.services.mcp.search_notes_cache import (
-    schedule_prewarm_for_db,
     schedule_project_notes_prewarm,
 )
 from agent_gateway.services.mcp.server_archive import archive_scheduler
@@ -802,9 +801,7 @@ async def serve():
         body = await request.json()
         project_path = str(body.get("project_path") or "").strip()
         scheduled = (
-            schedule_project_notes_prewarm(project_path)
-            if project_path
-            else schedule_prewarm_for_db(body.get("dbPath", ""))
+            schedule_project_notes_prewarm(project_path) if project_path else False
         )
         return JSONResponse({"scheduled": scheduled})
 

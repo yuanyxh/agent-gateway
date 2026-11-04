@@ -6,6 +6,10 @@ pulling in tree-sitter grammars.
 
 from __future__ import annotations
 
+#: Bumping either forces a full rebuild on both sides.
+ENGINE_VERSION = "2"
+SCHEMA_VERSION = "1"
+
 #: Extension to parser language. Mirrors the host's GraphProtocol mapping.
 EXTENSIONS = {
     ".py": "python",

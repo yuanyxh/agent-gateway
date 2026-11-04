@@ -1,8 +1,8 @@
 """MCP project graph tools: symbol lookup and impact traversal.
 
-Both tools take a project root and read <root>/.utility/graph.sqlite; the host
-owns the schema and writes. Results carry provenance (file, line, resolver,
-confidence).
+Both tools take a project root and read `<root>/.agent-gateway/graph.sqlite`
+(or a legacy `.utility/graph.sqlite`). Results carry provenance (file, line,
+resolver, confidence).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import urllib.parse
 from contextlib import contextmanager
 from datetime import datetime
 
+from agent_gateway.core import project_paths
 from agent_gateway.core.tool_defaults import arg_default
 from agent_gateway.services.graph.constants import EXTENSIONS, TYPE_KINDS
 
@@ -25,12 +26,9 @@ DIRECTIONS = ("callers", "callees", "both")
 MAX_LIMIT = 500
 MAX_DEPTH = 10
 
-#: Graph database location under a project root; never resolved from env.
-GRAPH_DB_RELATIVE_PATH = os.path.join(".utility", "graph.sqlite")
-
 
 def _graph_db_path(project_path: str) -> str:
-    return os.path.join(project_path, GRAPH_DB_RELATIVE_PATH)
+    return str(project_paths.readable_graph_db(project_path))
 
 
 #: Edge kinds the graph stores; anything else is a known blind spot.

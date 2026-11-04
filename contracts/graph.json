@@ -1,0 +1,32 @@
+{
+  "package": "agent-gateway",
+  "engine_version": "2",
+  "schema_version": "1",
+  "state_dir": ".agent-gateway",
+  "languages": [
+    "java",
+    "javascript",
+    "kotlin",
+    "objc",
+    "python",
+    "swift",
+    "typescript",
+    "vue"
+  ],
+  "extensions": {
+    ".py": "python",
+    ".swift": "swift",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".vue": "vue",
+    ".m": "objc",
+    ".h": "objc"
+  }
+}

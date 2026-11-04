@@ -324,7 +324,7 @@ CREATE TABLE unresolved (
 
 
 def _make_db(root: str, symbols, edges, files=None) -> str:
-    path = os.path.join(root, ".utility", "graph.sqlite")
+    path = os.path.join(root, ".agent-gateway", "graph.sqlite")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     connection = sqlite3.connect(path)
     try:

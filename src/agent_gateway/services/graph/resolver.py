@@ -368,6 +368,7 @@ def _edge(
         "to_name": target.name,
         "to_kind": target.kind,
         "to_signature": target.signature,
+        "to_start_line": target.start_line,
     }
 
 

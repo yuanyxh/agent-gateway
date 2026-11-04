@@ -20,7 +20,6 @@ from agent_gateway.services.mcp.search_notes_cache import (
     _ensure_note_cache,
     _get_note_db,
     prewarm_project_notes,
-    project_root_from_db_path,
 )
 from agent_gateway.services.mcp.search_notes_query import _query_project_notes
 from agent_gateway.services.mcp.search_notes_io import _chunk_md_text
@@ -28,18 +27,6 @@ from agent_gateway.services.mcp.search_notes_io import _chunk_md_text
 
 def _no_embedder():
     return nullcontext(None)
-
-
-class ProjectRootFromDbPathTest(unittest.TestCase):
-    def test_resolves_utility_layout(self):
-        db = os.path.join("/tmp", "demo", ".utility", "deps.sqlite")
-        self.assertEqual(project_root_from_db_path(db), "/tmp/demo")
-
-    def test_rejects_other_file_name(self):
-        self.assertIsNone(project_root_from_db_path("/tmp/demo/.utility/other.sqlite"))
-
-    def test_rejects_other_directory(self):
-        self.assertIsNone(project_root_from_db_path("/tmp/demo/cache/deps.sqlite"))
 
 
 class PrewarmProjectNotesTest(unittest.TestCase):
@@ -55,7 +42,7 @@ class NoteCachePruneTest(unittest.TestCase):
             readme = os.path.join(root, "README.md")
             with open(readme, "w", encoding="utf-8") as fh:
                 fh.write("# Title\n\n" + ("Detailed content. " * 20))
-            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            db = os.path.join(root, ".agent-gateway", "note_vectors.sqlite")
             os.makedirs(os.path.dirname(db))
             conn = _get_note_db(db)
             with conn:
@@ -82,7 +69,7 @@ class NoteCachePruneTest(unittest.TestCase):
 class EmbedderIdentityTest(unittest.TestCase):
     def test_drops_chunks_written_by_another_model(self):
         with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            db = os.path.join(root, ".agent-gateway", "note_vectors.sqlite")
             os.makedirs(os.path.dirname(db))
             conn = _get_note_db(db)
             with conn:
@@ -108,7 +95,7 @@ class EmbedderIdentityTest(unittest.TestCase):
 
     def test_drops_chunks_when_the_recorded_tag_changes(self):
         with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            db = os.path.join(root, ".agent-gateway", "note_vectors.sqlite")
             os.makedirs(os.path.dirname(db))
             conn = _get_note_db(db)
             with conn:
@@ -141,7 +128,7 @@ class EmbedderIdentityTest(unittest.TestCase):
 
     def test_keeps_chunks_from_the_same_model(self):
         with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            db = os.path.join(root, ".agent-gateway", "note_vectors.sqlite")
             os.makedirs(os.path.dirname(db))
             conn = _get_note_db(db)
             with conn:
@@ -374,7 +361,7 @@ class NoteScanExclusionTest(unittest.TestCase):
 class EmbedderIdentityGuardTest(unittest.TestCase):
     def test_refuses_to_drop_cache_without_explicit_model(self):
         with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            db = os.path.join(root, ".agent-gateway", "note_vectors.sqlite")
             os.makedirs(os.path.dirname(db))
             conn = _get_note_db(db)
             with conn:
@@ -407,7 +394,7 @@ class EmbedderIdentityGuardTest(unittest.TestCase):
 
     def test_drops_cache_when_the_model_is_explicit(self):
         with tempfile.TemporaryDirectory() as root:
-            db = os.path.join(root, ".utility", "note_vectors.sqlite")
+            db = os.path.join(root, ".agent-gateway", "note_vectors.sqlite")
             os.makedirs(os.path.dirname(db))
             conn = _get_note_db(db)
             with conn:
