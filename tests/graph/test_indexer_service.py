@@ -192,6 +192,91 @@ class InProcessProtocolTest(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertEqual(response["reason"], "path_outside_root")
 
+    def test_index_file_skips_hidden_dir(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write(root, ".cache/gen.py", b"def hook():\n    pass\n")
+            response = indexer.handle_line(
+                json.dumps(
+                    {
+                        "op": "index_file",
+                        "root": root,
+                        "path": ".cache/gen.py",
+                    }
+                )
+            )
+        self.assertTrue(response["ok"], response)
+        self.assertTrue(response["skipped"])
+        self.assertNotIn("symbols", response)
+
+    def test_batch_skips_dot_and_skip_dirs(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write(root, ".build/out/gen.py", b"def gen():\n    pass\n")
+            self._write(root, ".cache/gen.py", b"def cached():\n    pass\n")
+            self._write(root, "node_modules/pkg/i.py", b"def i():\n    pass\n")
+            self._write(root, "pkg/real.py", b"def real():\n    pass\n")
+            response = indexer.handle_line(
+                json.dumps(
+                    {
+                        "op": "index_batch",
+                        "root": root,
+                        "files": [
+                            {"path": ".build/out/gen.py"},
+                            {"path": ".cache/gen.py"},
+                            {"path": "node_modules/pkg/i.py"},
+                            {"path": "pkg/real.py"},
+                        ],
+                    }
+                )
+            )
+            index = indexer._INDEXES[os.path.realpath(root)]
+            by_path = {result["path"]: result for result in response["results"]}
+        self.assertTrue(response["ok"], response)
+        self.assertTrue(by_path[".build/out/gen.py"]["skipped"])
+        self.assertTrue(by_path[".cache/gen.py"]["skipped"])
+        self.assertTrue(by_path["node_modules/pkg/i.py"]["skipped"])
+        self.assertTrue(by_path["pkg/real.py"]["ok"])
+        self.assertNotIn("skipped", by_path["pkg/real.py"])
+        self.assertEqual(set(index.analyses), {"pkg/real.py"})
+
+    def test_prepare_drops_skipped_paths(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write(root, ".build/out/gen.py", b"def helper():\n    pass\n")
+            self._write(root, "pkg/a.py", b"def run():\n    return helper()\n")
+            prepared = indexer.handle_line(
+                json.dumps(
+                    {
+                        "op": "prepare",
+                        "root": root,
+                        "paths": [".build/out/gen.py", "pkg/a.py"],
+                    }
+                )
+            )
+            response = indexer.handle_line(
+                json.dumps({"op": "index_file", "root": root, "path": "pkg/a.py"})
+            )
+        self.assertTrue(prepared["ok"], prepared)
+        self.assertEqual(prepared["count"], 1)
+        to_paths = {edge.get("to_path") for edge in response.get("edges", [])}
+        self.assertNotIn(".build/out/gen.py", to_paths)
+        self.assertEqual(
+            [item["raw_name"] for item in response.get("unresolved", [])], ["helper"]
+        )
+
+    def test_remove_file_accepts_skipped_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write(root, ".build/out/gen.py", b"def gen():\n    pass\n")
+            response = indexer.handle_line(
+                json.dumps(
+                    {
+                        "op": "remove_file",
+                        "root": root,
+                        "path": ".build/out/gen.py",
+                    }
+                )
+            )
+        self.assertTrue(response["ok"], response)
+        self.assertEqual(response["path"], ".build/out/gen.py")
+
     def test_bad_json_and_unknown_op(self):
         bad = indexer.handle_line("{not json")
         self.assertFalse(bad["ok"])

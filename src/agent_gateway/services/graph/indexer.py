@@ -23,7 +23,7 @@ from agent_gateway.services.graph import (
     resolver,
     store,
 )
-from agent_gateway.services.graph.analysis import ProjectIndex, sha1
+from agent_gateway.services.graph.analysis import SKIP_DIRS, ProjectIndex, sha1
 from agent_gateway.services.graph.constants import (
     ENGINE_VERSION as ENGINE_VERSION,
     SCHEMA_VERSION as SCHEMA_VERSION,
@@ -194,9 +194,16 @@ def _write_file(
         store_db.replace_file(file_row, symbols, edges, unresolved)
 
 
+def _skip_path(rel_path: str) -> bool:
+    dirs = rel_path.split("/")[:-1]
+    return any(name in SKIP_DIRS or name.startswith(".") for name in dirs)
+
+
 def _index_file(req: dict) -> dict:
     index = _index_for(req)
     rel_path, full = _normalize_path(index, req.get("path"))
+    if _skip_path(rel_path):
+        return {"ok": True, "path": rel_path, "skipped": True}
     lang = _language(req, rel_path)
     data = _read_source(index, rel_path, full, req)
     digest = store.sha1(data)
@@ -227,6 +234,9 @@ def _index_batch(req: dict) -> dict:
             if not isinstance(item, dict):
                 raise ProtocolError("bad_request", "each file entry must be an object")
             rel_path, full = _normalize_path(index, item.get("path"))
+            if _skip_path(rel_path):
+                results[position] = {"ok": True, "path": rel_path, "skipped": True}
+                continue
             lang = _language(item, rel_path)
             data = _read_source(index, rel_path, full, item)
             analysis, digest = _analyze(index, rel_path, lang, data)
@@ -264,7 +274,8 @@ def _prepare(req: dict) -> dict:
     paths: set[str] = set()
     for item in raw:
         rel_path, _ = _normalize_path(index, item)
-        paths.add(rel_path)
+        if not _skip_path(rel_path):
+            paths.add(rel_path)
     return {"ok": True, "op": "prepare", "count": index.prepare(paths)}
 
 
