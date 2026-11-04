@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """知识面板的 schema 所有者与全部数据访问。
 
-DB 位置 = `config.data_dir()/knowledge.sqlite`（即 `~/.config/utility/`）。该 env 由 Swift 的
-两个注入点（`baseEnvironment()` / `taskEnvironmentOverrides()`）都注成同一个 AppPaths.configDir，
-故 Python 与 Swift 天然同源，不新增路径 env。
+DB 位置 = `config.data_dir()/knowledge.sqlite`（默认 `GATEWAY_HOME`）。宿主与独立运行
+共用同一入口，不新增路径 env。
 
 **建表与迁移只在这里发生**。Swift 侧（`Sources/Knowledge/KnowledgeStore.swift`）只做裸 SQL 读写，
 绝不建表——表由 Python 拥有，两边各建一份 schema 必然漂移。

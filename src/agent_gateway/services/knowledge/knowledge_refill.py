@@ -5,7 +5,7 @@
 它的 handleMissed 以「今天第一个 cron 点」为基准，任何 sub-daily 的 cron 都会
 静默退化成每天一次）。池子够了就直接退出，所以调用方可以放心按固定节拍唤醒。
 
-退出码恒为 0，结果以 JSON 打印到 stdout；真正的问题写 `~/.cache/utility/knowledge_refill.log`。
+退出码恒为 0，结果以 JSON 打印到 stdout；真正的问题写 `GATEWAY_CACHE/knowledge_refill.log`。
 不走 TaskScheduler 的通知路径 —— 每 30 分钟弹一条系统通知会疯掉。
 """
 
@@ -124,7 +124,8 @@ def _refill_topics(budget: int) -> tuple[int, int, list]:
     return budget, added, results
 
 
-def main() -> int:
+def refill() -> dict:
+    """Internal entry used by the CLI shim and external callers."""
     path = pool.init_db()
     added_topics = pool.seed_from_config()
     pruned = pool.prune_expired(config.knowledge_retention_days())
@@ -147,7 +148,11 @@ def main() -> int:
         "results": results,
     }
     logger.info("refill done: made=%d calls_used=%d", made, summary["calls_used"])
-    print(json.dumps(summary, ensure_ascii=False))
+    return summary
+
+
+def main() -> int:
+    print(json.dumps(refill(), ensure_ascii=False))
     return 0
 
 
