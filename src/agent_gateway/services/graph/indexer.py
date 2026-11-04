@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 import time
 import traceback
@@ -16,7 +17,12 @@ import uuid
 
 from agent_gateway.core import project_paths
 from agent_gateway.core.log_utils import setup_logging
-from agent_gateway.services.graph import project_scan, resolver, store
+from agent_gateway.services.graph import (
+    indexer_marker,
+    project_scan,
+    resolver,
+    store,
+)
 from agent_gateway.services.graph.analysis import ProjectIndex, sha1
 from agent_gateway.services.graph.constants import (
     ENGINE_VERSION as ENGINE_VERSION,
@@ -403,15 +409,51 @@ def handle_line(raw: str) -> dict:
     return response
 
 
+def _registered_root() -> str:
+    if len(sys.argv) < 2:
+        return ""
+    candidate = sys.argv[1].strip()
+    if not candidate:
+        return ""
+    root = os.path.realpath(candidate)
+    return root if os.path.isdir(root) else ""
+
+
+def _install_stop_handlers() -> None:
+    def _stop(_signum, _frame) -> None:
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+
+
 def main() -> int:
     """Read requests until stdin closes; stdout carries protocol lines only."""
-    for raw in sys.stdin.buffer:
-        text = raw.decode("utf-8", "replace").strip()
-        if not text:
-            continue
-        response = handle_line(text)
-        sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+    root = _registered_root()
+    registered = False
+    if root:
+        try:
+            indexer_marker.register(root)
+            registered = True
+        except OSError as exc:
+            logger.warning("indexer marker unavailable: %s", exc)
+    _install_stop_handlers()
+    try:
+        for raw in sys.stdin.buffer:
+            text = raw.decode("utf-8", "replace").strip()
+            if not text:
+                continue
+            response = handle_line(text)
+            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        if registered:
+            try:
+                indexer_marker.unregister(root)
+            except OSError as exc:
+                logger.warning("indexer marker cleanup failed: %s", exc)
     return 0
 
 

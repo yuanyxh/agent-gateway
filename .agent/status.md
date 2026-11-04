@@ -69,6 +69,12 @@
 - 2026-11-04 1.1.46 部署复验：安装 wheel 含 `unique_symbols`；含 `marked.umd.js` 的临时项目全量 sync 成功（248 符号/47 边/24 ms）；MCP 9001、代理 8613 健康，`project_lookup`/`project_impact` 正常。旧 agent 会话 PID 4760/4766 仍运行，需退出后才能确认新会话
 - 2026-11-04 审查修复：宿主生成配置保留 `search` 段；`copy_legacy` 改用 SQLite backup 覆盖 WAL；索引器复用 `analysis.ProjectIndex` 并补 `build` 跳过；`idleUnloadSeconds` 接入 env；legacy 嵌套 knowledge 可识别；`GATEWAY_CONFIG_FORMAT` 与 `EMBEDDER_IDLE_UNLOAD_SECONDS` 进契约；修正测试旧属性。全量 526 例通过
 - 2026-11-04 1.1.47 部署复验：wheel 含统一 ProjectIndex 与 SQLite backup；生成配置含 `search`（parallel=true）与 idle=600；app 契约含两个新 env；含 `build/` 的临时项目全量 sync 只索引 2 文件、`build_symbols=0`；MCP/代理健康
+- 2026-11-04 项目图库异步刷新：新增 `services/graph/indexer_marker.py`（索引器 PID/启动时间登记）与 `refresh.py`（每项目 30 秒后台重建、`refresh.lock` 防跨进程并发）；`project_lookup` / `project_impact` 接入；索引器 `main()` 接收项目根并注销；新增 18 例测试，全量 544 例通过；隔离 e2e 断言登记 live/stopped
+- 2026-11-04 1.1.48 部署验证：安装 wheel 含 `indexer_marker.py` / `refresh.py`；MCP 直接查询验证缺失图库和旧图库都在约 30 秒后重建，第二次查询命中；部署版索引器重复 SIGTERM 会中断注销，留下死条目（下一次查询会清理），源码已在 `finally` 中忽略后续 SIGTERM
+- 2026-11-04 1.1.49 部署复验：安装包与随包 wheel 均含 `SIG_IGN` 修复；真实 `utility -a` 索引器登记 live，退出后直接为空；MCP `project_lookup` 缺失图库 35 秒后重建并命中；旧 agent 会话 30624/30631 仍运行 1.1.48 索引器，重启会话后才会登记
+- 2026-11-04 15:40 重启复验：旧 30624/30631 已退出；新会话 41753 + 索引器 41760（命令带项目根）；utility 项目 `indexer.json` 登记 live；`project_lookup` 后未生成 `refresh.lock`，活索引器跳过刷新生效
+- 2026-11-04 审查修复：`ps` 固定 `TZ=UTC`，避免索引器与 MCP 时区不同误判 PID 复用；`os.kill` 捕获 `OverflowError`；`refresh` / `project_scan` 改为按需导入，避免 MCP 常驻 tree-sitter 解析器；新增 handler 接线测试。全量 549 例通过，e2e 通过
+- 2026-11-04 1.1.50 部署复验：安装包与随包 wheel 含 TZ / Overflow / 延迟导入修复；真实 `utility -a` 索引器登记为 UTC 时间、退出后为空；MCP 缺失图库 35 秒后重建并命中；旧 agent 会话 41753/41760 仍是 1.1.49 索引器，登记时间为本地时区，需重启会话
 
 ## 下一步
 
@@ -121,6 +127,17 @@
 | 2026-11-03 | 部署比对（工作区 vs 安装副本） | 7 个改动模块全部 same；`/health` 正常 |
 | 2026-11-03 | 重启后 `api_usage` 路由字段 | 8/8 有值；deepseek/model_match、mimo/default_provider |
 | 2026-11-03 | 路由详情打点后 `unittest discover` | 通过（503 例） |
+| 2026-11-04 | `ruff format --check` / `ruff check` / `unittest discover` | 通过（549 例） |
+| 2026-11-04 | `bash scripts/e2e-isolated.sh`（utility） | 通过；登记 live → 停止后空 |
+| 2026-11-04 | 审查修复后 `unittest discover` / e2e | 通过（549 例 / 隔离 e2e） |
+| 2026-11-04 | 1.1.48 MCP `project_lookup` 缺失图库 | 第一次 error；35 秒后重查 ok（L3） |
+| 2026-11-04 | 1.1.48 MCP `project_lookup` 旧图库 | 第一次 no_match；35 秒后重查 ok，命中 `added`（L3） |
+| 2026-11-04 | 1.1.48 部署版索引器退出 | 登记 live；退出后条目残留，下一次查询清理（已在 1.1.49 修复） |
+| 2026-11-04 | 1.1.49 部署版索引器退出 | 登记 live；退出后条目为空（L3） |
+| 2026-11-04 | 1.1.49 MCP `project_lookup` 缺失图库 | 第一次 error；35 秒后重查 ok（L3） |
+| 2026-11-04 | 15:40 新 agent 会话 | 41753 + 索引器 41760；登记 live；查询后无 `refresh.lock` |
+| 2026-11-04 | 1.1.50 部署版索引器退出 | 登记时间为 UTC；退出后为空（L3） |
+| 2026-11-04 | 1.1.50 MCP 缺失图库刷新 | 第一次 error；35 秒后重查 ok（L3） |
 
 ## 已知问题
 

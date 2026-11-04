@@ -272,6 +272,20 @@ async def _handle_memory_graph(arguments: dict) -> list[TextContent]:
     return await handle_memory_graph(arguments)
 
 
+async def _schedule_project_refresh(path: str) -> None:
+    def _schedule():
+        from agent_gateway.services.graph.refresh import (
+            schedule_project_graph_refresh,
+        )
+
+        return schedule_project_graph_refresh(path)
+
+    try:
+        await asyncio.to_thread(_schedule)
+    except Exception:
+        logger.warning("failed to schedule graph refresh: %s", path, exc_info=True)
+
+
 @_register("project_lookup")
 async def _handle_project_lookup(arguments: dict) -> list[TextContent]:
     path = arguments["path"]
@@ -279,6 +293,7 @@ async def _handle_project_lookup(arguments: dict) -> list[TextContent]:
     kind = arguments.get("kind", "")
     file_path = arguments.get("file_path", "")
     limit = int_arg(arguments, "limit", LOOKUP_DEFAULT_LIMIT)
+    await _schedule_project_refresh(path)
 
     # Validation, a missing graph and the empty-query overview are not
     # retrieval, so they keep the original response shape.
@@ -326,9 +341,11 @@ async def _handle_project_lookup(arguments: dict) -> list[TextContent]:
 
 @_register("project_impact")
 async def _handle_project_impact(arguments: dict) -> list[TextContent]:
+    path = arguments["path"]
+    await _schedule_project_refresh(path)
     result = await asyncio.to_thread(
         tool_project_impact,
-        arguments["path"],
+        path,
         arguments["target"],
         arguments.get("direction", "callers"),
         int_arg(arguments, "depth", IMPACT_DEFAULT_DEPTH),
