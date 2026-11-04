@@ -15,6 +15,7 @@
 | 换模型 jina-zh | 热层/冷层已重建，地板由自动标定写入（现 hot 0.616 / cold 0.569）；可采信的结论只有不相关率：minilm 40.5% → jina 12.5%（249 条同批、不依赖意图判断） | — |
 | notes 层降噪 | 语义复核（minilm 0.40 / jina 0.35）+ **仅作兜底**：hot/cold 有命中时 notes 不进主结果；抽样 100 条 notes 占比 26.2%→8.5%，空返回不增 | — |
 | 记忆体第二轮改进 | 近邻矛盾候选、打分批量写、受保护记忆、dry-run、检索层归档过滤、多信号排序（默认关）、摘要预算折叠已实现并通过 379 例；等打包部署 | — |
+| gateway 与 utility 完全解耦 | 配置/路径/项目数据/图库写权已落地；legacy 适配保留一个发布周期；522 例与 ruff 通过；待用户验证与提交 | — |
 
 ## 已完成
 
@@ -58,6 +59,16 @@
 - 2026-11-03 部署复验：代理与 MCP 19:59 重启，安装副本 7 个改动模块均与工作区一致；`gateway_log` 已有 `upstream` 列；重启后 8 条 `api_usage` 全部写入路由字段（deepseek/model_match、mimo/default_provider）。重启后尚无 4xx/5xx 样本，502 字段待下一条错误复验
 - 2026-11-03 路由详情打点：`api_usage.route_detail` 记录 `requested=<原 model>`；未命中任何 provider 时额外打 `route_fallback` 警告；新增 2 例测试，全量 503 通过。20:24 已部署，摘要请求确认为 `claude-sonnet-5`
 - 2026-11-03 按主题提交 8 个 commit（607f80c..d9bef06），工作区干净；未推送
+- 2026-11-04 解耦配置与路径：新增 `core/env_compat.py`、`core/config_compat.py`、`core/project_paths.py`；默认配置改为 `agent-gateway.yaml`（原生 schema），旧 `config.yaml` 只读翻译；`GATEWAY_*` 统一命名，`UTILITY_*` 别名保留一个周期；`daemon.state_dir()` 与 `env_builder.config_root()` 改走 `gateway_home()`
+- 2026-11-04 项目数据目录迁移：`graph_tools` / `search_notes_cache` 统一经 `project_paths` 解析 `.agent-gateway/`，旧 `.utility/` 只复制回退不删；`GATEWAY_PROJECT_DIR` 可覆盖；新增 `test_project_paths.py`
+- 2026-11-04 图库写权移交：新增 `services/graph/store.py`（唯一 schema 所有者）与 `project_scan.py`（walk/对账/全量重建）；协议增 `sync` / `status`，新增 `agent-gateway graph index|status`；`contracts/graph.json` 导出引擎与 schema 版本
+- 2026-11-04 工具输出去重更名：`skillDedupEnabled` / `MODEL_PROXY_SKILL_DEDUP` / `proxy_skill_dedup.py` / 注记键统一改为 `toolOutputDedup` / `MODEL_PROXY_TOOL_OUTPUT_DEDUP` / `proxy_tool_output_dedup.py`；旧键与旧 env 继续识别
+- 2026-11-04 验证：全量 522 例通过，`ruff check` 通过；`GATEWAY_HOME=$(mktemp -d)` 下 `--check` 通过；`graph index --root` 生成 `.agent-gateway/graph.sqlite`
+- 2026-11-04 隔离端到端：`HOME` + `CFFIXED_USER_HOME` 指向临时目录，venv 软链 gateway `.venv`；`utility -a "sleep 18"` 真实启动，首建 6 节点/2 边，运行中改文件触发 `index_file` 后增至 6 符号，`project_lookup`/`project_impact` 命中；隔离配置自动生成，项目根未出现 `.utility`
+- 2026-11-04 部署验证修复：1.1.45 首启装 wheel、MCP/代理健康、配置生成均正常；全量 `sync` 因压缩 JS `marked.umd.js` 产出重复 `sym_key` 触发 `UNIQUE constraint failed: symbols.sym_key`。`store.replace_graph` / `replace_file` 增加按 key 去重，新增回归测试；全量 523 例通过，修复后源码重建得到 4546 符号/2861 边。需重新打包部署
+- 2026-11-04 1.1.46 部署复验：安装 wheel 含 `unique_symbols`；含 `marked.umd.js` 的临时项目全量 sync 成功（248 符号/47 边/24 ms）；MCP 9001、代理 8613 健康，`project_lookup`/`project_impact` 正常。旧 agent 会话 PID 4760/4766 仍运行，需退出后才能确认新会话
+- 2026-11-04 审查修复：宿主生成配置保留 `search` 段；`copy_legacy` 改用 SQLite backup 覆盖 WAL；索引器复用 `analysis.ProjectIndex` 并补 `build` 跳过；`idleUnloadSeconds` 接入 env；legacy 嵌套 knowledge 可识别；`GATEWAY_CONFIG_FORMAT` 与 `EMBEDDER_IDLE_UNLOAD_SECONDS` 进契约；修正测试旧属性。全量 526 例通过
+- 2026-11-04 1.1.47 部署复验：wheel 含统一 ProjectIndex 与 SQLite backup；生成配置含 `search`（parallel=true）与 idle=600；app 契约含两个新 env；含 `build/` 的临时项目全量 sync 只索引 2 文件、`build_symbols=0`；MCP/代理健康
 
 ## 下一步
 

@@ -1,6 +1,6 @@
 # agent-gateway
 
-为 Utility 客户端提供 AI 能力层：MCP 记忆、LLM 网关、token 代理与桌面自动化服务。
+自包含的 AI 能力层：MCP 记忆、LLM 网关、token 代理、项目图与桌面自动化服务。Utility 是客户端之一，不是运行前提。
 
 形态：library　技术栈：Python / 无框架　运行期：Python ≥3.12
 
@@ -18,10 +18,10 @@
 2. **事实优先**：代码、测试、构建输出与运行日志高于记忆；结论附命令输出或文件路径。
 3. **授权边界**：提交、推送、发布、删除、产生费用或外发数据前必须取得用户确认。
 4. **决策分级**：目标/范围/预算由用户定；技术选型与实现细节由 agent 决定并记入决策日志；只在不可逆、产生费用、隐私合规、目标冲突时暂停。
-5. **凭据不入库**：密钥只从 `config.yaml` 读取，不进入源码、日志与提交记录。
+5. **凭据不入库**：密钥只从 `agent-gateway.yaml` 读取，不进入源码、日志与提交记录。
 6. **删除可恢复**：删除文件或数据优先移到废纸篓。
 7. **仓边界**：本仓只做能力层。服务端与 Agent 循环在 workspace 仓（Node/TS），禁止把服务端或移动端代码加入本仓。
-8. **配置唯一来源**：`config.yaml`；env 只做覆盖；任何服务都必须能在没有宿主注入时独立启动。
+8. **配置唯一来源**：`agent-gateway.yaml`；env 只做覆盖；任何服务都必须能在没有宿主注入时独立启动。旧宿主形状只经 `core/config_compat.py` 翻译，保留一个发布周期。
 9. **跨仓契约用文件**：消费方读 `contracts/*.json`，不扫描源码。
 <!-- core:end -->
 
@@ -112,3 +112,5 @@
 | 运行 | `agent-gateway --check` |
 | 版本检测 | `pip list --outdated` |
 | 契约导出 | `agent-gateway --export-contracts` |
+| 独立自检 | `GATEWAY_HOME=$(mktemp -d) agent-gateway --check` |
+| 建图 | `agent-gateway graph index --root /tmp/demo --json` |

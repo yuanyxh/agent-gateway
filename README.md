@@ -78,8 +78,8 @@ HTTP endpoints and JSON contracts instead of importing internals.
 
 ### Local-first operation
 
-- `config.yaml` is the single configuration source; environment variables override
-  individual values.
+- `agent-gateway.yaml` is the single configuration source; environment variables
+  override individual values.
 - Vector data, caches, logs and SQLite databases stay under `GATEWAY_HOME` and
   `GATEWAY_CACHE`.
 - No hosted control plane and no telemetry. The embedding model is downloaded once
@@ -167,17 +167,22 @@ mkdir -p ~/.config/agent-gateway
 export GATEWAY_HOME="$HOME/.config/agent-gateway"
 ```
 
-Write `~/.config/agent-gateway/config.yaml`:
+Write `~/.config/agent-gateway/agent-gateway.yaml`:
 
 ```yaml
-mcp:
-  enabled: true
-  qdrantPath: ~/.config/agent-gateway/data/qdrant
-  embedderModel: sentence-transformers/all-MiniLM-L6-v2
-  knowledgeBasePath: ~/notes
+server:
+  mcp:
+    enabled: true
+  proxy:
+    enabled: false
 
-modelProxy:
-  enabled: false
+memory:
+  qdrantPath: ~/.config/agent-gateway/data/qdrant
+  embedder:
+    model: sentence-transformers/all-MiniLM-L6-v2
+
+notes:
+  dir: ~/notes
 ```
 
 Check the environment and start the MCP service:
@@ -283,32 +288,37 @@ The token proxy adds:
 
 ## Configuration
 
-`agent-gateway` reads `$GATEWAY_HOME/config.yaml` unless `GATEWAY_CONFIG` points to
-another file. An environment variable always wins over the YAML value; the YAML
-value wins over the built-in default.
+`agent-gateway` reads `$GATEWAY_HOME/agent-gateway.yaml` unless `GATEWAY_CONFIG`
+points to another file. An environment variable always wins over the YAML value;
+the YAML value wins over the built-in default. A legacy host `config.yaml` shape
+is translated for one release (`GATEWAY_CONFIG_FORMAT=legacy` forces it).
 
 | Variable | Purpose |
 | --- | --- |
 | `GATEWAY_HOME` | State root; defaults to `~/.config/agent-gateway` |
 | `GATEWAY_CONFIG` | Explicit config file |
 | `GATEWAY_CACHE` | Cache root; defaults to `~/.cache/agent-gateway` |
-| `UTILITY_DATA_DIR` | Legacy alias for the state root |
+| `GATEWAY_PROJECT_DIR` | Project state dir name; defaults to `.agent-gateway` |
+| `GATEWAY_LANG`, `GATEWAY_LOG_MAX_SIZE`, `GATEWAY_LOG_BACKUP_COUNT` | Language and log rotation |
 | `MCP_PORT`, `MODEL_PROXY_PORT` | Service ports |
-| `QDRANT_PATH`, `FASTEMBED_CACHE_PATH`, `EMBEDDER_MODEL`, `EMBEDDER_IDLE_UNLOAD_SECONDS` | Vector storage and embedder (`0` keeps the model resident) |
+| `QDRANT_PATH`, `FASTEMBED_CACHE_PATH`, `EMBEDDER_MODEL` | Vector storage and embedder |
 | `AI_API_KEY`, `AI_LLM_TIMEOUT`, `SUMMARY_MODEL`, `SUMMARY_API_URL` | Model access |
 | `RETRIEVAL_TRACE`, `RETRIEVAL_TRACE_DAYS` | Retrieval tracing |
-| `GATEWAY_SEARCH_ENGINES`, `GATEWAY_SEARCH_ORDER`, `GATEWAY_SEARCH_PROVIDERS`, `GATEWAY_SEARCH_RUNTIME` | Search overrides (runtime: hard timeout / parallel) |
+| `GATEWAY_SEARCH_*` | Engine list, order, providers and runtime limits |
 
-Main `config.yaml` sections:
+`UTILITY_DATA_DIR`, `UTILITY_LANG`, `UTILITY_LOG_*` and `UTILITY_USER_ID` are
+accepted as deprecated aliases for one release.
+
+Main `agent-gateway.yaml` sections:
 
 | Section | Contents |
 | --- | --- |
-| `ai` | API key, base URL, model, timeout |
-| `mcp` | Enable switch, port, storage paths, embedder, notes, memory limits |
-| `modelProxy` | Enable switch, port, providers, output filter, skill dedup |
+| `llm` | API key, base URL, model, timeout |
+| `language`, `logging` | UI/prompt language and log rotation |
+| `server.mcp`, `server.proxy` | Enable switches, ports, providers, output filter, tool-output dedup |
+| `memory`, `notes` | Qdrant, embedder, memory limits, note paths/rules |
 | `search` | Engine list, order, per-engine endpoints and rate limits |
-| `knowledge` | Topics, pool target, failure streak, retention |
-| `general` | Language, log size and rotation |
+| `knowledge`, `summary`, `graph` | Product modules and project graph settings |
 
 `contracts/env.json` is generated from the implementation and lists every
 environment variable the package reads. `contracts/entries.json` lists the module

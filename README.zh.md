@@ -58,13 +58,13 @@
 - 按模型名精确路由到多个提供方，并支持改写上游模型名。
 - 流式响应、`gzip`/`deflate`/`br`/`zstd` 解码、SSE 用量提取与逐请求记录集中在
   一处处理。
-- 可选的请求/响应改写包括工具输出压缩、重复 skill 去重，以及逐请求说明本轮改写
+- 可选的请求/响应改写包括工具输出压缩、重复工具输出去重，以及逐请求说明本轮改写
   了什么。
 - 用量写入 SQLite，并通过 `/usage/summary`、`/usage/tools`、`/usage/layers` 查询。
 
 ### 本地优先
 
-- `config.yaml` 是唯一配置源，环境变量可以覆盖单项配置。
+- `agent-gateway.yaml` 是唯一配置源，环境变量可以覆盖单项配置。
 - 向量数据、缓存、日志与 SQLite 数据库都位于 `GATEWAY_HOME` 与 `GATEWAY_CACHE`
   下。
 - 不依赖托管控制面，也不上报遥测。嵌入模型首次下载后由本地缓存提供。
@@ -151,17 +151,22 @@ mkdir -p ~/.config/agent-gateway
 export GATEWAY_HOME="$HOME/.config/agent-gateway"
 ```
 
-写入 `~/.config/agent-gateway/config.yaml`：
+写入 `~/.config/agent-gateway/agent-gateway.yaml`：
 
 ```yaml
-mcp:
-  enabled: true
-  qdrantPath: ~/.config/agent-gateway/data/qdrant
-  embedderModel: sentence-transformers/all-MiniLM-L6-v2
-  knowledgeBasePath: ~/notes
+server:
+  mcp:
+    enabled: true
+  proxy:
+    enabled: false
 
-modelProxy:
-  enabled: false
+memory:
+  qdrantPath: ~/.config/agent-gateway/data/qdrant
+  embedder:
+    model: sentence-transformers/all-MiniLM-L6-v2
+
+notes:
+  dir: ~/notes
 ```
 
 检查环境并启动 MCP 服务：
@@ -184,7 +189,7 @@ agent-gateway --serve --service mcp
 }
 ```
 
-`/health` 返回存活状态。若 `mcp.port` 为 `0`，CLI 会探测空闲端口，并把结果记录到
+`/health` 返回存活状态。若 `server.mcp.port` 为 `0`，CLI 会探测空闲端口，并把结果记录到
 `GATEWAY_HOME/runtime/`。
 
 ### 启用模型网关
@@ -192,10 +197,11 @@ agent-gateway --serve --service mcp
 添加一个或多个提供方并启动代理：
 
 ```yaml
-modelProxy:
-  enabled: true
-  providers:
-    - name: anthropic
+server:
+  proxy:
+    enabled: true
+    providers:
+      - name: anthropic
       url: https://api.anthropic.com
       apiFormat: anthropic
       apiKey: "your-key"
@@ -268,30 +274,36 @@ token 代理额外提供：
 ## 配置
 
 除非 `GATEWAY_CONFIG` 指向其他文件，`agent-gateway` 读取
-`$GATEWAY_HOME/config.yaml`。环境变量始终优先于 YAML，YAML 优先于内置默认值。
+`$GATEWAY_HOME/agent-gateway.yaml`。环境变量始终优先于 YAML，YAML 优先于内置默认值。
+旧宿主的 `config.yaml` 形状会翻译成新结构并保留一个发布周期
+（`GATEWAY_CONFIG_FORMAT=legacy` 可强制走适配器）。
 
 | 环境变量 | 用途 |
 | --- | --- |
 | `GATEWAY_HOME` | 状态根目录，默认 `~/.config/agent-gateway` |
 | `GATEWAY_CONFIG` | 显式指定配置文件 |
 | `GATEWAY_CACHE` | 缓存根目录，默认 `~/.cache/agent-gateway` |
-| `UTILITY_DATA_DIR` | 状态根目录的旧别名 |
+| `GATEWAY_PROJECT_DIR` | 项目内状态目录名，默认 `.agent-gateway` |
+| `GATEWAY_LANG`、`GATEWAY_LOG_MAX_SIZE`、`GATEWAY_LOG_BACKUP_COUNT` | 语言与日志轮转 |
 | `MCP_PORT`、`MODEL_PROXY_PORT` | 服务端口 |
-| `QDRANT_PATH`、`FASTEMBED_CACHE_PATH`、`EMBEDDER_MODEL`、`EMBEDDER_IDLE_UNLOAD_SECONDS` | 向量存储与嵌入模型（`0` 表示常驻） |
+| `QDRANT_PATH`、`FASTEMBED_CACHE_PATH`、`EMBEDDER_MODEL` | 向量存储与嵌入模型 |
 | `AI_API_KEY`、`AI_LLM_TIMEOUT`、`SUMMARY_MODEL`、`SUMMARY_API_URL` | 模型访问 |
 | `RETRIEVAL_TRACE`、`RETRIEVAL_TRACE_DAYS` | 检索追踪 |
-| `GATEWAY_SEARCH_ENGINES`、`GATEWAY_SEARCH_ORDER`、`GATEWAY_SEARCH_PROVIDERS`、`GATEWAY_SEARCH_RUNTIME` | 搜索覆盖（runtime：硬超时 / 并行） |
+| `GATEWAY_SEARCH_*` | 搜索引擎列表、顺序、提供方与运行时限制 |
 
-`config.yaml` 的主要配置段：
+`UTILITY_DATA_DIR`、`UTILITY_LANG`、`UTILITY_LOG_*` 与 `UTILITY_USER_ID` 作为
+已弃用别名保留一个发布周期。
+
+`agent-gateway.yaml` 的主要配置段：
 
 | 配置段 | 内容 |
 | --- | --- |
-| `ai` | API key、base URL、模型、超时 |
-| `mcp` | 启用开关、端口、存储路径、嵌入模型、笔记、记忆上限 |
-| `modelProxy` | 启用开关、端口、提供方、输出过滤、skill 去重 |
+| `llm` | API key、base URL、模型、超时 |
+| `language`、`logging` | 界面/提示词语言与日志轮转 |
+| `server.mcp`、`server.proxy` | 启用开关、端口、提供方、输出过滤、工具输出去重 |
+| `memory`、`notes` | Qdrant、嵌入模型、记忆上限、笔记路径与规则 |
 | `search` | 引擎列表、顺序、各引擎端点与限速 |
-| `knowledge` | 主题、池目标、连续失败上限、保留天数 |
-| `general` | 语言、日志大小与轮转 |
+| `knowledge`、`summary`、`graph` | 产品模块与项目图配置 |
 
 `contracts/env.json` 从实现生成，列出本包读取的全部环境变量；
 `contracts/entries.json` 列出宿主可以启动的模块入口。消费方可以基于这些文件校验，

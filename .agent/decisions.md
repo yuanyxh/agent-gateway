@@ -58,3 +58,6 @@
 | 2026-11-02 | D1 | 公开发布：仓库公开，`.agent/` 与 `CLAUDE.md` 作为开发者文档保留公开；许可证 MIT；`README.md` 为英文权威入口，`README.zh.md` 为中文镜像 | 用户 | 用户明确选择公开开源、保留内部文档与 MIT；双语为发布要求 | 改回私有需撤销远端公开与许可证声明 |
 | 2026-11-03 | D3 | `route_tier` 记录实际 provider 名，`route_reason` 记录 `model_match`/`default_provider`/`legacy_upstream`；不恢复旧 strong/weak 路由 | Agent | 当前仓只有 provider 选择，没有分层路由；旧列全空，按实际路由写入才能回答「这一轮走了哪个上游」 | 恢复留空即可；历史 strong/weak 行保留 |
 | 2026-11-03 | D3 | 基座升级到 agent-vibe 1.4.0：合并规则/技能，补 backlog/upgrades/plans；跳过 ship/deploy/ui；lockfile 暂为 none | Agent | 用户确认升级；画像 `deploy_target: none`、`has_ui: false`；项目按 pyproject extras 安装，无锁定文件 | 按 `.agent/plans/base-upgrade-1.4.0.md` 的清单与 git 历史回退 |
+| 2026-11-04 | D3 | 项目内数据目录改为 `.agent-gateway/`，图库 schema 与写入归 gateway；utility 只发文件事件 | 用户 | utility 退化为客户端，宿主不应拥有图库写权；旧 `.utility/` 仅复制回退，避免迁移丢数据 | `GATEWAY_PROJECT_DIR=.utility` 回退旧布局；旧文件不移动不删除 |
+| 2026-11-04 | D3 | 配置唯一写入格式 `agent-gateway.yaml`；旧 `config.yaml` 只读翻译一个发布周期 | 用户 | 配置 schema 与宿主解耦，同时保证存量用户无感升级 | `GATEWAY_CONFIG_FORMAT=legacy` 强制适配；移除适配需用户确认 |
+| 2026-11-04 | D3 | `skillDedupEnabled` 更名 `toolOutputDedup`，env/模块/注记键同步 | 用户 | 实际判定是 byte-identical 的 `tool_result`，与 skill 无关，旧命名误导配置理解 | 旧配置键与 `MODEL_PROXY_SKILL_DEDUP` 保留一个周期 |
