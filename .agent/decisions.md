@@ -61,3 +61,5 @@
 | 2026-11-04 | D3 | 项目内数据目录改为 `.agent-gateway/`，图库 schema 与写入归 gateway；utility 只发文件事件 | 用户 | utility 退化为客户端，宿主不应拥有图库写权；旧 `.utility/` 仅复制回退，避免迁移丢数据 | `GATEWAY_PROJECT_DIR=.utility` 回退旧布局；旧文件不移动不删除 |
 | 2026-11-04 | D3 | 配置唯一写入格式 `agent-gateway.yaml`；旧 `config.yaml` 只读翻译一个发布周期 | 用户 | 配置 schema 与宿主解耦，同时保证存量用户无感升级 | `GATEWAY_CONFIG_FORMAT=legacy` 强制适配；移除适配需用户确认 |
 | 2026-11-04 | D3 | `skillDedupEnabled` 更名 `toolOutputDedup`，env/模块/注记键同步 | 用户 | 实际判定是 byte-identical 的 `tool_result`，与 skill 无关，旧命名误导配置理解 | 旧配置键与 `MODEL_PROXY_SKILL_DEDUP` 保留一个周期 |
+| 2026-11-04 | D2 | MCP SDK 升 2.3.0，服务端迁 `MCPServer`：14 个工具改为 `@mcp.tool()` 注解函数，`structured_output=False` 保持旧返回形状；2026-07-28 协议实测可用（SDK Client 探测到 2026-07-28，tools/list 与 tools/call 均通过） | 用户批准 | v2 移除了低层装饰器；注解方式保留 schema 与 `arg_default` 同源；关闭结构化输出避免客户端看到新增 `structuredContent` | 恢复 `mcp>=1.6.0,<2` 与 server.py/server_tools.py 旧实现 |
+| 2026-11-04 | D3 | 替换 `/Applications/Utility.app` 前先退出所有 app 实例（含 `-a claude` 后台实例），否则旧实例会在 MCP 重启时用自身 bundle 的旧 wheel 覆盖生产 venv | Agent | 实测：新 app 首启后 venv 的 server.py 与备份 venv 字节相同、mcp 回落 1.28.1；仅替换 app 不做实例清理会留下「app 新版 + venv 旧版」的混合状态 | 重装 app 内 wheel 与 constraints 后只重启 MCP 子进程即可恢复 |
