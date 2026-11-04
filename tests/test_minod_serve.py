@@ -37,6 +37,15 @@ class CheckTest(unittest.TestCase):
                     self.assertEqual(minod.check(), 0)
                 config_loader.reset_cache()
 
+    def test_check_passes_without_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"GATEWAY_HOME": tmp, "GATEWAY_CACHE": f"{tmp}/cache"}
+            with mock.patch.dict(os.environ, env):
+                config_loader.reset_cache()
+                with mock.patch("builtins.print"):
+                    self.assertEqual(minod.check(), 0)
+                config_loader.reset_cache()
+
 
 class EnvBuilderTest(unittest.TestCase):
     def setUp(self):
@@ -73,6 +82,7 @@ class EnvBuilderTest(unittest.TestCase):
             "mcp:\n"
             "  qdrantPath: /tmp/qd\n"
             "  embedderModel: my-embed\n"
+            "  embedderIdleUnloadSeconds: 600\n"
             "  synonyms:\n"
             "    部署: deploy\n"
             "  toolDefaults:\n"
@@ -82,6 +92,7 @@ class EnvBuilderTest(unittest.TestCase):
         env = env_builder.mcp_environment(9001)
         self.assertEqual(env["QDRANT_PATH"], "/tmp/qd")
         self.assertEqual(env["EMBEDDER_MODEL"], "my-embed")
+        self.assertEqual(env["EMBEDDER_IDLE_UNLOAD_SECONDS"], "600")
         self.assertEqual(json.loads(env["MCP_SYNONYMS"]), {"部署": "deploy"})
         self.assertEqual(json.loads(env["MCP_TOOL_DEFAULTS"]), {"recall": {"limit": 3}})
 
@@ -128,7 +139,7 @@ class EnvBuilderTest(unittest.TestCase):
     def test_switches_are_always_injected(self):
         self._write("modelProxy:\n  enabled: false\n")
         env = env_builder.proxy_environment(8613)
-        self.assertEqual(env["MODEL_PROXY_SKILL_DEDUP"], "1")
+        self.assertEqual(env["MODEL_PROXY_TOOL_OUTPUT_DEDUP"], "1")
         self.assertEqual(env["MODEL_PROXY_RESPONSE_NOTE"], "1")
         self.assertEqual(env["MODEL_PROXY_CONTEXT_WARN"], "300000")
 
