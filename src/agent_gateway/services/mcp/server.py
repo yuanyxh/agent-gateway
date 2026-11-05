@@ -1010,7 +1010,14 @@ async def serve():
     )
 
     app = build_asgi(rest_app)
-    config = uvicorn.Config(app, host="127.0.0.1", port=MCP_PORT, log_level="info")
+    # Bounded shutdown: idle MCP clients keep a stream open and would block SIGTERM.
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=MCP_PORT,
+        log_level="info",
+        timeout_graceful_shutdown=2,
+    )
     await uvicorn.Server(config).serve()
 
 
