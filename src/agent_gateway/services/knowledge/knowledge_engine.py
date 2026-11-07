@@ -90,6 +90,7 @@ def _llm_json(
     payload is a half card and must be dropped.
     """
     for attempt in range(2):
+        failure = ""
         try:
             raw = llm_client.chat(
                 prompt,
@@ -103,6 +104,7 @@ def _llm_json(
             # A truncated response still carries usable leading fields
             # (expand's concept, gate's accept).
             raw = e.content if e.kind == "truncated" else None
+            failure = f"{e.kind}/finish_reason={e.finish_reason}"
             if raw:
                 logger.warning(
                     "%s: output truncated (finish_reason=%s), recovering fields",
@@ -121,6 +123,7 @@ def _llm_json(
                 return parsed
             if repaired:
                 logger.warning("%s: partial output discarded", feature)
+                failure = f"partial-x2/attempt={attempt + 1}"
             else:
                 logger.warning(
                     "%s: unparseable JSON (attempt %d): %r",
@@ -128,11 +131,26 @@ def _llm_json(
                     attempt + 1,
                     raw[:200],
                 )
+                failure = f"unparseable-json/attempt={attempt + 1}"
         else:
             logger.warning("%s: empty response (attempt %d)", feature, attempt + 1)
+            failure = failure or f"empty/attempt={attempt + 1}"
+        if failure:
+            last = failure
         if attempt == 0:
             logger.warning("%s: retrying once with thinking disabled", feature)
-    logger.error("%s: no parseable JSON after two attempts", feature)
+    tgt = llm_client.default_target()
+    host = urllib.parse.urlparse(tgt.endpoint).netloc or "-"
+    logger.error(
+        "%s: no parseable JSON after two attempts "
+        "(model=%s host=%s max_tokens=%s prompt_chars=%d last=%s)",
+        feature,
+        tgt.model,
+        host,
+        max_tokens,
+        len(prompt),
+        last,
+    )
     return None
 
 
