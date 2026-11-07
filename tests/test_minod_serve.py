@@ -164,6 +164,7 @@ class ServeTest(unittest.TestCase):
         self.env = dict(
             os.environ,
             UTILITY_DATA_DIR=str(self.root),
+            GATEWAY_CACHE=str(self.root / "cache"),
             PYTHONPATH=str(ROOT / "src"),
         )
         self.proc = None
