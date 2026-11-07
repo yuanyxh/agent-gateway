@@ -2,8 +2,7 @@
 
 Vectors and bodies stay in their own stores; this table carries identity,
 lifecycle, and the fields a traversal needs. Node ids are stable business keys:
-the Mem0 id for hot rows, ``cold:`` + sha1 for cold points, ``note:`` + relative
-path for notes.
+the Mem0 id for hot rows, ``cold:`` + sha1 for cold points.
 """
 
 from __future__ import annotations
@@ -100,10 +99,6 @@ def cold_node_id(source_file: str, body_hash: str) -> str:
     return (
         "cold:" + hashlib.sha1(f"{source_file}|{body_hash}".encode("utf-8")).hexdigest()
     )
-
-
-def note_node_id(rel_path: str) -> str:
-    return "note:" + rel_path.replace("\\", "/")
 
 
 _COLD_POINT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "agent-gateway/memory/cold")
