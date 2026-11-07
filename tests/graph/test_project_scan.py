@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -75,6 +76,19 @@ class ProjectScanTest(unittest.TestCase):
         )
         self.assertFalse(status["up_to_date"])
         self.assertEqual(status["stats"]["files"], 0)
+
+    def test_partial_parse_is_recorded_in_diagnostics(self):
+        (self.root / "broken.py").write_text("def broken(:\n    pass\n")
+        result = project_scan.sync(str(self.root), "2", "1")
+        self.assertEqual(result["partial_parse_files"], 1)
+        conn = sqlite3.connect(self.root / ".agent-gateway" / "graph.sqlite")
+        try:
+            value = conn.execute(
+                "SELECT value FROM diagnostics WHERE key='partial_parse_files'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(json.loads(value), ["broken.py"])
 
 
 if __name__ == "__main__":

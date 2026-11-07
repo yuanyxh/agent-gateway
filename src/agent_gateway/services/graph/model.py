@@ -54,3 +54,5 @@ class FileAnalysis:
     imports: list[ImportRef] = field(default_factory=list)
     #: Generic parameter names in scope; not persisted, only for type-ref filtering.
     type_params: set[str] = field(default_factory=set)
+    #: tree-sitter produced error nodes; symbols are best-effort, not complete.
+    partial_parse: bool = False

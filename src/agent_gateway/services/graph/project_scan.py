@@ -285,11 +285,16 @@ def sync(root: str, engine: str, schema: str) -> dict:
             "built_at": datetime.now(timezone.utc).isoformat(),
             "full_build_elapsed_ms": str(elapsed_ms),
         }
+        partial_files = sorted(
+            analysis.path for analysis in analyses if analysis.partial_parse
+        )
         diagnostics = {
             "engine_version": engine,
             "schema_version": schema,
             "last_full_elapsed_ms": str(elapsed_ms),
             "failed_files": json.dumps(index.failed_files[:50], ensure_ascii=False),
+            # Parsed with error nodes: symbols exist but may be incomplete.
+            "partial_parse_files": json.dumps(partial_files[:50], ensure_ascii=False),
             "unresolved_top": json.dumps(
                 [
                     f"{item.path}:{item.line or 0} {item.raw_name} {item.kind} {item.reason}"
@@ -305,6 +310,7 @@ def sync(root: str, engine: str, schema: str) -> dict:
             "db_path": str(db_path),
             "elapsed_ms": elapsed_ms,
             "failed_files": len(index.failed_files),
+            "partial_parse_files": len(partial_files),
         }
     finally:
         db.close()

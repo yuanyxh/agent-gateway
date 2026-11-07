@@ -404,10 +404,11 @@ def _visit(
 
 def parse(source: bytes, path: str) -> FileAnalysis:
     tree = _PARSER.parse(source)
+    analysis = FileAnalysis(path=path, lang="python")
     if tree.root_node.has_error:
+        analysis.partial_parse = True
         logging.getLogger("graph").warning(
             "partial parse: %s (tree-sitter error nodes)", path
         )
-    analysis = FileAnalysis(path=path, lang="python")
     _visit(tree.root_node, source, analysis, None)
     return analysis
