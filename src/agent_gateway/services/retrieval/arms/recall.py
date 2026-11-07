@@ -10,11 +10,14 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.core.memory_lifecycle import (
+    OWNER_AGENT_FIELD,
     STATUS_ACTIVE,
     STATUS_ARCHIVED,
     STATUS_DELETED,
     STATUS_FIELD,
     STATUS_SUPERSEDED,
+    VISIBILITY_FIELD,
+    visible_to,
 )
 from agent_gateway.services.mcp.server_constants import (
     COLD_COLLECTION,
@@ -130,6 +133,7 @@ class HotMemoryArm:
         if hot_memory is None:
             return ArmResult(name=self.name)
         items: list[RetrievedItem] = []
+        reader_agent = str((filters or {}).get("reader_agent_id") or "unknown")
         needles = split_terms(query.root_text or query.text)
         try:
             # No score gate inside mem0: it filters on the semantic score before
@@ -153,6 +157,8 @@ class HotMemoryArm:
                 if isinstance(row, str):
                     continue
                 meta = row.get("metadata") or {}
+                if not visible_to(meta, reader_agent):
+                    continue
                 # Archive writes land on the top-level payload as well as metadata,
                 # so both scopes are honoured here.
                 if not self._include_archived and (
@@ -436,7 +442,11 @@ _EDGE_EXPAND_SEEDS = EPISODE_EXPAND_TOP_N
 _EDGE_EXPAND_PER_SEED = 5
 
 
-def expand_episodes(query: Query, items: list[RetrievedItem]) -> list[RetrievedItem]:
+def expand_episodes(
+    query: Query,
+    items: list[RetrievedItem],
+    filters: dict[str, Any] | None = None,
+) -> list[RetrievedItem]:
     """Same-episode siblings plus one-hop graph neighbours.
 
     Both are scored by their own similarity to the query. A missing query vector
@@ -444,23 +454,24 @@ def expand_episodes(query: Query, items: list[RetrievedItem]) -> list[RetrievedI
     """
     if not items:
         return []
+    reader_agent = str((filters or {}).get("reader_agent_id") or "unknown")
     query_vec = server_embed.embed_query(query.text)
     min_score = floors_for(server_embed.EMBEDDER_SPEC.tag)["expanded"]
     hot = (
-        _expand_hot(items, query_vec, min_score)
+        _expand_hot(items, query_vec, min_score, reader_agent)
         if server_state.get_hot_memory()
         else []
     )
     cold = (
         _expand_cold(items, query_vec, min_score) if server_state.get_qdrant() else []
     )
-    edges = _expand_edges(items, query_vec, min_score)
+    edges = _expand_edges(items, query_vec, min_score, reader_agent)
     combined = hot + cold + edges
     combined.sort(key=heat_key, reverse=True)
     return combined
 
 
-def _expand_edges(items, query_vec, min_score):
+def _expand_edges(items, query_vec, min_score, reader_agent: str = "unknown"):
     """One-hop neighbours from the edge table, excluding episode (already walked)."""
     if query_vec is None:
         return []
@@ -486,10 +497,17 @@ def _expand_edges(items, query_vec, min_score):
     if not pairs:
         return []
     nodes = memory_store.get_nodes(list({other for _, other, _ in pairs}))
+    hot_points = _hot_points(
+        [nid for nid, node in nodes.items() if node["layer"] == "hot"]
+    )
     lookup = {
-        **_hot_points([nid for nid, node in nodes.items() if node["layer"] == "hot"]),
-        **_cold_points([node for node in nodes.values() if node["layer"] == "cold"]),
+        nid: entry
+        for nid, entry in hot_points.items()
+        if visible_to(entry, reader_agent)
     }
+    lookup.update(
+        _cold_points([node for node in nodes.values() if node["layer"] == "cold"])
+    )
     out: list[RetrievedItem] = []
     for seed, other, edge_type in pairs:
         if other in known:
@@ -547,6 +565,8 @@ def _hot_points(node_ids: list[str]) -> dict[str, dict]:
             "content": str(payload.get("data") or ""),
             "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
             "episode_id": payload.get(EPISODE_FIELD, ""),
+            VISIBILITY_FIELD: payload.get(VISIBILITY_FIELD),
+            OWNER_AGENT_FIELD: payload.get(OWNER_AGENT_FIELD),
         }
     return out
 
@@ -594,6 +614,7 @@ def _expand_hot(
     items: list[RetrievedItem],
     query_vec: np.ndarray | None,
     min_score: float | None = None,
+    reader_agent: str = "unknown",
 ) -> list[RetrievedItem]:
     if min_score is None:
         min_score = floors_for(server_embed.EMBEDDER_SPEC.tag)["expanded"]
@@ -628,6 +649,8 @@ def _expand_hot(
         for point in points:
             payload = point.payload or {}
             if point.id in known or payload.get("archived"):
+                continue
+            if not visible_to(payload, reader_agent):
                 continue
             if memory_status(payload) != STATUS_ACTIVE:
                 continue

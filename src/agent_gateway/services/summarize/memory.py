@@ -12,6 +12,7 @@ from agent_gateway.core.memory_lifecycle import (
     PROCESSED_FIELD,
     STATUS_ACTIVE,
     STATUS_FIELD,
+    is_public,
 )
 from agent_gateway.services.summarize.summary_llm import (
     _HTTP,
@@ -56,6 +57,8 @@ def _filter_processed(memories: list[dict]) -> list[dict]:
     for m in memories:
         # metadata may be explicitly null (key present, value None); `.get("metadata", {})` would return None and raise AttributeError
         meta = m.get("metadata") or {}
+        if not is_public(meta):
+            continue
         flags = int(meta.get(PROCESSED_FIELD, 0) or 0)
         if flags & PROCESSED_CONSUMED_MASK:
             continue

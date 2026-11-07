@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from agent_gateway.core.log_utils import setup_logging
+from agent_gateway.core.memory_lifecycle import OWNER_AGENT_FIELD, VISIBILITY_FIELD
 from agent_gateway.services.memory import graph, store
 
 logger = setup_logging("server")
@@ -59,6 +60,9 @@ def record_hot_memory(
             "level": _int(meta.get("level"), 0),
             "importance": _int(meta.get("importance"), 5),
             "protected": bool(meta.get("protected", False)),
+            # Scope must survive the mirror: consolidation reads graph metadata.
+            VISIBILITY_FIELD: str(meta.get(VISIBILITY_FIELD) or "all"),
+            OWNER_AGENT_FIELD: str(meta.get(OWNER_AGENT_FIELD) or "unknown"),
         }
         store.upsert_node(
             memory_id,

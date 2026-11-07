@@ -62,7 +62,9 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
         source_url: Annotated[
             str | None, Field(description=param_text("param.source_url"))
         ] = None,
-        agent_id: str = "unknown",
+        agent_id: Annotated[
+            str, Field(description="Required when visibility=agent-specific.")
+        ] = "unknown",
         visibility: Literal["all", "agent-specific", "user-only"] = "all",
         tags: list[str] | None = None,
         confidence: float = 1.0,
@@ -151,6 +153,9 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
             list[Literal["hot", "cold"]] | None,
             Field(description=param_text("param.layers")),
         ] = None,
+        agent_id: Annotated[
+            str, Field(description="Required when visibility=agent-specific.")
+        ] = "unknown",
     ) -> str:
         return await _run(
             handlers,
@@ -164,6 +169,7 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
                     "include_archived": include_archived,
                     "include_superseded": include_superseded,
                     "layers": layers,
+                    "agent_id": agent_id,
                 }
             ),
         )
@@ -194,6 +200,9 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
             bool,
             Field(default=False, description=param_text("param.include_superseded")),
         ] = False,
+        agent_id: Annotated[
+            str, Field(description="Required when visibility=agent-specific.")
+        ] = "unknown",
     ) -> str:
         return await _run(
             handlers,
@@ -205,6 +214,7 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
                     "offset": offset,
                     "max_chars": max_chars,
                     "include_superseded": include_superseded,
+                    "agent_id": agent_id,
                 }
             ),
         )

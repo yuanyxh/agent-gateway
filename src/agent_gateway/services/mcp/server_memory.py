@@ -23,6 +23,11 @@ from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 from mcp.types import TextContent
 
 from agent_gateway.core.log_utils import setup_logging
+from agent_gateway.core.memory_lifecycle import (
+    OWNER_AGENT_FIELD,
+    VISIBILITY_FIELD,
+    visible_to,
+)
 from agent_gateway.services.mcp.server_constants import (
     AI_API_KEY,
     ARCHIVED_AT_FIELD,
@@ -359,8 +364,10 @@ def _level(value) -> int:
 
 def _build_metadata(src: dict, now_iso: str) -> dict:
     return {
-        "agent_id": src.get("agent_id", "unknown"),
-        "visibility": src.get("visibility", "all"),
+        # mem0 owns the agent scope; identity keys in metadata are dropped, so the
+        # owner is mirrored under a non-identity key for read-side filtering.
+        OWNER_AGENT_FIELD: str(src.get("agent_id") or "unknown"),
+        VISIBILITY_FIELD: src.get("visibility", "all"),
         "tags": src.get("tags", []),
         EPISODE_FIELD: str(src.get("episode_id") or ""),
         "confidence": src.get("confidence", 1.0),
@@ -393,7 +400,9 @@ def _memory_status(meta: dict | None) -> str:
     return str((meta or {}).get(STATUS_FIELD) or STATUS_ACTIVE)
 
 
-def _active_similar(content: str) -> list[dict]:
+def _active_similar(
+    content: str, agent_id: str = "unknown", visibility: str = "all"
+) -> list[dict]:
     """Active hot memories closest to `content`. Search failure never blocks a write.
 
     mem0's final score is a hybrid (semantic + BM25) divided by 2, so identical text
@@ -428,6 +437,15 @@ def _active_similar(content: str) -> list[dict]:
         if r.get("hash") == content_hash:
             score = 1.0
         meta = r.get("metadata") or {}
+        # Dedupe only within the same scope: folding a private write into a public
+        # row (or the reverse) would silently change who can read the fact.
+        row_visibility = str(meta.get(VISIBILITY_FIELD) or "all")
+        if row_visibility != visibility:
+            continue
+        if visibility != "all":
+            row_owner = str(meta.get(OWNER_AGENT_FIELD) or "unknown")
+            if row_owner != agent_id:
+                continue
         similar.append(
             {
                 "id": r["id"],
@@ -562,9 +580,18 @@ def _write_memory(item: dict, now_iso: str, db_path: str | None = None) -> dict:
     `db_path` only targets the graph mirror; the hot layer has a single store.
     """
     content = item["content"]
+    agent_id = str(item.get("agent_id") or "unknown")
+    visibility = str(item.get("visibility") or "all")
+    if visibility == "agent-specific" and agent_id == "unknown":
+        return {
+            "success": False,
+            "memory_id": None,
+            "layer": "hot",
+            "error": "agent-specific memory requires a non-unknown agent_id.",
+        }
     content_warning = _content_warning(content)
     embed_text = _embed_text(item)
-    similar = _active_similar(embed_text)
+    similar = _active_similar(embed_text, agent_id, visibility)
     top = similar[0] if similar else None
     context = str(item.get("context") or "").strip()
     supersedes = [str(s) for s in (item.get("supersedes") or []) if s]
@@ -665,7 +692,11 @@ def _write_memory(item: dict, now_iso: str, db_path: str | None = None) -> dict:
     metadata[REVISION_FIELD] = revision
 
     result = get_hot_memory().add(
-        embed_text, user_id=DEFAULT_USER_ID, metadata=metadata, infer=False
+        embed_text,
+        user_id=DEFAULT_USER_ID,
+        agent_id=agent_id,
+        metadata=metadata,
+        infer=False,
     )
     rows = result.get("results", [])
     memory_id = rows[0].get("id") if rows else None
@@ -748,10 +779,16 @@ def _mark_hot_disputed(memory_id: str, disputed_by: str, reason: str) -> bool:
         logger.warning(
             f"[dispute] in-place update failed for {memory_id}, rebuilding (id will change)"
         )
+        agent_scope = str(
+            old.get("agent_id") or old_meta.get(OWNER_AGENT_FIELD) or "unknown"
+        )
         get_hot_memory().delete(memory_id)
         try:
             get_hot_memory().add(
-                old_content, user_id=DEFAULT_USER_ID, metadata=old_meta
+                old_content,
+                user_id=DEFAULT_USER_ID,
+                agent_id=agent_scope,
+                metadata=old_meta,
             )
         except Exception as e:
             # A failure on the main path must be logged: previously it silently
@@ -766,9 +803,15 @@ def _mark_hot_disputed(memory_id: str, disputed_by: str, reason: str) -> bool:
                 "disputed_by": disputed_by,
                 "dispute_reason": reason,
             }
+            for key in (VISIBILITY_FIELD, OWNER_AGENT_FIELD):
+                if key in old_meta:
+                    fallback_meta[key] = old_meta[key]
             try:
                 get_hot_memory().add(
-                    old_content, user_id=DEFAULT_USER_ID, metadata=fallback_meta
+                    old_content,
+                    user_id=DEFAULT_USER_ID,
+                    agent_id=agent_scope,
+                    metadata=fallback_meta,
                 )
             except Exception:
                 return False
@@ -1139,7 +1182,12 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         root_text=text,
         semantic_text=semantic,
     )
-    out = pipeline.run_query(request, limit, tool="recall")
+    out = pipeline.run_query(
+        request,
+        limit,
+        filters={"reader_agent_id": str(arguments.get("agent_id") or "unknown")},
+        tool="recall",
+    )
     top = out["results"]
     related = out["related"]
     # The budget is spent on the primary results first. Once they are cut, related
@@ -1164,6 +1212,9 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         "related": related,
         "count": len(top),
         "errors": out.get("errors") or [],
+        # The pipeline already writes this trace; returning it lets callers and
+        # adoption analysis join a result back to its arms.
+        "trace_id": out.get("trace_id") or "",
     }
     if status == "weak_match":
         payload["hint"] = (
@@ -1282,6 +1333,7 @@ async def _handle_catch_up(arguments: dict) -> list[TextContent]:
         ]
     since_days = arguments.get("since_days", 3)
     include_superseded = bool(arguments.get("include_superseded", False))
+    agent_id = str(arguments.get("agent_id") or "unknown")
     limit = max(1, min(int_arg(arguments, "limit", DEFAULT_CATCH_UP_LIMIT), 500))
     offset = max(0, int_arg(arguments, "offset", 0))
     max_chars = int_arg(arguments, "max_chars", DEFAULT_CATCH_UP_MAX_CHARS)
@@ -1301,6 +1353,7 @@ async def _handle_catch_up(arguments: dict) -> list[TextContent]:
         m
         for m in data
         if datetime.fromisoformat(m.get("created_at", "")).timestamp() >= since_ts
+        and visible_to(m.get("metadata"), agent_id)
         and _memory_status(m.get("metadata")) != STATUS_DELETED
         and (
             include_superseded or _memory_status(m.get("metadata")) != STATUS_SUPERSEDED

@@ -31,3 +31,25 @@ DELETED_AT_FIELD = "deleted_at"
 # Cold summaries derived from hot memories; superseding a source marks them stale.
 COLD_SOURCE_MEMORY_IDS_FIELD = "source_memory_ids"
 COLD_STALE_FIELD = "stale"
+
+# Visibility. mem0 owns the agent scope (payload agent_id); this field is only for
+# retrieval filtering, because mem0 drops identity keys written through metadata.
+VISIBILITY_FIELD = "visibility"
+OWNER_AGENT_FIELD = "owner_agent_id"
+
+
+def is_public(meta: dict | None) -> bool:
+    """Only public memories may feed shared summaries and consolidation."""
+    return str((meta or {}).get(VISIBILITY_FIELD) or "all") == "all"
+
+
+def visible_to(meta: dict | None, agent_id: str) -> bool:
+    """all: every agent; agent-specific: same owner; user-only: id lookup only."""
+    meta = meta or {}
+    visibility = str(meta.get(VISIBILITY_FIELD) or "all")
+    if visibility == "user-only":
+        return False
+    if visibility == "agent-specific":
+        owner = str(meta.get(OWNER_AGENT_FIELD) or meta.get("agent_id") or "unknown")
+        return owner == (agent_id or "unknown")
+    return True

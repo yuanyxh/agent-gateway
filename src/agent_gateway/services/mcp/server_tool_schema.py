@@ -70,7 +70,11 @@ MEMORY_ITEM_SCHEMA: dict = {
             "type": "string",
             "description": param_text("param.source_url"),
         },
-        "agent_id": {"type": "string", "default": "unknown"},
+        "agent_id": {
+            "type": "string",
+            "default": "unknown",
+            "description": "Required when visibility=agent-specific.",
+        },
         "visibility": {
             "type": "string",
             "enum": ["all", "agent-specific", "user-only"],
@@ -147,7 +151,11 @@ def build_tools() -> list[Tool]:
                         "type": "string",
                         "description": param_text("param.source_url"),
                     },
-                    "agent_id": {"type": "string", "default": "unknown"},
+                    "agent_id": {
+                        "type": "string",
+                        "default": "unknown",
+                        "description": "Required when visibility=agent-specific.",
+                    },
                     "visibility": {
                         "type": "string",
                         "enum": ["all", "agent-specific", "user-only"],
@@ -228,6 +236,11 @@ def build_tools() -> list[Tool]:
                         "items": {"type": "string", "enum": ["hot", "cold"]},
                         "description": param_text("param.layers"),
                     },
+                    "agent_id": {
+                        "type": "string",
+                        "default": "unknown",
+                        "description": "Required when visibility=agent-specific.",
+                    },
                 },
                 "required": ["keywords"],
             },
@@ -261,6 +274,11 @@ def build_tools() -> list[Tool]:
                         "type": "boolean",
                         "default": False,
                         "description": param_text("param.include_superseded"),
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "default": "unknown",
+                        "description": "Required when visibility=agent-specific.",
                     },
                 },
             },

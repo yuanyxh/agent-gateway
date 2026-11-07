@@ -197,7 +197,12 @@ class LinkTest(_GraphCase):
         link.record_hot_memory(
             "m1",
             "new fact",
-            {"episode_id": "ep1", "revision": 2},
+            {
+                "episode_id": "ep1",
+                "revision": 2,
+                "visibility": "agent-specific",
+                "owner_agent_id": "agent-a",
+            },
             supersedes=("m0",),
             created_at="2026-03-01",
             db_path=self.db,
@@ -206,6 +211,8 @@ class LinkTest(_GraphCase):
         node = store.get_node("m1", db_path=self.db)
         self.assertEqual(node["layer"], "hot")
         self.assertEqual(node["metadata"]["episode_id"], "ep1")
+        self.assertEqual(node["metadata"]["visibility"], "agent-specific")
+        self.assertEqual(node["metadata"]["owner_agent_id"], "agent-a")
         edge_types = {
             (edge["from_id"], edge["to_id"], edge["type"])
             for edge in graph.neighbors("m1", db_path=self.db)

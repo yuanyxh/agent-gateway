@@ -66,6 +66,7 @@ class RecallBudgetTest(unittest.TestCase):
         self.assertEqual(data["results"][0]["id"], "a")
         self.assertEqual(len(data["related"]), 1)
         self.assertTrue(data["related"][0]["content_truncated"])
+        self.assertEqual(data["trace_id"], "t1")
 
     def test_zero_disables_the_budget(self):
         out = _out(

@@ -18,7 +18,9 @@ from agent_gateway.services.retrieval.types import (
 
 logger = setup_logging("server")
 
-Expander = Callable[[Query, list[RetrievedItem]], list[RetrievedItem]]
+Expander = Callable[
+    [Query, list[RetrievedItem], dict[str, Any] | None], list[RetrievedItem]
+]
 Reranker = Callable[[Query, list[RetrievedItem]], list[RetrievedItem]]
 
 #: Candidates fetched per arm; fusion truncates to the caller's limit afterwards.
@@ -195,7 +197,7 @@ class Pipeline:
                 logger.warning(f"[pipeline:{self.name}] rerank failed: {e!r}")
             latency["rerank"] = round((time.perf_counter() - rerank_started) * 1000, 2)
 
-        related = self.expander(query, items[:limit]) if self.expander else []
+        related = self.expander(query, items[:limit], filters) if self.expander else []
         verdict = self.gate.judge(query, items[:limit], related)
 
         top = items[:limit]

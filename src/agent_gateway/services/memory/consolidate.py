@@ -24,6 +24,7 @@ from agent_gateway.core.config import (
     memory_protect_importance,
 )
 from agent_gateway.core.log_utils import setup_logging
+from agent_gateway.core.memory_lifecycle import is_public
 from agent_gateway.llm import client as llm_client
 from agent_gateway.services.memory import graph, retention, store
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
@@ -150,7 +151,8 @@ def sample_relations(
 ) -> dict:
     """Random pair sampling; the seed is the day so a rerun walks the same pairs."""
     now = now or datetime.now()
-    nodes = active_hot(db_path)
+    # Shared summaries are public, so scoped memories never enter the sample.
+    nodes = [node for node in active_hot(db_path) if is_public(node.get("metadata"))]
     rows = _hot_rows([node["node_id"] for node in nodes])
     # Consolidation output is excluded: the candidate set must stay the same across
     # reruns, or each new summary reshuffles the sample and invents new clusters.

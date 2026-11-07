@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from agent_gateway.services.mcp import server_memory  # noqa: E402
 from agent_gateway.services.retrieval.types import RetrievedItem  # noqa: E402
 
-RECALL_TOP_KEYS = {"status", "results", "related", "count", "errors"}
+RECALL_TOP_KEYS = {"status", "results", "related", "count", "errors", "trace_id"}
 RECALL_ITEM_KEYS = {
     "id",
     "kind",
