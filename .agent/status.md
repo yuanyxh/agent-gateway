@@ -157,3 +157,5 @@
 - 2026-11-03 依赖升级扫描已写入 `.agent/upgrades.md`；本轮未升级任何依赖，批次待用户确认
 - 2026-11-03 路由详情已上线：`<transcript>` 后台摘要请求实际 `requested=claude-sonnet-5`（20:24 后 12/17 条），回退到 `mimo-v2.6-flash`；用户判定这是 Claude 客户端请求，无需处理（todo-20261103-007 dropped）。主循环 deepseek-flash 均为 `model_match`
 - 2026-11-03 重启后尚无 4xx/5xx 请求，`gateway_log` 的 `error_type`/`upstream` 线上样本待补；历史 502 行仍为空属预期
+- 2026-11-08 基座升级 1.4.0 → 1.5.0：新增 `steward`/`sandbox` 技能、`.agent/agent-health.md` 基线、`.agent/sandbox.md`、`.agent/.maintenance-state`、维护钩子与 SessionStart 注册；profile 补 `maintenance_*` 与 `isolation_*`。`verify-instantiation.sh` 0 errors / 1 warning（既有 `stack.lockfile: none`）。首次 `steward` 体检未执行
+- 2026-11-08 `pip-audit 2.10.1` 装入 `.venv` 并加入 `dev` extras；全环境审计 0 已知漏洞，本地包 `agent-gateway` 不在 PyPI 故跳过

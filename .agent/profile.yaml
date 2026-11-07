@@ -1,4 +1,4 @@
-seed_version: 1.4.0
+seed_version: 1.5.0
 project:
   name: agent-gateway
   one_liner: 为 Utility 客户端提供 AI 能力层：MCP 记忆、LLM 网关、token 代理与桌面自动化服务
@@ -92,3 +92,8 @@ supply_chain:
 agent:
   platform: claude-code
   rules_scope: core+type
+  maintenance_cadence: weekly
+  maintenance_mode: hook
+  maintenance_stale_days: 7
+  isolation_level: process
+  isolation_egress: deny
