@@ -59,6 +59,10 @@ server = [
     "anyio>=4.16",
     "trafilatura>=2.3",
 ]
+# Audit-only; never shipped in the host wheel.
+dev = [
+    "pip-audit>=2.10",
+]
 
 [project.scripts]
 agent-gateway = "agent_gateway.cli.minod:main"
