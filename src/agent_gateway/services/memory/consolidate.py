@@ -15,7 +15,7 @@ import asyncio
 import json
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from agent_gateway.core import prompt_loader
 from agent_gateway.core.config import (
@@ -27,6 +27,7 @@ from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.core.memory_lifecycle import is_public
 from agent_gateway.llm import client as llm_client
 from agent_gateway.services.memory import graph, retention, store
+from agent_gateway.services.memory.group_governance import govern_daily
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
 
 logger = setup_logging("server")
@@ -479,9 +480,14 @@ async def run_daily(
     now: datetime | None = None,
     db_path: str | None = None,
     sample_size: int = RELATION_PAIR_SAMPLE,
+    governance_since: str = "",
 ) -> dict:
     now = now or datetime.now()
     scored = score_relevance(db_path=db_path, now=now)
+    governed = await govern_daily(
+        db_path=db_path,
+        since=governance_since or (now - timedelta(days=1)).isoformat(),
+    )
     sampled = sample_relations(db_path=db_path, now=now, sample_size=sample_size)
     compressed = await compress_clusters(
         sampled["clusters"], sampled["rows"], now=now, db_path=db_path
@@ -494,6 +500,7 @@ async def run_daily(
         "clusters": len(sampled["clusters"]),
         "compressed": compressed,
         "merged": merged,
+        "governance": governed,
     }
 
 
@@ -546,7 +553,7 @@ async def detect_contradictions(
             [
                 {
                     "id": right,
-                    "content": str(rows[right]["payload"].get("data") or "")[:500],
+                    "content": str(rows[right]["payload"].get("data") or ""),
                 }
             ],
         )
@@ -739,7 +746,9 @@ async def consolidation_scheduler(
             now_ts = time.time()
             if now_ts - float(state.get("daily", 0) or 0) >= daily_seconds:
                 started = time.monotonic()
-                result = await run_daily()
+                previous = float(state.get("daily", 0) or 0)
+                since = datetime.fromtimestamp(previous).isoformat() if previous else ""
+                result = await run_daily(governance_since=since)
                 state["daily"] = now_ts
                 write_state(state)
                 logger.info(

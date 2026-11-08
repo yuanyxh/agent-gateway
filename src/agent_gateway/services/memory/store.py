@@ -124,6 +124,20 @@ def connect(db_path: str | None = None) -> Iterator[sqlite3.Connection]:
         yield connection
 
 
+@contextmanager
+def readonly_connect(db_path: str) -> Iterator[sqlite3.Connection]:
+    """Open an existing graph without creating files or writing its WAL."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+    uri = path.resolve().as_uri() + "?mode=ro&immutable=1"
+    connection = sqlite3.connect(uri, uri=True, timeout=5.0)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
 def _decode(row: sqlite3.Row | tuple | None) -> dict | None:
     if row is None:
         return None
@@ -339,6 +353,8 @@ def list_nodes(
     layer: str = "",
     status: str = "",
     limit: int = 500,
+    offset: int = 0,
+    readonly: bool = False,
     db_path: str | None = None,
 ) -> list[dict]:
     sql = f"SELECT {', '.join(NODE_FIELDS)} FROM memory_nodes WHERE 1=1"
@@ -349,9 +365,11 @@ def list_nodes(
     if status:
         sql += " AND status=?"
         params.append(status)
-    sql += " ORDER BY created_at DESC LIMIT ?"
-    params.append(limit)
-    with connect(db_path) as connection:
+    sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    path = db_path or str(graph_db_path())
+    opener = readonly_connect if readonly else connect
+    with opener(path) as connection:
         rows = connection.execute(sql, params).fetchall()
     return [node for node in (_decode(row) for row in rows) if node]
 

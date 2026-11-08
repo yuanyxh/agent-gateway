@@ -297,6 +297,11 @@ class DailyTest(_Base):
         }
         with (
             mock.patch.object(consolidate, "score_relevance", return_value=4) as score,
+            mock.patch.object(
+                consolidate,
+                "govern_daily",
+                mock.AsyncMock(return_value={"status": "skipped"}),
+            ) as govern,
             mock.patch.object(consolidate, "sample_relations", return_value=sampled),
             mock.patch.object(
                 consolidate, "compress_clusters", mock.AsyncMock(return_value=1)
@@ -308,6 +313,7 @@ class DailyTest(_Base):
             result = asyncio.run(consolidate.run_daily(db_path=self.db, now=NOW))
 
         score.assert_called_once()
+        govern.assert_awaited_once()
         compress.assert_awaited_once()
         merge.assert_awaited_once()
         self.assertEqual(
@@ -319,6 +325,7 @@ class DailyTest(_Base):
                 "clusters": 1,
                 "compressed": 1,
                 "merged": 0,
+                "governance": {"status": "skipped"},
             },
         )
 

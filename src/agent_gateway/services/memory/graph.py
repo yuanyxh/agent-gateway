@@ -99,6 +99,25 @@ def add_edges(edges: list[tuple], db_path: str | None = None) -> int:
     return len(rows)
 
 
+def remove_episode_edges(node_ids: list[str], db_path: str | None = None) -> int:
+    """Drop stale episode edges for the given nodes before regrouping."""
+    ids = [str(node_id) for node_id in node_ids if node_id]
+    removed = 0
+    for start in range(0, len(ids), 400):
+        batch = ids[start : start + 400]
+        placeholders = ",".join("?" for _ in batch)
+        sql = (
+            "DELETE FROM memory_edges WHERE type='episode' "
+            f"AND (from_id IN ({placeholders}) OR to_id IN ({placeholders}))"
+        )
+        try:
+            with store.connect(db_path) as connection:
+                removed += connection.execute(sql, batch + batch).rowcount
+        except sqlite3.Error as e:
+            logger.warning(f"[graph] episode edge delete failed: {e}")
+    return removed
+
+
 def neighbors(
     node_id: str,
     *,

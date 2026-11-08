@@ -55,6 +55,7 @@ _YAML_FALLBACKS: dict[str, tuple[str, str]] = {
     "MEMORY_MAX_CONTENT_CHARS": ("memory.maxContentChars", "text"),
     "MEMORY_MAX_SUMMARIES": ("memory.maxSummaries", "text"),
     "MEMORY_MAX_SUMMARIES_PER_EPISODE": ("memory.maxSummariesPerEpisode", "text"),
+    "MEMORY_GOVERNANCE_APPLY": ("memory.governanceApply", "text"),
     "RANK_SIGNAL_RECENCY": ("memory.rankSignal.recency", "text"),
     "RANK_SIGNAL_ACCESS": ("memory.rankSignal.access", "text"),
     "RANK_SIGNAL_QUALITY": ("memory.rankSignal.quality", "text"),
@@ -175,6 +176,11 @@ def memory_protect_importance() -> int | None:
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+def memory_governance_apply() -> bool:
+    """Whether the daily pass writes split/merge decisions into episode ids."""
+    return get("MEMORY_GOVERNANCE_APPLY", "true").strip().lower() != "false"
 
 
 def memory_max_content_chars() -> int | None:
