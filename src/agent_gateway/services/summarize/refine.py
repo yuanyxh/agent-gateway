@@ -17,12 +17,12 @@ from agent_gateway.services.summarize.constants import (
     SEARCH_MIN_TOKEN_LEN,
     SUMMARY_DUP_SIM_THRESHOLD,
     SUMMARY_EXCLUDE_DIRS,
+    SUMMARY_FACTS_MAX_CHARS,
     SUMMARY_FRAGMENT_LINE_MIN,
     SUMMARY_GEN_MAX_TOKENS,
     SUMMARY_JUDGE_MAX_TOKENS,
     SUMMARY_KEYWORD_COUNT,
     SUMMARY_KEYWORD_MAX_TOKENS,
-    SUMMARY_MERGE_CONTEXT_CHARS,
     SUMMARY_MERGE_LOOKBACK_CHARS,
     SUMMARY_MIN_CONTENT_LEN,
     SUMMARY_PLACEHOLDER_PATTERNS,
@@ -33,6 +33,7 @@ from agent_gateway.services.summarize.storage import _existing_extract_tops
 from agent_gateway.services.summarize.textutil import (
     _max_segment_similarity,
     _relevant_segments,
+    budget_text,
 )
 
 
@@ -92,9 +93,16 @@ def _llm_json(
     return None
 
 
+def _facts_text(group: dict) -> str:
+    """Group facts for a prompt, capped by a named budget."""
+    return budget_text(
+        str(group.get("facts", "")), SUMMARY_FACTS_MAX_CHARS, "summary facts"
+    )
+
+
 def _extract_keywords(group: dict) -> list[str]:
     """Extract retrieval keywords for a group's topic (3-8 noun-like words). Returns [] on failure."""
-    facts = str(group.get("facts", ""))[:SUMMARY_MERGE_CONTEXT_CHARS]
+    facts = _facts_text(group)
     prompt = prompt_loader.prompt(
         "extract_keywords",
         SUMMARY_KEYWORD_COUNT=SUMMARY_KEYWORD_COUNT,
@@ -118,13 +126,13 @@ def _extract_keywords(group: dict) -> list[str]:
     return out[:SUMMARY_KEYWORD_COUNT]
 
 
-def _make_snippet(text: str, keyword: str) -> str:
-    """Take ~60 characters around the first keyword hit as the retrieval snippet."""
+def _make_snippet(text: str, keyword: str, radius: int = 60) -> str:
+    """Take a window around the first keyword hit; radius controls the context size."""
     idx = text.lower().find(keyword.lower())
     if idx == -1:
-        return text[:120]
-    start = max(0, idx - 60)
-    end = min(len(text), idx + len(keyword) + 60)
+        return text[: radius * 2]
+    start = max(0, idx - radius)
+    end = min(len(text), idx + len(keyword) + radius)
     prefix = "…" if start > 0 else ""
     suffix = "…" if end < len(text) else ""
     return f"{prefix}{text[start:end].strip()}{suffix}"
@@ -167,6 +175,7 @@ def search_extracts(
             {
                 "rel_path": str(f.relative_to(EXTRACTS_DIR)),
                 "snippet": _make_snippet(text, matched[0]),
+                "context": _make_snippet(text, matched[0], radius=400),
                 "matched": matched,
                 "title_matched": title_matched,
                 "score": len(matched),
@@ -225,9 +234,10 @@ def _decide_merge(group: dict, hits: list[dict]) -> dict | None:
     if not hits:
         return None
 
-    facts = str(group.get("facts", ""))[:SUMMARY_MERGE_CONTEXT_CHARS]
+    facts = _facts_text(group)
     candidates = "\n".join(
-        f"- [{i}] {h['rel_path']}：{h['snippet'][:120]}" for i, h in enumerate(hits)
+        f"- [{i}] {h['rel_path']}：{h.get('context') or h['snippet']}"
+        for i, h in enumerate(hits)
     )
     prompt = prompt_loader.prompt(
         "decide_merge",
@@ -291,7 +301,7 @@ def _decide_merge(group: dict, hits: list[dict]) -> dict | None:
 
 def _gen_new(group: dict, dir_tree: str, existing_tops: set[str]) -> dict | None:
     """think enabled, generate a new article: {"dir", "title", "content"}. Returns None on failure."""
-    facts = str(group.get("facts", ""))
+    facts = _facts_text(group)
     tops_block = (
         t("mcp.summary.list_separator").join(sorted(existing_tops))
         if existing_tops
@@ -330,7 +340,7 @@ def _gen_merge(group: dict, target_file: Path, existing_text: str) -> dict | Non
     file the first 2K cannot see the existing sections at the end of the file, leaving the LLM
     unable to judge duplication (2026-08-07 root-cause fix).
     """
-    facts = str(group.get("facts", ""))
+    facts = _facts_text(group)
     context = _relevant_segments(existing_text, facts, SUMMARY_MERGE_LOOKBACK_CHARS)
     prompt = prompt_loader.prompt(
         "gen_merge",

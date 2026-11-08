@@ -13,6 +13,9 @@ from pathlib import Path
 from agent_gateway.core import prompt_loader
 from agent_gateway.core.l10n import all_templates, t
 from agent_gateway.core.log_utils import setup_logging
+from agent_gateway.services.summarize.constants import (
+    SUMMARY_RULE_SUMMARY_MAX_CHARS,
+)
 from agent_gateway.services.summarize.summary_llm import (
     NOTES_DIR,
     SUMMARY_LLM_TIMEOUT,
@@ -20,6 +23,7 @@ from agent_gateway.services.summarize.summary_llm import (
     _parse_json_any,
     write_error_log,
 )
+from agent_gateway.services.summarize.textutil import budget_text
 
 # ---------------------------------------------------------------------------
 # Configuration (same as summarize.py before the split)
@@ -181,7 +185,11 @@ def _trim_rules_entries(level: str, entries: list[dict]) -> list[dict]:
             index=i,
             title=e["title"],
             sep=separator,
-            summary=e.get("norm", "")[:80],
+            summary=budget_text(
+                str(e.get("norm", "")),
+                SUMMARY_RULE_SUMMARY_MAX_CHARS,
+                "rule summary",
+            ),
         )
         for i, e in enumerate(entries)
     )

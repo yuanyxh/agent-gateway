@@ -165,6 +165,31 @@ class NotesSemanticFilterTest(unittest.TestCase):
         items = self._items()
         self.assertEqual(arm._semantic_filter("q", items), items)
 
+    def test_semantic_filter_embeds_full_content(self):
+        long_text = "x" * 600
+        items = [
+            RetrievedItem(
+                id="one",
+                kind="note",
+                score=0.6,
+                score_kind="lexical",
+                content=long_text,
+            )
+        ]
+        arm = recall_arms.NotesArm(min_coverage=0.0, min_semantic=0.4)
+        embed = mock.Mock(return_value=[np.array([1.0, 0.0], dtype=np.float32)])
+        with (
+            mock.patch.object(
+                recall_arms.server_embed,
+                "embed_query",
+                return_value=np.array([1.0, 0.0], dtype=np.float32),
+            ),
+            mock.patch.object(recall_arms.server_embed, "embed_texts", embed),
+        ):
+            arm._semantic_filter("q", items)
+
+        self.assertEqual(embed.call_args.args[0], [long_text])
+
 
 class FakeHotMemory:
     def __init__(self, results):

@@ -8,6 +8,14 @@ from agent_gateway.core.log_utils import setup_logging as _log_setup
 logger = _log_setup("summarize")
 
 
+def budget_text(text: str, limit: int, label: str) -> str:
+    """Trim to a named budget and leave a warning, never silently."""
+    if len(text) <= limit:
+        return text
+    logger.warning(f"{label} truncated: {len(text)} > {limit} chars")
+    return text[:limit]
+
+
 def _max_segment_similarity(new_content: str, existing_text: str) -> float:
     """Max "match coverage" of the merge content against existing sections of the target file (difflib, zero external dependencies).
 

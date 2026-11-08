@@ -1059,8 +1059,7 @@ async def contradiction_check_cold(content: str, point_id: str) -> None:
         ]
         if band:
             similar = [
-                {"id": r.id, "content": r.payload.get("content", "")[:500]}
-                for r in band
+                {"id": r.id, "content": r.payload.get("content", "")} for r in band
             ]
             result = await _check_contradiction(content, similar)
             if result and result.get("relation") == "contradiction":

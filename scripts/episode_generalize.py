@@ -340,7 +340,7 @@ def evaluate() -> int:
         query = titles.get(row["chain"], "")
         if not query:
             continue
-        result = call("recall", {"query": query[:120], "keywords": [], "limit": 10})
+        result = call("recall", {"query": query, "keywords": [], "limit": 10})
         returned = {item.get("id") for item in result.get("results") or []}
         related = {item.get("id") for item in result.get("related") or []}
         siblings = set(row["memories"]) - {row["memories"][0]}

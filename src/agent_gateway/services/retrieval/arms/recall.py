@@ -373,7 +373,7 @@ class NotesArm:
         query_vec = server_embed.embed_query(text)
         if query_vec is None:
             return items
-        vectors = server_embed.embed_texts([item.content[:200] for item in items])
+        vectors = server_embed.embed_texts([item.content for item in items])
         if len(vectors) != len(items):
             return items
         kept = [

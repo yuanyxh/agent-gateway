@@ -15,8 +15,10 @@ from agent_gateway.services.summarize.constants import (
     AGGREGATE_LLM_TEMPERATURE,
     AGGREGATE_LLM_TIMEOUT,
     AGGREGATE_MAX_ROUNDS,
+    SUMMARY_FACTS_MAX_CHARS,
 )
 from agent_gateway.services.summarize.memory import _build_facts_text_v2
+from agent_gateway.services.summarize.textutil import budget_text
 
 
 logger = _log_setup("summarize")
@@ -152,7 +154,7 @@ def _run_aggregate_v2(memories: list[dict]) -> tuple[list[dict] | None, int]:
 def _merge_cross_batch_groups(groups: list[dict]) -> list[dict]:
     """Second cross-batch merge: converge groups with the same/similar topic into one (called when batch-aggregating)."""
     entries = "\n".join(
-        f"- [{i}] {g.get('topic', '')}：{g.get('facts', '')[:150]}"
+        f"- [{i}] {g.get('topic', '')}：{budget_text(str(g.get('facts', '')), SUMMARY_FACTS_MAX_CHARS, 'cross-batch facts')}"
         for i, g in enumerate(groups)
     )
     prompt = prompt_loader.prompt(

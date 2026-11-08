@@ -24,6 +24,11 @@ def _title(content: str) -> str:
     return line[:_TITLE_CHARS]
 
 
+def fact_from_data(data: str) -> str:
+    """mem0 stores `fact\\nContext: context`; the graph keeps only the fact."""
+    return str(data or "").rsplit("\nContext: ", 1)[0]
+
+
 def _int(value, default: int) -> int:
     try:
         return int(value)
@@ -54,6 +59,7 @@ def record_hot_memory(
             "supersedes": [sid for sid in supersedes if sid],
             "type": str(meta.get("type") or ""),
             "context": str(meta.get("context") or ""),
+            "fact": str(meta.get("fact") or content),
             "project": str(meta.get("project") or ""),
             "subsystem": str(meta.get("subsystem") or ""),
             "task": str(meta.get("task") or ""),
@@ -187,6 +193,7 @@ def record_cold_memory(
                 "point_id": point_id,
                 "legacy_ids": legacy,
                 "episode_id": episode_id,
+                "fact": str(content or ""),
                 **dict(dimensions or {}),
                 "source_memory_ids": list(source_memory_ids or []),
             },

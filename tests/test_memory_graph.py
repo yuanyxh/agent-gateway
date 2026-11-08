@@ -213,6 +213,7 @@ class LinkTest(_GraphCase):
         self.assertEqual(node["metadata"]["episode_id"], "ep1")
         self.assertEqual(node["metadata"]["visibility"], "agent-specific")
         self.assertEqual(node["metadata"]["owner_agent_id"], "agent-a")
+        self.assertEqual(node["metadata"]["fact"], "new fact")
         edge_types = {
             (edge["from_id"], edge["to_id"], edge["type"])
             for edge in graph.neighbors("m1", db_path=self.db)
@@ -234,6 +235,7 @@ class LinkTest(_GraphCase):
         node = store.get_node(node_id, db_path=self.db)
         self.assertEqual(node["layer"], "cold")
         self.assertEqual(node["source_file"], "a.md")
+        self.assertEqual(node["metadata"]["fact"], "summary")
         edges = graph.neighbors(node_id, db_path=self.db)
         self.assertIn(
             (node_id, "h1", "derived_from"),
@@ -338,6 +340,14 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(
             tuple(tool.input_schema["properties"]["edge"]["enum"]), graph.EDGE_TYPES
         )
+
+
+class FactFromDataTest(unittest.TestCase):
+    def test_strips_mem0_context_suffix(self):
+        self.assertEqual(link.fact_from_data("正文\nContext: 背景"), "正文")
+
+    def test_plain_body_is_unchanged(self):
+        self.assertEqual(link.fact_from_data("正文"), "正文")
 
 
 if __name__ == "__main__":
