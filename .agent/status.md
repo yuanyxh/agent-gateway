@@ -9,7 +9,7 @@
 | 任务 | 状态 | 阻塞 |
 | --- | --- | --- |
 | G2 宿主接入 | wheel 分发与模块启动已在 utility 侧验证；等本仓改动提交 | — |
-| 记忆 episode_id 分组 | 阶段 1/2/3 完成；cold 扩展与新写入分组已实现，待打包部署 | — |
+| 记忆 episode_id 分组 | 阶段 1/2/3 完成；9 个维度写入/查询已落地并通过审查修复，598 例通过；泛化评估自动分组组纯度 67.9%，已回退，分组仍只靠显式 episode_id | — |
 | 检索层重构 | 通用协议 + 管线落地，recall 已迁移；250 例通过；固定快照 100/100 一致；线上 143 条 0 错误；开关实测默认关闭最优 | — |
 | 评测集标注 | **已停用**：query 由历史会话关键词提取，与用户当时意图不对应（用户判定），基于 query 的相关性标注不成立；改用真实使用 case 驱动排查 | — |
 | 换模型 jina-zh | 热层/冷层已重建，地板由自动标定写入（现 hot 0.616 / cold 0.569）；可采信的结论只有不相关率：minilm 40.5% → jina 12.5%（249 条同批、不依赖意图判断） | — |
@@ -75,6 +75,10 @@
 - 2026-11-04 15:40 重启复验：旧 30624/30631 已退出；新会话 41753 + 索引器 41760（命令带项目根）；utility 项目 `indexer.json` 登记 live；`project_lookup` 后未生成 `refresh.lock`，活索引器跳过刷新生效
 - 2026-11-04 审查修复：`ps` 固定 `TZ=UTC`，避免索引器与 MCP 时区不同误判 PID 复用；`os.kill` 捕获 `OverflowError`；`refresh` / `project_scan` 改为按需导入，避免 MCP 常驻 tree-sitter 解析器；新增 handler 接线测试。全量 549 例通过，e2e 通过
 - 2026-11-04 1.1.50 部署复验：安装包与随包 wheel 含 TZ / Overflow / 延迟导入修复；真实 `utility -a` 索引器登记为 UTC 时间、退出后为空；MCP 缺失图库 35 秒后重建并命中；旧 agent 会话 41753/41760 仍是 1.1.49 索引器，登记时间为本地时区，需重启会话
+- 2026-11-08 记忆维度落地：写入侧 `remember`/`remember_batch` 接受 project/subsystem/task/task_type/ticket/language/interaction/session_id/role（枚举非法值置空、language 缺省按内容检测、批次顶层可注入）；recall 新增同名字段，project/ticket/language 硬过滤，subsystem/task/task_type/role/session_id 仅重排不改分；通用检索层新增 `Query.filters`/`Query.boost`（`pipeline._narrow`/`_prefer`），删除 MCP handler 内的 project+task 聚类加权；591 例通过
+- 2026-11-08 维度部署复验（三轮，通过）：查询侧 project 过滤返回行全部匹配（`filtered=19/34`）、历史行补 language、无过滤 `filtered=0`；写入侧 task_type/language/narrative_role 均正确回显，boost `role` 生效。过程中发现并修复 mem0 两处冲突：promoted 键 `role` 被提升到行顶层、随后被消息角色覆盖为 `user`，最终存储键改为 `narrative_role`（工具参数名仍为 role）；601 例通过
+- 2026-11-08 维度改动审查修复：硬过滤提前到融合截断前并放大候选窗口；冷层摘要继承源记忆维度、扩展结果与历史行按需补 language；dedupe 合并缺失维度；维度校验放宽为 strip+128 字符上限（允许中文与 `#`）；`Query` 增加 `expose` 并在重建/语义变体分支完整透传 filters/boost；`_prefer` 复用 fusion.rank_key；recall 返回 `filtered` 与被过滤提示；维度定义迁至 `services/memory/dimensions.py`；598 例通过
+- 2026-11-08 本地小模型迭代检索实验：Qwen3-1.7B Q8_0（llama.cpp Metal）热态判定 p50 492 ms、解析率 99.27%；20 条 query 迭代新增 34 条强关联，人工认可 20 条（宽泛意图 15/15，专有验证意图 5/15）；判定器基线 precision 约 85%；结论不接入默认路径；episode 扩展对照（20 条 query、11 条有效扩展）precision 63.6%，与 LLM 迭代相当且零模型延迟，下一步优先修 episode 分组边界。脚本 `scripts/iterative_recall_eval.py`，报告 `tests/eval/iterative/2026-11-08/{report,episode_report}.md`；新增 `remember_batch` 顶层 `episode_id`（同批未指定条目共享分组），578 例通过，待重启 MCP 生效
 
 ## 下一步
 
@@ -138,6 +142,10 @@
 | 2026-11-04 | 15:40 新 agent 会话 | 41753 + 索引器 41760；登记 live；查询后无 `refresh.lock` |
 | 2026-11-04 | 1.1.50 部署版索引器退出 | 登记时间为 UTC；退出后为空（L3） |
 | 2026-11-04 | 1.1.50 MCP 缺失图库刷新 | 第一次 error；35 秒后重查 ok（L3） |
+| 2026-11-08 | `ruff format --check` / `ruff check` / `.venv/bin/python -m unittest discover -s tests -t .` | 通过（260 文件 / 0 条 / 600 例） |
+| 2026-11-08 | 部署环境 MCP `recall` 实测（project 过滤/对照） | 过滤行全部带 project、`filtered=19`；对照 `filtered=0`；写入 task_type/language 生效 |
+| 2026-11-08 | 第二轮部署复验（role 维度） | 回显值为 mem0 消息角色 `user`，证实键名冲突；改存储键 `narrative_role`，601 例通过 |
+| 2026-11-08 | 第三轮部署复验 | 新写入行回显 `narrative_role=verification`；project 过滤 `filtered=34`；boost role 生效 |
 
 ## 已知问题
 
