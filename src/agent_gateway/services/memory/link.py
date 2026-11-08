@@ -12,6 +12,7 @@ from datetime import datetime
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.core.memory_lifecycle import OWNER_AGENT_FIELD, VISIBILITY_FIELD
 from agent_gateway.services.memory import graph, store
+from agent_gateway.services.memory.dimensions import GROUPING_DIMENSIONS
 
 logger = setup_logging("server")
 
@@ -52,6 +53,16 @@ def record_hot_memory(
             "revision": meta.get("revision", 1),
             "supersedes": [sid for sid in supersedes if sid],
             "type": str(meta.get("type") or ""),
+            "context": str(meta.get("context") or ""),
+            "project": str(meta.get("project") or ""),
+            "subsystem": str(meta.get("subsystem") or ""),
+            "task": str(meta.get("task") or ""),
+            "task_type": str(meta.get("task_type") or ""),
+            "ticket": str(meta.get("ticket") or ""),
+            "language": str(meta.get("language") or ""),
+            "interaction": str(meta.get("interaction") or ""),
+            "session_id": str(meta.get("session_id") or ""),
+            "narrative_role": str(meta.get("narrative_role") or ""),
             "source_files": source_files,
             "source_url": str(meta.get("source_url") or ""),
             "generated_by": str(meta.get("generated_by") or ""),
@@ -116,6 +127,25 @@ def record_hot_status(
         logger.warning(f"[graph] status write failed for {memory_ids[:3]}: {e}")
 
 
+def inherit_source_dimensions(
+    source_memory_ids: list[str] | None, db_path: str | None = None
+) -> dict[str, str]:
+    """Dimensions every source memory agrees on; disagreement drops the key."""
+    ids = [str(item) for item in source_memory_ids or [] if item]
+    if not ids:
+        return {}
+    nodes = store.get_nodes(ids, db_path=db_path)
+    agreed: dict[str, str] = {}
+    for key in GROUPING_DIMENSIONS:
+        values = {
+            str((node.get("metadata") or {}).get(key) or "") for node in nodes.values()
+        }
+        values.discard("")
+        if len(values) == 1:
+            agreed[key] = values.pop()
+    return agreed
+
+
 def record_cold_memory(
     point_id: str,
     content: str,
@@ -123,6 +153,7 @@ def record_cold_memory(
     source_file: str = "",
     source_memory_ids: list[str] | None = None,
     episode_id: str = "",
+    dimensions: dict[str, str] | None = None,
     created_at: str = "",
     db_path: str | None = None,
 ) -> str:
@@ -156,6 +187,7 @@ def record_cold_memory(
                 "point_id": point_id,
                 "legacy_ids": legacy,
                 "episode_id": episode_id,
+                **dict(dimensions or {}),
                 "source_memory_ids": list(source_memory_ids or []),
             },
             db_path=db_path,

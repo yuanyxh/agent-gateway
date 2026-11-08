@@ -88,6 +88,72 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
                 description="Optional group key; memories sharing it are recalled together."
             ),
         ] = None,
+        project: Annotated[
+            str | None,
+            Field(description="Optional project dimension, recorded for grouping."),
+        ] = None,
+        task: Annotated[
+            str | None,
+            Field(description="Optional task dimension, recorded for grouping."),
+        ] = None,
+        subsystem: Annotated[
+            str | None,
+            Field(description="Optional subsystem name declared by the project."),
+        ] = None,
+        task_type: Annotated[
+            Literal[
+                "bug",
+                "feature",
+                "refactor",
+                "maintenance",
+                "review",
+                "test",
+                "deploy",
+                "config",
+                "research",
+                "doc",
+            ]
+            | None,
+            Field(description="Optional cross-project task classification."),
+        ] = None,
+        ticket: Annotated[
+            str | None,
+            Field(description="Optional work-item id, e.g. a tracker key."),
+        ] = None,
+        language: Annotated[
+            Literal["zh", "en", "mixed"] | None,
+            Field(description="Optional language; detected from content when omitted."),
+        ] = None,
+        interaction: Annotated[
+            Literal[
+                "instruction",
+                "confirmation",
+                "correction",
+                "prohibition",
+                "preference",
+            ]
+            | None,
+            Field(description="Optional user-interaction type."),
+        ] = None,
+        session_id: Annotated[
+            str | None, Field(description="Optional session id.")
+        ] = None,
+        role: Annotated[
+            Literal[
+                "background",
+                "fact",
+                "requirement",
+                "confirmation",
+                "feedback",
+                "verification",
+                "root_cause",
+                "conclusion",
+                "progress",
+                "decision",
+            ]
+            | None,
+            Field(description="Optional narrative role; stored as narrative_role."),
+        ] = None,
     ) -> str:
         return await _run(
             handlers,
@@ -108,6 +174,15 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
                     "supersedes": supersedes,
                     "disputed_by": disputed_by,
                     "episode_id": episode_id,
+                    "project": project,
+                    "task": task,
+                    "subsystem": subsystem,
+                    "task_type": task_type,
+                    "ticket": ticket,
+                    "language": language,
+                    "interaction": interaction,
+                    "session_id": session_id,
+                    "role": role,
                 }
             ),
         )
@@ -121,8 +196,111 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
                 json_schema_extra={"items": MEMORY_ITEM_SCHEMA},
             ),
         ],
+        episode_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional group key applied to every memory in the batch that "
+                    "does not set its own."
+                )
+            ),
+        ] = None,
+        project: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional project dimension applied to every memory in the "
+                    "batch that does not set its own."
+                )
+            ),
+        ] = None,
+        task: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional task dimension applied to every memory in the batch "
+                    "that does not set its own."
+                )
+            ),
+        ] = None,
+        subsystem: Annotated[
+            str | None,
+            Field(description="Optional subsystem name declared by the project."),
+        ] = None,
+        task_type: Annotated[
+            Literal[
+                "bug",
+                "feature",
+                "refactor",
+                "maintenance",
+                "review",
+                "test",
+                "deploy",
+                "config",
+                "research",
+                "doc",
+            ]
+            | None,
+            Field(description="Optional cross-project task classification."),
+        ] = None,
+        ticket: Annotated[
+            str | None,
+            Field(description="Optional work-item id, e.g. a tracker key."),
+        ] = None,
+        language: Annotated[
+            Literal["zh", "en", "mixed"] | None,
+            Field(description="Optional language; detected from content when omitted."),
+        ] = None,
+        interaction: Annotated[
+            Literal[
+                "instruction",
+                "confirmation",
+                "correction",
+                "prohibition",
+                "preference",
+            ]
+            | None,
+            Field(description="Optional user-interaction type."),
+        ] = None,
+        session_id: Annotated[
+            str | None, Field(description="Optional session id.")
+        ] = None,
+        role: Annotated[
+            Literal[
+                "background",
+                "fact",
+                "requirement",
+                "confirmation",
+                "feedback",
+                "verification",
+                "root_cause",
+                "conclusion",
+                "progress",
+                "decision",
+            ]
+            | None,
+            Field(description="Optional narrative role; stored as narrative_role."),
+        ] = None,
     ) -> str:
-        return await _run(handlers, "remember_batch", {"memories": memories})
+        return await _run(
+            handlers,
+            "remember_batch",
+            _compact(
+                {
+                    "memories": memories,
+                    "episode_id": episode_id,
+                    "project": project,
+                    "task": task,
+                    "subsystem": subsystem,
+                    "task_type": task_type,
+                    "ticket": ticket,
+                    "language": language,
+                    "interaction": interaction,
+                    "session_id": session_id,
+                    "role": role,
+                }
+            ),
+        )
 
     @tool(name="recall", description=TOOL_DESCRIPTIONS["recall"])
     async def recall(
@@ -156,6 +334,66 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
         agent_id: Annotated[
             str, Field(description="Required when visibility=agent-specific.")
         ] = "unknown",
+        project: Annotated[
+            str | None,
+            Field(
+                description="Hard filter: keep only memories recorded for this project."
+            ),
+        ] = None,
+        ticket: Annotated[
+            str | None,
+            Field(
+                description="Hard filter: keep only memories recorded for this work-item id."
+            ),
+        ] = None,
+        language: Annotated[
+            Literal["zh", "en", "mixed"] | None,
+            Field(description="Hard filter: keep only memories in this language."),
+        ] = None,
+        subsystem: Annotated[
+            str | None,
+            Field(description="Rank memories from this subsystem higher."),
+        ] = None,
+        task: Annotated[
+            str | None,
+            Field(description="Rank memories recorded for this task higher."),
+        ] = None,
+        task_type: Annotated[
+            Literal[
+                "bug",
+                "feature",
+                "refactor",
+                "maintenance",
+                "review",
+                "test",
+                "deploy",
+                "config",
+                "research",
+                "doc",
+            ]
+            | None,
+            Field(description="Rank memories of this task type higher."),
+        ] = None,
+        role: Annotated[
+            Literal[
+                "background",
+                "fact",
+                "requirement",
+                "confirmation",
+                "feedback",
+                "verification",
+                "root_cause",
+                "conclusion",
+                "progress",
+                "decision",
+            ]
+            | None,
+            Field(description="Rank memories with this narrative_role higher."),
+        ] = None,
+        session_id: Annotated[
+            str | None,
+            Field(description="Rank memories from this session higher."),
+        ] = None,
     ) -> str:
         return await _run(
             handlers,
@@ -170,6 +408,14 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
                     "include_superseded": include_superseded,
                     "layers": layers,
                     "agent_id": agent_id,
+                    "project": project,
+                    "ticket": ticket,
+                    "language": language,
+                    "subsystem": subsystem,
+                    "task": task,
+                    "task_type": task_type,
+                    "role": role,
+                    "session_id": session_id,
                 }
             ),
         )

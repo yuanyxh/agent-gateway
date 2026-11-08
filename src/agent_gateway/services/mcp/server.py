@@ -88,6 +88,7 @@ from agent_gateway.services.mcp.server_memory_graph import (
 )
 from agent_gateway.services.memory import link as memory_link
 from agent_gateway.services.memory import store as memory_store
+from agent_gateway.services.memory.dimensions import language_of
 from agent_gateway.services.memory.consolidate import (
     consolidation_scheduler,
     run_daily,
@@ -641,6 +642,12 @@ async def serve():
         # of appending a new uuid4 copy on every sync.
         point_id = memory_store.cold_point_id(source_file, content)
         source_ids = body.get(COLD_SOURCE_MEMORY_IDS_FIELD, [])
+        # A summary inherits whatever its sources agree on, so a recall filter
+        # keeps working on the cold layer instead of only on freshly written rows.
+        dimensions = memory_link.inherit_source_dimensions(source_ids)
+        language = language_of(None, content)
+        if language and not dimensions.get("language"):
+            dimensions["language"] = language
         episode_id = _cold_episode_id(source_ids, body.get(EPISODE_FIELD, ""), vec)
         get_qdrant().upsert(
             collection_name=COLD_COLLECTION,
@@ -663,6 +670,7 @@ async def serve():
                         "confidence": body.get("confidence", 1.0),
                         COLD_SOURCE_MEMORY_IDS_FIELD: source_ids,
                         EPISODE_FIELD: episode_id,
+                        **dimensions,
                     },
                 )
             ],
@@ -673,6 +681,7 @@ async def serve():
             source_file=source_file,
             source_memory_ids=source_ids,
             episode_id=episode_id,
+            dimensions=dimensions,
             created_at=str(body.get("created_at") or "") or now_iso,
         )
         spawn_contradiction_check(contradiction_check_cold(content, point_id))

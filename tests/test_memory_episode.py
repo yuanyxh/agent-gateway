@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import tempfile
@@ -50,6 +51,85 @@ class EpisodeIdTest(unittest.TestCase):
         meta = server_memory._build_metadata({"content": "x"}, "t")
 
         self.assertEqual(meta[server_memory.EPISODE_FIELD], "")
+
+    def test_build_metadata_keeps_grouping_dimensions(self):
+        meta = server_memory._build_metadata(
+            {"content": "x", "project": "yjzt", "task": "修复导航"}, "t"
+        )
+
+        self.assertEqual(meta["project"], "yjzt")
+        self.assertEqual(meta["task"], "修复导航")
+
+    def test_build_metadata_keeps_enum_dimensions(self):
+        meta = server_memory._build_metadata(
+            {
+                "content": "修复登录",
+                "subsystem": "auth_service",
+                "task_type": "bug",
+                "ticket": "PROJ-123",
+                "interaction": "correction",
+                "session_id": "s-1",
+                "role": "root_cause",
+            },
+            "t",
+        )
+
+        self.assertEqual(meta["subsystem"], "auth_service")
+        self.assertEqual(meta["task_type"], "bug")
+        self.assertEqual(meta["ticket"], "PROJ-123")
+        self.assertEqual(meta["interaction"], "correction")
+        self.assertEqual(meta["session_id"], "s-1")
+        self.assertEqual(meta["narrative_role"], "root_cause")
+        self.assertEqual(meta["language"], "zh")
+
+    def test_build_metadata_blanks_unknown_dimension_values(self):
+        meta = server_memory._build_metadata(
+            {
+                "content": "x",
+                "task_type": "hotfix",
+                "role": "rant",
+                "subsystem": "bad\x00slug",
+                "ticket": "x" * 200,
+            },
+            "t",
+        )
+
+        for key in ("task_type", "narrative_role", "subsystem", "ticket"):
+            self.assertEqual(meta[key], "")
+
+    def test_build_metadata_keeps_free_form_dimension_text(self):
+        meta = server_memory._build_metadata(
+            {
+                "content": "x",
+                "project": "我的项目",
+                "subsystem": "my subsystem",
+                "ticket": "PROJ#123",
+            },
+            "t",
+        )
+
+        self.assertEqual(meta["project"], "我的项目")
+        self.assertEqual(meta["subsystem"], "my subsystem")
+        self.assertEqual(meta["ticket"], "PROJ#123")
+
+    def test_build_metadata_prefers_explicit_language(self):
+        meta = server_memory._build_metadata(
+            {"content": "修复登录", "language": "en"}, "t"
+        )
+
+        self.assertEqual(meta["language"], "en")
+
+    def test_build_metadata_blanks_unknown_explicit_language(self):
+        meta = server_memory._build_metadata(
+            {"content": "修复登录", "language": "fr"}, "t"
+        )
+
+        self.assertEqual(meta["language"], "")
+
+    def test_build_metadata_detects_english(self):
+        meta = server_memory._build_metadata({"content": "fix the parser bug"}, "t")
+
+        self.assertEqual(meta["language"], "en")
 
     def test_inherit_prefers_superseded_target(self):
         hot = mock.Mock()
@@ -105,6 +185,102 @@ def _point(point_id, vector=None, **payload):
     point.payload = payload
     point.vector = vector
     return point
+
+
+class BatchEpisodeTest(unittest.TestCase):
+    def test_batch_episode_applies_only_to_items_without_own(self):
+        written = []
+
+        def fake_write(item, now_iso, db_path=None):
+            written.append(item["episode_id"])
+            return {"success": True, "memory_id": "m1", "deduped": True}
+
+        async def ready():
+            return True
+
+        async def call():
+            return await server_memory._handle_remember_batch(
+                {
+                    "episode_id": "ep_batch",
+                    "memories": [
+                        {"content": "a"},
+                        {"content": "b", "episode_id": "ep_own"},
+                    ],
+                }
+            )
+
+        with (
+            mock.patch.object(server_memory, "ensure_hot_memory", ready),
+            mock.patch.object(server_memory, "_write_memory", fake_write),
+        ):
+            asyncio.run(call())
+
+        self.assertEqual(written, ["ep_batch", "ep_own"])
+
+    def test_batch_dimensions_apply_only_to_items_without_own(self):
+        written = []
+
+        def fake_write(item, now_iso, db_path=None):
+            written.append((item.get("project"), item.get("task")))
+            return {"success": True, "memory_id": "m1", "deduped": True}
+
+        async def ready():
+            return True
+
+        async def call():
+            return await server_memory._handle_remember_batch(
+                {
+                    "project": "yjzt",
+                    "task": "修复导航",
+                    "memories": [
+                        {"content": "a"},
+                        {"content": "b", "project": "utility"},
+                    ],
+                }
+            )
+
+        with (
+            mock.patch.object(server_memory, "ensure_hot_memory", ready),
+            mock.patch.object(server_memory, "_write_memory", fake_write),
+        ):
+            asyncio.run(call())
+
+        self.assertEqual(written, [("yjzt", "修复导航"), ("utility", "修复导航")])
+
+    def test_batch_applies_enum_dimensions_to_items_without_own(self):
+        written = []
+
+        def fake_write(item, now_iso, db_path=None):
+            written.append(
+                (item.get("task_type"), item.get("role"), item.get("session_id"))
+            )
+            return {"success": True, "memory_id": "m1", "deduped": True}
+
+        async def ready():
+            return True
+
+        async def call():
+            return await server_memory._handle_remember_batch(
+                {
+                    "task_type": "bug",
+                    "role": "root_cause",
+                    "session_id": "s-9",
+                    "memories": [
+                        {"content": "a"},
+                        {"content": "b", "role": "decision"},
+                    ],
+                }
+            )
+
+        with (
+            mock.patch.object(server_memory, "ensure_hot_memory", ready),
+            mock.patch.object(server_memory, "_write_memory", fake_write),
+        ):
+            asyncio.run(call())
+
+        self.assertEqual(
+            written, [("bug", "root_cause", "s-9"), ("bug", "decision", "s-9")]
+        )
 
 
 class EpisodeExpansionTest(unittest.TestCase):
@@ -345,6 +521,25 @@ class ColdEpisodeExpansionTest(unittest.TestCase):
             expanded = recall_arms._expand_cold([seed], None, EXPANDED_FLOOR)
 
         self.assertEqual(expanded, [])
+
+
+class RecallDimensionTest(unittest.TestCase):
+    def test_splits_filters_from_boosts(self):
+        filters, boost = server_memory._recall_dimensions(
+            {
+                "project": " p ",
+                "ticket": "",
+                "language": "zh",
+                "task": "t",
+                "role": "fact",
+                "session_id": "s",
+            }
+        )
+
+        self.assertEqual(filters, {"project": "p", "language": "zh"})
+        self.assertEqual(
+            boost, {"task": "t", "narrative_role": "fact", "session_id": "s"}
+        )
 
 
 if __name__ == "__main__":

@@ -14,6 +14,12 @@ from agent_gateway.services.mcp.graph_tools import (
     IMPACT_DEFAULT_LIMIT,
     LOOKUP_DEFAULT_LIMIT,
 )
+from agent_gateway.services.memory.dimensions import (
+    INTERACTION_TYPES,
+    LANGUAGE_TYPES,
+    MEMORY_ROLES,
+    MEMORY_TASK_TYPES,
+)
 from agent_gateway.services.summarize.text import DEFAULT_MAX_TOKENS
 from agent_gateway.core.tool_defaults import arg_default
 from agent_gateway.core.tool_text import param_text
@@ -43,6 +49,83 @@ DEFAULT_GRAPH_LIMIT = 50
 #: recall shares catch_up's budget so both tools bound their response the same way.
 DEFAULT_RECALL_MAX_CHARS = DEFAULT_CATCH_UP_MAX_CHARS
 DEFAULT_SUMMARIZE_MAX_TOKENS = DEFAULT_MAX_TOKENS
+
+#: Structured dimensions accepted by remember and remember_batch. Values are
+#: enums or ids; the service never infers them from text.
+DIMENSION_PROPERTIES: dict = {
+    "subsystem": {
+        "type": "string",
+        "description": "Optional subsystem name declared by the project.",
+    },
+    "task_type": {
+        "type": "string",
+        "enum": list(MEMORY_TASK_TYPES),
+        "description": "Optional cross-project task classification.",
+    },
+    "ticket": {
+        "type": "string",
+        "description": "Optional work-item id, e.g. a tracker key.",
+    },
+    "language": {
+        "type": "string",
+        "enum": list(LANGUAGE_TYPES),
+        "description": "Optional language; detected from content when omitted.",
+    },
+    "interaction": {
+        "type": "string",
+        "enum": list(INTERACTION_TYPES),
+        "description": "Optional user-interaction type.",
+    },
+    "session_id": {"type": "string", "description": "Optional session id."},
+    "role": {
+        "type": "string",
+        "enum": list(MEMORY_ROLES),
+        "description": "Optional narrative role; stored as narrative_role.",
+    },
+}
+
+#: recall dimensions. Filters drop rows whose value differs; boosts only reorder,
+#: so a preference can never manufacture a match.
+RECALL_FILTER_PROPERTIES: dict = {
+    "project": {
+        "type": "string",
+        "description": "Hard filter: keep only memories recorded for this project.",
+    },
+    "ticket": {
+        "type": "string",
+        "description": "Hard filter: keep only memories recorded for this work-item id.",
+    },
+    "language": {
+        "type": "string",
+        "enum": list(LANGUAGE_TYPES),
+        "description": "Hard filter: keep only memories in this language.",
+    },
+}
+
+RECALL_BOOST_PROPERTIES: dict = {
+    "subsystem": {
+        "type": "string",
+        "description": "Rank memories from this subsystem higher.",
+    },
+    "task": {
+        "type": "string",
+        "description": "Rank memories recorded for this task higher.",
+    },
+    "task_type": {
+        "type": "string",
+        "enum": list(MEMORY_TASK_TYPES),
+        "description": "Rank memories of this task type higher.",
+    },
+    "role": {
+        "type": "string",
+        "enum": list(MEMORY_ROLES),
+        "description": "Rank memories with this narrative_role higher.",
+    },
+    "session_id": {
+        "type": "string",
+        "description": "Rank memories from this session higher.",
+    },
+}
 
 #: One batch item. Shared by build_tools and the registered tool signature so the
 #: per-item descriptions and defaults stay single-sourced.
@@ -99,6 +182,15 @@ MEMORY_ITEM_SCHEMA: dict = {
             "type": "string",
             "description": "Optional group key; memories sharing it are recalled together.",
         },
+        "project": {
+            "type": "string",
+            "description": "Optional project dimension, recorded for grouping.",
+        },
+        "task": {
+            "type": "string",
+            "description": "Optional task dimension, recorded for grouping.",
+        },
+        **DIMENSION_PROPERTIES,
     },
     "required": ["content"],
 }
@@ -106,7 +198,10 @@ MEMORY_ITEM_SCHEMA: dict = {
 #: Fixed English tool descriptions; parameter guidance lives in `tool_text.PARAM_DESCRIPTIONS`.
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "remember": "Trigger: user says remember/record, a bug is fixed, an insight is learned, or an architecture design changes. Writes one fact to shared memory. content holds only the fact; context holds why it matters and when it applies. Pass supersedes with the id of the memory this fact replaces; the old entry is retired, not deleted.",
-    "remember_batch": "Batch version of remember; prefer it for multiple facts to cut calls.",
+    "remember_batch": (
+        "Batch version of remember; prefer it for multiple facts to cut calls. "
+        "Optional episode_id and dimensions apply to the whole batch."
+    ),
     "recall": "Trigger: user says look up/search/find that earlier one, or refers to history or existing information. Searches shared memory, knowledge base, and notes. Results below the relevance floor are omitted; same-episode context is returned in related.",
     "catch_up": "Trigger: user says just now/last time/previously/recently, or asks what was done, the progress, or what remains unresolved. Do not substitute git log.",
     "forget": "Trigger: user asks to delete a memory, or a memory is wrong/outdated. Deletes it permanently.",
@@ -181,6 +276,15 @@ def build_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Optional group key; memories sharing it are recalled together.",
                     },
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project dimension, recorded for grouping.",
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Optional task dimension, recorded for grouping.",
+                    },
+                    **DIMENSION_PROPERTIES,
                 },
                 "required": ["content"],
             },
@@ -196,6 +300,28 @@ def build_tools() -> list[Tool]:
                         "description": param_text("param.memories"),
                         "items": MEMORY_ITEM_SCHEMA,
                     },
+                    "episode_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional group key applied to every memory in the "
+                            "batch that does not set its own."
+                        ),
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": (
+                            "Optional project dimension applied to every memory "
+                            "in the batch that does not set its own."
+                        ),
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "Optional task dimension applied to every memory "
+                            "in the batch that does not set its own."
+                        ),
+                    },
+                    **DIMENSION_PROPERTIES,
                 },
                 "required": ["memories"],
             },
@@ -241,6 +367,8 @@ def build_tools() -> list[Tool]:
                         "default": "unknown",
                         "description": "Required when visibility=agent-specific.",
                     },
+                    **RECALL_FILTER_PROPERTIES,
+                    **RECALL_BOOST_PROPERTIES,
                 },
                 "required": ["keywords"],
             },

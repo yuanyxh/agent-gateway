@@ -27,6 +27,36 @@ def _patched(similar=None):
     )
 
 
+class HotRowDimensionTest(unittest.TestCase):
+    def test_dimensions_come_from_the_row(self):
+        row = {
+            "memory": "fact",
+            "metadata": {"project": "p", "narrative_role": "verification"},
+        }
+
+        out = project_hot_result(row)
+
+        self.assertEqual(out["project"], "p")
+        self.assertEqual(out["narrative_role"], "verification")
+
+    def test_message_role_does_not_become_a_dimension(self):
+        row = {
+            "memory": "fact",
+            "role": "user",
+            "metadata": {"narrative_role": "verification"},
+        }
+
+        out = project_hot_result(row)
+
+        self.assertEqual(out["narrative_role"], "verification")
+        self.assertNotIn("role", out)
+
+    def test_language_is_derived_for_a_row_without_it(self):
+        out = project_hot_result({"memory": "修复登录问题"})
+
+        self.assertEqual(out["language"], "zh")
+
+
 class WriteContractTest(unittest.TestCase):
     def _write(self, item, similar=None):
         hot, patches = _patched(similar)
@@ -114,6 +144,42 @@ class WriteContractTest(unittest.TestCase):
         self.assertTrue(
             any("keep one fact" in warning for warning in result["warnings"])
         )
+
+    def test_deduped_write_attaches_missing_dimensions(self):
+        similar = [
+            {
+                "id": "old",
+                "score": 0.99,
+                "fact": "fact",
+                "context": "",
+                "episode_id": "",
+            }
+        ]
+        hot, patches = _patched(similar)
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            mock.patch.object(
+                server_memory, "_update_metadata", return_value=True
+            ) as update,
+        ):
+            server_memory._write_memory(
+                {
+                    "content": "fact",
+                    "project": "p",
+                    "task_type": "bug",
+                    "language": "zh",
+                },
+                "2026-01-01T00:00:00",
+            )
+
+        metadata = update.call_args[0][1]
+        self.assertEqual(metadata["project"], "p")
+        self.assertEqual(metadata["task_type"], "bug")
+        self.assertEqual(metadata["language"], "zh")
 
     def test_deduped_consolidation_summary_keeps_its_marker(self):
         similar = [

@@ -28,6 +28,16 @@ from agent_gateway.core.memory_lifecycle import (
     VISIBILITY_FIELD,
     visible_to,
 )
+from agent_gateway.services.memory.dimensions import (
+    GROUPING_DIMENSIONS,
+    INTERACTION_TYPES,
+    LANGUAGE_TYPES,
+    MEMORY_ROLES,
+    MEMORY_TASK_TYPES,
+    dimension_text,
+    enum_value,
+    language_of,
+)
 from agent_gateway.services.mcp.server_constants import (
     AI_API_KEY,
     ARCHIVED_AT_FIELD,
@@ -362,6 +372,21 @@ def _level(value) -> int:
         return 0
 
 
+def _dimensions_of(src: dict) -> dict[str, str]:
+    """Normalized dimension values; the single place a write is validated."""
+    return {
+        "project": dimension_text(src.get("project")),
+        "subsystem": dimension_text(src.get("subsystem")),
+        "task": dimension_text(src.get("task")),
+        "task_type": enum_value(src.get("task_type"), MEMORY_TASK_TYPES),
+        "ticket": dimension_text(src.get("ticket")),
+        "language": language_of(src.get("language"), src.get("content")),
+        "interaction": enum_value(src.get("interaction"), INTERACTION_TYPES),
+        "session_id": dimension_text(src.get("session_id")),
+        "narrative_role": enum_value(src.get("role"), MEMORY_ROLES),
+    }
+
+
 def _build_metadata(src: dict, now_iso: str) -> dict:
     return {
         # mem0 owns the agent scope; identity keys in metadata are dropped, so the
@@ -384,6 +409,8 @@ def _build_metadata(src: dict, now_iso: str) -> dict:
         # embedded text back as if it were the fact.
         "fact": str(src.get("content") or ""),
         "context": str(src.get("context") or ""),
+        # Dimensions are explicit values; the service never infers them from text.
+        **_dimensions_of(src),
         "type": str(src.get("type") or ""),
         "source_files": src.get("source_files") or [],
         "source_url": str(src.get("source_url") or ""),
@@ -627,6 +654,12 @@ def _write_memory(item: dict, now_iso: str, db_path: str | None = None) -> dict:
         for key in ("fact", "context", "type", "source_files", "source_url"):
             if item.get(key) and not meta.get(key):
                 meta[key] = item[key]
+                changed = True
+        # A repeated write must still attach dimensions the stored copy lacks;
+        # otherwise a later recall filter cannot find the fact it just re-sent.
+        for key, value in _dimensions_of(item).items():
+            if value and not meta.get(key):
+                meta[key] = value
                 changed = True
         if item.get("importance") is not None:
             importance = _importance(item["importance"])
@@ -1104,15 +1137,35 @@ async def _handle_remember_batch(arguments: dict) -> list[TextContent]:
         ]
     results = []
     now_iso = datetime.now().isoformat()
+    batch_defaults = {
+        key: str(arguments.get(key) or "").strip()
+        for key in (
+            "episode_id",
+            "project",
+            "subsystem",
+            "task",
+            "task_type",
+            "ticket",
+            "language",
+            "interaction",
+            "session_id",
+            "role",
+        )
+    }
+    batch_defaults = {key: value for key, value in batch_defaults.items() if value}
     for mem in memories:
+        item = mem
+        for key, value in batch_defaults.items():
+            if not str(mem.get(key) or "").strip():
+                item = {**item, key: value}
         try:
-            item_result = _write_memory(mem, now_iso)
+            item_result = _write_memory(item, now_iso)
         except Exception as e:
             item_result = {"success": False, "error": str(e)}
         results.append(item_result)
         if item_result.get("memory_id") and not item_result.get("deduped"):
             spawn_contradiction_check(
-                _contradiction_check_hot(_embed_text(mem), item_result["memory_id"])
+                _contradiction_check_hot(_embed_text(item), item_result["memory_id"])
             )
     return [
         TextContent(
@@ -1139,6 +1192,26 @@ def _recall_keywords(arguments: dict) -> list[str]:
         legacy = str(arguments.get("query") or "").strip()
         return [legacy] if legacy else []
     return [str(term).strip() for term in raw if str(term).strip()]
+
+
+def _recall_dimensions(arguments: dict) -> tuple[dict[str, str], dict[str, str]]:
+    """Explicit dimension values, normalized the same way a write normalizes them."""
+    filters = {
+        "project": dimension_text(arguments.get("project")),
+        "ticket": dimension_text(arguments.get("ticket")),
+        "language": enum_value(arguments.get("language"), LANGUAGE_TYPES),
+    }
+    boost = {
+        "subsystem": dimension_text(arguments.get("subsystem")),
+        "task": dimension_text(arguments.get("task")),
+        "task_type": enum_value(arguments.get("task_type"), MEMORY_TASK_TYPES),
+        "narrative_role": enum_value(arguments.get("role"), MEMORY_ROLES),
+        "session_id": dimension_text(arguments.get("session_id")),
+    }
+    return (
+        {key: value for key, value in filters.items() if value},
+        {key: value for key, value in boost.items() if value},
+    )
 
 
 @_register("recall")
@@ -1176,11 +1249,15 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         include_archived=include_archived,
         include_superseded=include_superseded,
     )
+    dimension_filters, dimension_boost = _recall_dimensions(arguments)
     request = Query(
         text=text,
         language=detect_language(text),
         root_text=text,
         semantic_text=semantic,
+        filters=dimension_filters,
+        boost=dimension_boost,
+        expose=GROUPING_DIMENSIONS,
     )
     out = pipeline.run_query(
         request,
@@ -1206,17 +1283,25 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     # After truncation: only the rows that survived are ones the caller saw.
     await asyncio.to_thread(_touch_hot_access, top)
     status = out["status"]
+    filtered = int(out.get("filtered") or 0)
     payload = {
         "status": status,
         "results": top,
         "related": related,
         "count": len(top),
+        # Rows a dimension filter removed, so an empty result is explainable.
+        "filtered": filtered,
         "errors": out.get("errors") or [],
         # The pipeline already writes this trace; returning it lets callers and
         # adoption analysis join a result back to its arms.
         "trace_id": out.get("trace_id") or "",
     }
-    if status == "weak_match":
+    if filtered and status in ("weak_match", "no_match"):
+        payload["hint"] = (
+            f"{filtered} row(s) failed the dimension filter; rows without that "
+            "field, including legacy and notes results, never match."
+        )
+    elif status == "weak_match":
         payload["hint"] = (
             "No semantic memory cleared the relevance floor; results are lexical or related context."
         )

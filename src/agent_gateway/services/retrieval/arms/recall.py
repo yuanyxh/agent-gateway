@@ -19,6 +19,7 @@ from agent_gateway.core.memory_lifecycle import (
     VISIBILITY_FIELD,
     visible_to,
 )
+from agent_gateway.services.memory.dimensions import GROUPING_DIMENSIONS, language_of
 from agent_gateway.services.mcp.server_constants import (
     COLD_COLLECTION,
     COLD_STALE_FIELD,
@@ -57,6 +58,30 @@ def memory_status(meta: dict | None) -> str:
     return str((meta or {}).get(STATUS_FIELD) or STATUS_ACTIVE)
 
 
+def row_dimensions(source: dict, content: str = "") -> dict[str, str]:
+    """Dimension values from a payload or node; language is derived when absent.
+
+    Legacy rows predate the field, so language — the one dimension the write
+    path may compute — is filled here as well instead of leaving the row
+    unfilterable.
+    """
+    # mem0 promotes some metadata keys (role, user_id, ...) to the row root and
+    # removes them from `metadata`, so both levels must be read.
+    meta = source.get("metadata")
+    layers = (meta, source) if isinstance(meta, dict) else (source,)
+    out: dict[str, str] = {}
+    for values in layers:
+        for key in GROUPING_DIMENSIONS:
+            value = str(values.get(key) or "")
+            if value:
+                out[key] = value
+    if not out.get("language"):
+        language = language_of(None, content)
+        if language:
+            out["language"] = language
+    return out
+
+
 def project_hot_result(row: dict) -> dict:
     """Hot-layer row -> model-facing shape, trimmed to the whitelist.
 
@@ -81,6 +106,7 @@ def project_hot_result(row: dict) -> dict:
         episode = str(meta.get(EPISODE_FIELD) or "").strip()
         if episode:
             out["episode_id"] = episode
+    out.update(row_dimensions(row, str(out.get("content") or "")))
     return out
 
 
@@ -295,6 +321,9 @@ class ColdMemoryArm:
                         content=payload.get("content", ""),
                         layer="cold",
                         extra={
+                            **row_dimensions(
+                                payload, str(payload.get("content") or "")
+                            ),
                             "source_file": payload.get("source_file", ""),
                             "created_at": payload.get("created_at", ""),
                             "type": payload.get("type", ""),
@@ -530,6 +559,7 @@ def _expand_edges(items, query_vec, min_score, reader_agent: str = "unknown"):
                 layer=node.get("layer", ""),
                 match_kind="expanded",
                 extra={
+                    **row_dimensions(node, str(entry.get("content") or "")),
                     "heat_score": entry["heat_score"],
                     "episode_id": entry["episode_id"],
                     "edge": edge_type,
@@ -678,6 +708,7 @@ def _expand_hot(
                     layer="hot",
                     match_kind="expanded",
                     extra={
+                        **row_dimensions(payload, str(payload.get("data") or "")),
                         "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
                         "episode_id": episode_id,
                         "expanded": True,
@@ -752,6 +783,7 @@ def _expand_cold(
                     layer="cold",
                     match_kind="expanded",
                     extra={
+                        **row_dimensions(payload, str(payload.get("content") or "")),
                         "source_file": payload.get("source_file", ""),
                         "created_at": payload.get("created_at", ""),
                         "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),

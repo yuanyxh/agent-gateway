@@ -41,6 +41,15 @@ class Query:
     language: str = "unknown"
     root_text: str = ""
     semantic_text: str = ""
+    #: Result constraints keyed by row field; a row whose value is absent or not
+    #: allowed is dropped. Values may be a single value or a collection.
+    filters: dict[str, Any] = field(default_factory=dict)
+    #: Result preferences keyed by row field; each match multiplies the row's rank
+    #: position without changing its score, so the relevance gate is unaffected.
+    boost: dict[str, Any] = field(default_factory=dict)
+    #: Extra row fields the caller wants echoed back, beyond the shared whitelist.
+    #: Lets a caller verify which values a filter or boost matched on.
+    expose: tuple[str, ...] = ()
 
 
 @dataclass
@@ -61,6 +70,8 @@ class RetrievedItem:
     RESULT_EXTRA_KEYS = (
         "episode_id",
         "context",
+        "project",
+        "task",
         "edge",
         "name",
         "caller_count",
@@ -69,7 +80,7 @@ class RetrievedItem:
     )
     RESULT_META_KEYS = ("tags", "status", "confidence")
 
-    def to_result(self) -> dict[str, Any]:
+    def to_result(self, expose: tuple[str, ...] = ()) -> dict[str, Any]:
         out: dict[str, Any] = {
             "id": self.id,
             "kind": self.kind,
@@ -80,7 +91,7 @@ class RetrievedItem:
             out["layer"] = self.layer
         if self.locator:
             out["locator"] = self.locator
-        for key in self.RESULT_EXTRA_KEYS:
+        for key in dict.fromkeys((*self.RESULT_EXTRA_KEYS, *expose)):
             value = self.extra.get(key)
             if value not in (None, ""):
                 out[key] = value

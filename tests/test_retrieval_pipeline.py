@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -17,6 +18,7 @@ from agent_gateway.services.retrieval import config, trace  # noqa: E402
 from agent_gateway.services.retrieval.fusion.score import (  # noqa: E402
     HeatWeightedFusion,
     RRFFusion,
+    SignalWeightedFusion,
 )
 from agent_gateway.services.retrieval.gate.relevance import (  # noqa: E402
     LayerPresenceGate,
@@ -38,7 +40,12 @@ from agent_gateway.services.retrieval.types import (  # noqa: E402
 
 
 def item(
-    id_: str, score: float, *, layer: str = "hot", content: str = ""
+    id_: str,
+    score: float,
+    *,
+    layer: str = "hot",
+    content: str = "",
+    extra: dict | None = None,
 ) -> RetrievedItem:
     return RetrievedItem(
         id=id_,
@@ -47,6 +54,7 @@ def item(
         score_kind="dense",
         content=content,
         layer=layer,
+        extra=dict(extra or {}),
     )
 
 
@@ -128,6 +136,109 @@ class StageTest(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in out["results"]], ["x"])
         self.assertEqual(seen, ["q"])
+
+
+class QueryConstraintTest(unittest.TestCase):
+    def _run(self, items, limit=5, fusion=None, expander=None, **kwargs):
+        pipeline = Pipeline(
+            name="test",
+            arms=[FakeArm("a", items)],
+            fusion=fusion or MaxScoreFusion(),
+            gate=PassThroughGate(),
+            expander=expander,
+        )
+        return pipeline.run_query(Query(text="q", **kwargs), limit=limit)
+
+    def test_filter_drops_rows_with_another_value(self):
+        rows = [
+            item("a", 0.9, extra={"project": "p"}),
+            item("b", 0.8, extra={"project": "o"}),
+            item("c", 0.7),
+        ]
+
+        out = self._run(rows, filters={"project": "p"})
+
+        self.assertEqual([row["id"] for row in out["results"]], ["a"])
+
+    def test_filter_accepts_several_allowed_values(self):
+        rows = [
+            item("a", 0.9, extra={"language": "zh"}),
+            item("b", 0.8, extra={"language": "en"}),
+        ]
+
+        out = self._run(rows, filters={"language": ["zh", "mixed"]})
+
+        self.assertEqual([row["id"] for row in out["results"]], ["a"])
+
+    def test_boost_reorders_without_touching_score(self):
+        rows = [item("a", 0.030), item("b", 0.028, extra={"task": "t"})]
+
+        out = self._run(rows, boost={"task": "t"})
+
+        self.assertEqual([row["id"] for row in out["results"]], ["b", "a"])
+        self.assertEqual(out["results"][0]["score"], 0.028)
+
+    def test_boost_lift_caps_after_three_matches(self):
+        rows = [
+            item("a", 0.11),
+            item("b", 0.08, extra={key: "v" for key in ("p", "s", "t", "r", "n")}),
+        ]
+
+        out = self._run(rows, boost={key: "v" for key in ("p", "s", "t", "r", "n")})
+
+        self.assertEqual([row["id"] for row in out["results"]], ["a", "b"])
+
+    def test_filter_runs_before_the_fused_cut(self):
+        rows = [item(f"n{index}", 0.9 - index * 0.01) for index in range(8)]
+        rows.append(item("target", 0.5, extra={"project": "p"}))
+
+        out = self._run(rows, limit=2, filters={"project": "p"})
+
+        self.assertEqual([row["id"] for row in out["results"]], ["target"])
+        self.assertEqual(out["filtered"], 8)
+
+    def test_related_rows_obey_the_constraint(self):
+        def expander(query, items, filters):
+            return [item("r", 0.8, extra={"project": "o"})]
+
+        out = self._run(
+            [item("a", 0.9, extra={"project": "p"})],
+            filters={"project": "p"},
+            expander=expander,
+        )
+
+        self.assertEqual(out["related"], [])
+
+    def test_boost_keeps_the_fusion_rank_key(self):
+        now = datetime.now().isoformat()
+        rows = [
+            item("a", 0.030, extra={"last_accessed_at": now}),
+            item("b", 0.050, extra={"task": "t"}),
+        ]
+
+        out = self._run(
+            rows,
+            fusion=SignalWeightedFusion(recency=1.0),
+            boost={"task": "t"},
+        )
+
+        self.assertEqual([row["id"] for row in out["results"]], ["a", "b"])
+
+    def test_exposed_dimensions_are_returned(self):
+        out = self._run(
+            [item("a", 0.9, extra={"ticket": "PROJ#1", "role": "fact"})],
+            expose=("ticket", "role"),
+        )
+
+        self.assertEqual(out["results"][0]["ticket"], "PROJ#1")
+        self.assertEqual(out["results"][0]["role"], "fact")
+
+    def test_no_constraints_keep_the_fused_order(self):
+        rows = [item("a", 0.02), item("b", 0.03)]
+
+        out = self._run(rows)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["b", "a"])
 
 
 class AutoCalibrateTest(unittest.TestCase):
