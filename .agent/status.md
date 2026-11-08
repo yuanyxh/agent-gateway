@@ -16,6 +16,7 @@
 | notes 层降噪 | 语义复核（minilm 0.40 / jina 0.35）+ **仅作兜底**：hot/cold 有命中时 notes 不进主结果；抽样 100 条 notes 占比 26.2%→8.5%，空返回不增 | — |
 | 记忆体第二轮改进 | 近邻矛盾候选、打分批量写、受保护记忆、dry-run、检索层归档过滤、多信号排序（默认关）、摘要预算折叠已实现并通过 379 例；等打包部署 | — |
 | gateway 与 utility 完全解耦 | 配置/路径/项目数据/图库写权已落地；legacy 适配保留一个发布周期；522 例与 ruff 通过；待用户验证与提交 | — |
+| 记忆分组治理 | 已接入日任务：增量候选、默认应用 split/merge、写 `episode_prev`/`episode_source`、12 次调用预算；628 例通过 | 待重启 MCP 生效；离线报告仍全量运行 |
 
 ## 已完成
 
@@ -79,6 +80,11 @@
 - 2026-11-08 维度部署复验（三轮，通过）：查询侧 project 过滤返回行全部匹配（`filtered=19/34`）、历史行补 language、无过滤 `filtered=0`；写入侧 task_type/language/narrative_role 均正确回显，boost `role` 生效。过程中发现并修复 mem0 两处冲突：promoted 键 `role` 被提升到行顶层、随后被消息角色覆盖为 `user`，最终存储键改为 `narrative_role`（工具参数名仍为 role）；601 例通过
 - 2026-11-08 维度改动审查修复：硬过滤提前到融合截断前并放大候选窗口；冷层摘要继承源记忆维度、扩展结果与历史行按需补 language；dedupe 合并缺失维度；维度校验放宽为 strip+128 字符上限（允许中文与 `#`）；`Query` 增加 `expose` 并在重建/语义变体分支完整透传 filters/boost；`_prefer` 复用 fusion.rank_key；recall 返回 `filtered` 与被过滤提示；维度定义迁至 `services/memory/dimensions.py`；598 例通过
 - 2026-11-08 本地小模型迭代检索实验：Qwen3-1.7B Q8_0（llama.cpp Metal）热态判定 p50 492 ms、解析率 99.27%；20 条 query 迭代新增 34 条强关联，人工认可 20 条（宽泛意图 15/15，专有验证意图 5/15）；判定器基线 precision 约 85%；结论不接入默认路径；episode 扩展对照（20 条 query、11 条有效扩展）precision 63.6%，与 LLM 迭代相当且零模型延迟，下一步优先修 episode 分组边界。脚本 `scripts/iterative_recall_eval.py`，报告 `tests/eval/iterative/2026-11-08/{report,episode_report}.md`；新增 `remember_batch` 顶层 `episode_id`（同批未指定条目共享分组），578 例通过，待重启 MCP 生效
+- 2026-11-08 记忆分组治理 MVP：新增 `services/memory/group_governance.py`（多成员组 + 单条组近邻候选、批量 keep/split/merge 解析）、中英提示词、`scripts/group_governance_eval.py` 与 12 例测试；生产库只读报告 454 组 + 20 对；LLM 小样本 10 决策、0 解析失败；计划 `.agent/plans/2026-11-08-group-governance.md`，报告在 `tests/eval/group_governance/2026-11-08/`（未入库）
+
+- 2026-11-08 分组治理审查修复：只读 `mode=ro&immutable=1` + 分页加载（生产 5322 条不再漏 322）、单条显式组不进配对、singles 带 `text_source`/`truncated`、批次 32k 字符预算、LLM 异常与畸形 split 隔离、报告标注明细截断；新增 `store.readonly_connect`、`link.fact_from_data` 与 8 例测试；624 例通过
+
+- 2026-11-09 分组治理接入日任务：`govern_daily` 按 `since` 后新记忆所在组筛选候选、默认应用 split/merge、写 `episode_prev`/`episode_source`/`governance_run`、日任务预算 12 次调用；应用时同步 mem0 metadata 并重建 episode 边；回滚脚本先同步 mem0、只扫 hot；调度器传上次日任务时间；629 例通过
 
 ## 下一步
 
@@ -86,6 +92,7 @@
 2. 打包部署记忆体第二轮改进并复验（近邻候选耗时、dry-run 不落盘、归档过滤后的召回）
 3. utility 侧打包与整机回归通过后发版
 4. 归档条目物理迁出热层：未开始，细节与触发条件见 utility 仓 `.claude/plans/memory-system.md` 的「待办」章节
+5. 分组治理检查点 B：人工抽检 50 组；准确率 ≥85% 且扩展净增益 >0 后再做完整版任务 5-7
 
 ## 最近验证
 
@@ -146,8 +153,14 @@
 | 2026-11-08 | 部署环境 MCP `recall` 实测（project 过滤/对照） | 过滤行全部带 project、`filtered=19`；对照 `filtered=0`；写入 task_type/language 生效 |
 | 2026-11-08 | 第二轮部署复验（role 维度） | 回显值为 mem0 消息角色 `user`，证实键名冲突；改存储键 `narrative_role`，601 例通过 |
 | 2026-11-08 | 第三轮部署复验 | 新写入行回显 `narrative_role=verification`；project 过滤 `filtered=34`；boost role 生效 |
+| 2026-11-08 | 分组治理 MVP：`unittest discover` / `ruff format --check` / `ruff check` / `GATEWAY_HOME` 临时目录 `--check` | 613 例通过 / 265 文件 / 0 条 / check passed |
+| 2026-11-08 | `scripts/group_governance_eval.py` 生产库只读 + 1 次 LLM | 454 组 + 20 对；10 决策；0 解析失败 |
+| 2026-11-08 | 审查修复后全量测试与只读连接 | 624 例通过；ruff 266 文件通过；只读读生产库 2 行成功 |
 
 ## 已知问题
+
+- 2026-11-08 自动化截断审计与修复：8 处判断输入改为完整正文（分组取 `fact`、矛盾 500、合并 150/120/80、recall 语义过滤 200 全部移除截断）；`link.py` 白名单补 `fact` 并从 Qdrant 回填 5610 条（99.9%，备份 `memory_graph.sqlite.bak-20261108225909`）；616 例通过。待重启 MCP 使判定与白名单修复生效后复验（`todo-20261108-002`）。
+- 2026-11-08 分组治理审查修复：5 类缺陷已修（只读分页、显式单条组、输入标记、批次预算、输出校验）；回填脚本改为读分片副本并剥离 mem0 `Context:` 后缀，已 apply 1046 条（备份 `memory_graph.sqlite.bak-20261108235634`），fact 覆盖 5332/5332、候选 654→674。`SUMMARY_FACTS_MAX_CHARS=20000` 与 `SUMMARY_RULE_SUMMARY_MAX_CHARS=2000` 取代无界输入。待重启 MCP 复验。
 
 - `test_ast_imports` 中调用主项目二进制的用例被跳过：本仓没有 `utility` 可执行文件，属预期降级。
 - `pip-audit` 尚未安装，交付门暂未执行。

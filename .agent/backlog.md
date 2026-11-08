@@ -10,6 +10,8 @@
 | todo-20261103-004 | 安装 pip-audit 并执行首次漏洞扫描 | P2；open | `verify.audit` 已声明，工具未安装 |
 | todo-20261103-005 | 评估依赖锁定文件策略 | P2；open | 画像声明 `stack.lockfile: none` |
 | todo-20261103-006 | 按部署目标与 UI 出现再生长 ship/deploy/ui | P3；open | 当前 `deploy_target: none`、`has_ui: false` |
+| todo-20261108-001 | 分组治理离线报告支持增量落盘与降批/超时控制 | P2；open | 日任务已改为增量 + 12 次预算；离线脚本仍全量 674 候选，单次约 62 分钟 |
+| todo-20261108-002 | 修复自动化链路的截断输入 | P0；verify | 8 处已修；审查复验的 5 类缺陷已修；fact 回填已 apply 1046 条（覆盖 100%）；待重启 MCP 复验 |
 
 ## 规则
 
