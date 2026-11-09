@@ -1243,12 +1243,6 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     # hot_count is 0). Init failure does not terminate — the cold layer and notes do not
     # depend on the hot layer, so recall should degrade rather than fail.
     await ensure_hot_memory()
-    pipeline = _build_recall_pipeline(
-        hot_enabled=hot_enabled,
-        cold_enabled=cold_enabled,
-        include_archived=include_archived,
-        include_superseded=include_superseded,
-    )
     dimension_filters, dimension_boost = _recall_dimensions(arguments)
     request = Query(
         text=text,
@@ -1259,12 +1253,23 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         boost=dimension_boost,
         expose=GROUPING_DIMENSIONS,
     )
-    out = pipeline.run_query(
-        request,
-        limit,
-        filters={"reader_agent_id": str(arguments.get("agent_id") or "unknown")},
-        tool="recall",
-    )
+
+    def _run():
+        # Build and run on one worker: the first get_reranker() loads ONNX.
+        pipeline = _build_recall_pipeline(
+            hot_enabled=hot_enabled,
+            cold_enabled=cold_enabled,
+            include_archived=include_archived,
+            include_superseded=include_superseded,
+        )
+        return pipeline.run_query(
+            request,
+            limit,
+            {"reader_agent_id": str(arguments.get("agent_id") or "unknown")},
+            "recall",
+        )
+
+    out = await asyncio.to_thread(_run)
     top = out["results"]
     related = out["related"]
     # The budget is spent on the primary results first. Once they are cut, related
