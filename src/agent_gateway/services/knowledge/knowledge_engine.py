@@ -21,6 +21,13 @@ logger = setup_logging("knowledge_refill")
 MAX_LLM_CALLS_PER_RUN = 10
 CARDS_PER_TOPIC_PER_RUN = 3
 
+# expand's answer is a tiny JSON object, but providers that think before answering
+# spend the completion budget on reasoning: 768 tokens returned finish_reason=length
+# with empty content. Scale with prompt size and keep both bounds explicit.
+EXPAND_MIN_TOKENS = 2048
+EXPAND_MAX_TOKENS = 4096
+EXPAND_OUTPUT_TOKENS = 512
+
 # 依据充分性判据
 MIN_EVIDENCE_CHARS = 800
 MIN_WIKI_CHARS = 600
@@ -75,6 +82,12 @@ def _res(
     }
 
 
+def _expand_max_tokens(prompt: str) -> int:
+    """Scale the expand budget with prompt size, bounded for cost and latency."""
+    scaled = int(len(prompt) * 1.2) + EXPAND_OUTPUT_TOKENS
+    return max(EXPAND_MIN_TOKENS, min(EXPAND_MAX_TOKENS, scaled))
+
+
 def _llm_json(
     prompt: str,
     *,
@@ -89,6 +102,7 @@ def _llm_json(
     `allow_partial=False` is for body output: a card recovered from a truncated
     payload is a half card and must be dropped.
     """
+    saw_truncated = False
     for attempt in range(2):
         failure = ""
         try:
@@ -104,6 +118,9 @@ def _llm_json(
             # A truncated response still carries usable leading fields
             # (expand's concept, gate's accept).
             raw = e.content if e.kind == "truncated" else None
+            # `failure` is overwritten by later parse errors; keep truncation
+            # visible even when the half payload cannot be repaired.
+            saw_truncated = saw_truncated or e.kind == "truncated"
             failure = f"{e.kind}/finish_reason={e.finish_reason}"
             if raw:
                 logger.warning(
@@ -143,13 +160,14 @@ def _llm_json(
     host = urllib.parse.urlparse(tgt.endpoint).netloc or "-"
     logger.error(
         "%s: no parseable JSON after two attempts "
-        "(model=%s host=%s max_tokens=%s prompt_chars=%d last=%s)",
+        "(model=%s host=%s max_tokens=%s prompt_chars=%d last=%s truncated=%s)",
         feature,
         tgt.model,
         host,
         max_tokens,
         len(prompt),
         last,
+        saw_truncated,
     )
     return None
 
@@ -310,7 +328,12 @@ def advance(
         exclude=exclude,
         disliked=disliked,
     )
-    d = _llm_json(p, max_tokens=768, disable_thinking=True, feature="knowledge_expand")
+    d = _llm_json(
+        p,
+        max_tokens=_expand_max_tokens(p),
+        disable_thinking=True,
+        feature="knowledge_expand",
+    )
     calls += 1
     if d is None:
         return _res(EXPAND_FAIL, calls=calls)

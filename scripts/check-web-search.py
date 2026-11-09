@@ -8,6 +8,15 @@ engines and is intentionally slow (per-engine rate limits).
 
 from __future__ import annotations
 
+# ruff: noqa: E402 - cache isolation must run before agent_gateway imports
+
+try:
+    from _eval_env import isolate_cache
+except ModuleNotFoundError:
+    from scripts._eval_env import isolate_cache
+
+isolate_cache(__file__)
+
 import argparse
 import os
 import sys

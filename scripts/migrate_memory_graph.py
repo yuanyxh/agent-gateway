@@ -12,6 +12,8 @@ Usage:
 
 from __future__ import annotations
 
+# ruff: noqa: E402 - cache isolation must run before agent_gateway imports
+
 import argparse
 import json
 import os
@@ -21,6 +23,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+
+try:
+    from _eval_env import isolate_cache  # noqa: E402
+except ModuleNotFoundError:
+    from scripts._eval_env import isolate_cache  # noqa: E402
+
+isolate_cache(__file__)
 
 from qdrant_client import QdrantClient  # noqa: E402
 

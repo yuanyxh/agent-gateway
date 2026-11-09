@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from dataclasses import replace
 
 from agent_gateway.core.log_utils import setup_logging
@@ -25,6 +26,10 @@ MAX_TOKENS = 512
 _lock = threading.Lock()
 _instance: object | None = None
 _failed = False
+_failed_at = 0.0
+#: A missing model is often installed while the app is running; do not cache
+#: the failure forever, but also do not retry a 600 ms load on every recall.
+RETRY_SECONDS = 60.0
 
 
 #: The cross-encoder emits a relevance logit: negative means "not a passage for
@@ -92,16 +97,22 @@ class CrossEncoderReranker:
 
 def get_reranker() -> CrossEncoderReranker | None:
     """The shared reranker, or None when the model is unavailable."""
-    global _instance, _failed
-    if _instance is not None or _failed:
+    global _instance, _failed, _failed_at
+    if _instance is not None:
         return _instance  # type: ignore[return-value]
+    if _failed and time.monotonic() - _failed_at < RETRY_SECONDS:
+        return None
     with _lock:
-        if _instance is not None or _failed:
+        if _instance is not None:
             return _instance  # type: ignore[return-value]
+        if _failed and time.monotonic() - _failed_at < RETRY_SECONDS:
+            return None
         try:
             _instance = CrossEncoderReranker()
+            _failed = False
         except Exception as e:  # noqa: BLE001 - degrade to no re-ranking
             _failed = True
+            _failed_at = time.monotonic()
             logger.warning(
                 f"[rerank] unavailable at {model_dir()}, keeping fused order: {e!r}"
             )

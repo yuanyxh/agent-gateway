@@ -122,6 +122,7 @@ from agent_gateway.services.retrieval.fusion.score import SignalWeightedFusion
 from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
 from agent_gateway.services.retrieval.pipeline import Pipeline, Stage
+from agent_gateway.services.retrieval.rerank import get_reranker
 from agent_gateway.services.retrieval.text.analyzer import detect_language, split_terms
 from agent_gateway.services.retrieval.types import Query
 
@@ -1311,6 +1312,17 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=dumps(payload))]
 
 
+def _recall_rerank_enabled() -> bool:
+    """On by default after the 2026-11-09 known-item comparison.
+
+    100 samples, limit 10: hit@1 0.90 -> 0.97, mrr 0.932 -> 0.975,
+    chars/query 1621.5 -> 1238.7, p95 458 -> 2552 ms (budget 3000).
+    `RECALL_RERANK=0` disables it without a code change.
+    """
+    value = os.environ.get("RECALL_RERANK", "1").strip().lower()
+    return value not in ("", "0", "false", "off")
+
+
 def _build_recall_pipeline(
     *,
     hot_enabled: bool = True,
@@ -1358,6 +1370,7 @@ def _build_recall_pipeline(
         arms=arms,
         fusion=SignalWeightedFusion(**rank_signal_weights()),
         gate=LayerPresenceGate(),
+        reranker=get_reranker() if _recall_rerank_enabled() else None,
         expander=expand_episodes,
         stages=stages,
     )
