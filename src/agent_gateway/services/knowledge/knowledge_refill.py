@@ -139,15 +139,24 @@ def refill() -> dict:
     budget = engine.MAX_LLM_CALLS_PER_RUN
     budget, made, results = _refill_topics(budget)
 
+    outcomes: dict[str, int] = {}
+    for item in results:
+        outcomes[item["code"]] = outcomes.get(item["code"], 0) + 1
     summary = {
         "made": made,
         "pruned": pruned,
         "calls_used": engine.MAX_LLM_CALLS_PER_RUN - budget,
         "unseen_topic": pool.unseen_count(pool.KIND_TOPIC),
         "pool_topic": pool.pool_count(pool.KIND_TOPIC),
+        "outcomes": outcomes,
         "results": results,
     }
-    logger.info("refill done: made=%d calls_used=%d", made, summary["calls_used"])
+    logger.info(
+        "refill done: made=%d calls_used=%d outcomes=%s",
+        made,
+        summary["calls_used"],
+        json.dumps(outcomes, ensure_ascii=False, sort_keys=True),
+    )
     return summary
 
 
