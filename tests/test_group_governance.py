@@ -385,6 +385,63 @@ class GovernDailyTest(_Base):
             )
         )
 
+    def test_local_write_failure_restores_mem0(self):
+        self.add("a1", "ep_a", "实现", fact="实现细节")
+        self.add("a2", "ep_a", "测试", fact="测试结论")
+        candidates = {
+            "groups": [
+                {
+                    "candidate_id": "ep_a",
+                    "kind": "group",
+                    "members": [
+                        self._member("a1", "ep_a", "实现细节"),
+                        self._member("a2", "ep_a", "测试结论"),
+                    ],
+                }
+            ],
+            "pairs": [],
+            "singles": [],
+        }
+
+        async def fake_llm(*args, **kwargs):
+            return (
+                '{"decisions":[{"candidate_id":"ep_a","action":"split",'
+                '"groups":[["a1"],["a2"]],"reason":"不同工作"}]}'
+            )
+
+        calls = []
+
+        def sync(member_id, patch):
+            calls.append((member_id, dict(patch)))
+            return True
+
+        with (
+            mock.patch.object(
+                group_governance.config, "memory_governance_apply", return_value=True
+            ),
+            mock.patch.object(
+                group_governance.llm_client, "is_configured", return_value=True
+            ),
+            mock.patch.object(group_governance.llm_client, "achat", fake_llm),
+            mock.patch.object(
+                group_governance, "build_candidates", return_value=candidates
+            ),
+            mock.patch.object(group_governance, "_sync_mem0", side_effect=sync),
+            mock.patch.object(
+                group_governance.store,
+                "batch_update_metadata",
+                side_effect=RuntimeError("db down"),
+            ),
+        ):
+            result = asyncio.run(
+                group_governance.govern_daily(db_path=self.db, since="")
+            )
+
+        self.assertEqual(result["written"], 0)
+        self.assertGreater(result["errors"], 0)
+        restored = [patch for _, patch in calls if patch.get("episode_id") == "ep_a"]
+        self.assertEqual(len(restored), 1)
+
     def test_mem0_failure_skips_the_graph_write(self):
         self.add("a1", "ep_a", "实现", fact="实现细节")
         self.add("a2", "ep_a", "测试", fact="测试结论")

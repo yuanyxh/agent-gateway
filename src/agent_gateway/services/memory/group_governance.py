@@ -1,4 +1,9 @@
-"""Offline LLM review of memory episode groups; reads only, never applies."""
+"""Offline LLM review of memory episode groups, plus apply of split/merge decisions.
+
+``govern_daily`` writes both mem0 metadata and the local graph. The local write
+runs last; if it fails, already-synced mem0 rows are restored to their previous
+episode fields.
+"""
 
 from __future__ import annotations
 
@@ -559,6 +564,15 @@ def _sync_mem0(member_id: str, patch: dict) -> bool:
         return False
 
 
+def _restore_mem0(compensation: dict[str, dict]) -> int:
+    """Write previous episode fields back; returns the rows that failed."""
+    failed = 0
+    for member_id, patch in compensation.items():
+        if not _sync_mem0(member_id, patch):
+            failed += 1
+    return failed
+
+
 def _rebuild_episode_edges(member_ids: list[str], db_path: str | None) -> None:
     if not member_ids:
         return
@@ -590,10 +604,23 @@ def _apply_decisions(
     run_at = now.isoformat()
     updates: dict[str, dict] = {}
     applied = skipped = errors = 0
+    compensation: dict[str, dict] = {}
 
     def queue(member_id: str, new_episode: str) -> bool:
         nonlocal errors
         patch = _episode_patch(member_id, new_episode, nodes, run_at)
+        if member_id not in compensation:
+            meta = (nodes.get(member_id) or {}).get("metadata") or {}
+            compensation[member_id] = {
+                key: str(meta[key])
+                for key in (
+                    "episode_id",
+                    "episode_source",
+                    "episode_prev",
+                    "governance_run",
+                )
+                if key in meta
+            }
         if _sync_mem0(member_id, patch):
             updates[member_id] = patch
             return True
@@ -661,10 +688,22 @@ def _apply_decisions(
             applied += 1
         else:
             skipped += 1
-    written = (
-        store.batch_update_metadata(list(updates.items()), db_path) if updates else 0
-    )
-    if updates:
+    written = 0
+    try:
+        if updates:
+            written = store.batch_update_metadata(list(updates.items()), db_path)
+    except Exception as e:  # noqa: BLE001 - local failure must undo mem0
+        restored = _restore_mem0(compensation)
+        logger.error(
+            "[governance] local metadata write failed; restored %d/%d mem0 rows: %s",
+            len(compensation) - restored,
+            len(compensation),
+            e,
+        )
+        errors += len(compensation)
+        applied = 0
+        return applied, written, skipped, errors
+    if updates and written:
         _rebuild_episode_edges(list(updates), db_path)
     return applied, written, skipped, errors
 
