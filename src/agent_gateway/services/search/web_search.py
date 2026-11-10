@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 import urllib.parse
 
+from agent_gateway.core.url_identity import url_id
 from agent_gateway.services.fetch import http
 from agent_gateway.services.markdown import article as md_article
 from agent_gateway.services.markdown import html as md
@@ -101,6 +102,8 @@ def websearch(
     started = time.monotonic()
     results, report = search_report(query, engines=engines, min_results=limit)
     results = results[:limit]
+    for result in results:
+        result["id"] = url_id(result.get("url", ""))
     pages = []
     page_errors = []
     budget = MAX_TOTAL_CHARS
@@ -129,6 +132,7 @@ def websearch(
                 continue
             pages.append(
                 {
+                    "id": url_id(page["url"]),
                     "url": page["url"],
                     "title": result["title"],
                     "markdown": page["markdown"],

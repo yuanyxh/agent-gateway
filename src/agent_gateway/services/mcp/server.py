@@ -546,6 +546,44 @@ async def _handle_tool_resource(arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=content)]
 
 
+def _record_web_trace(
+    tool: str, query: str, payload: dict, started: float, *, status: str
+) -> str:
+    """Trace a web call; returned ids match the ids in the tool payload."""
+    trace_id = retrieval_trace.new_trace_id()
+    rows = []
+    for key in ("results", "pages"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            rows.extend(row for row in value if isinstance(row, dict))
+    if not rows and payload.get("id"):
+        rows = [payload]
+    items, seen = [], set()
+    for row in rows:
+        item_id = str(row.get("id") or "")
+        if item_id and item_id not in seen:
+            seen.add(item_id)
+            items.append(
+                {
+                    "id": item_id,
+                    "url": str(row.get("url") or ""),
+                    "title": str(row.get("title") or ""),
+                }
+            )
+    retrieval_trace.record(
+        {
+            "trace_id": trace_id,
+            "tool": tool,
+            "query": query,
+            "status": status,
+            "returned": items,
+            "lead": items[0] if items else None,
+            "latency_ms": {"total": round((time.perf_counter() - started) * 1000, 2)},
+        }
+    )
+    return trace_id
+
+
 @_register("websearch_engine")
 async def _handle_websearch_engine(arguments: dict) -> list[TextContent]:
     query = str(arguments.get("query", "")).strip()
@@ -564,16 +602,34 @@ async def _handle_websearch_engine(arguments: dict) -> list[TextContent]:
     elif not isinstance(engines, str) or not engines.strip():
         engines = None
     # urllib is blocking; keep the MCP event loop free for other calls.
+    started = time.perf_counter()
     result = await asyncio.to_thread(
         web_search.websearch, query, limit, fetch_top, max_chars, engines
     )
+    trace_id = _record_web_trace(
+        "websearch_engine",
+        query,
+        result,
+        started,
+        status="ok" if result.get("results") else "no_match",
+    )
+    result["trace_id"] = trace_id
     return [TextContent(type="text", text=dumps(result))]
 
 
 @_register("read_url")
 async def _handle_read_url(arguments: dict) -> list[TextContent]:
     url, max_chars, use_proxy = read_args(arguments)
+    started = time.perf_counter()
     result = await asyncio.to_thread(read_url, url, max_chars, use_proxy)
+    trace_id = _record_web_trace(
+        "read_url",
+        url,
+        result,
+        started,
+        status="ok" if result.get("ok") else "error",
+    )
+    result["trace_id"] = trace_id
     return [TextContent(type="text", text=dumps(result))]
 
 

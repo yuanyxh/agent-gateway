@@ -15,6 +15,7 @@ import re
 import urllib.error
 import urllib.parse
 
+from agent_gateway.core.url_identity import url_id
 from agent_gateway.services.fetch import http
 from agent_gateway.services.markdown import article as md_article
 from agent_gateway.services.markdown import html as md
@@ -95,6 +96,7 @@ def _success(
     body, truncated = md.truncate_markdown(text, max_chars)
     payload = {
         "ok": True,
+        "id": url_id(final_url),
         "requested_url": requested,
         "url": final_url,
         "title": _first_heading(body),

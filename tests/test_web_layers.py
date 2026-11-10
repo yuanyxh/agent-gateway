@@ -339,6 +339,7 @@ class ReadServiceTest(LocalServerTest):
         result = read.read_url(self.base + "/article")
         self.assertTrue(result["ok"])
         self.assertEqual(result["tier"], "local")
+        self.assertTrue(result["id"])
         self.assertEqual(result["title"], "Reliable Systems")
         self.assertIn("失败必须可被代理感知", result["markdown"])
         self.assertFalse(result["truncated"])
