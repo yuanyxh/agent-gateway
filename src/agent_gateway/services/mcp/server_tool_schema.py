@@ -84,21 +84,28 @@ DIMENSION_PROPERTIES: dict = {
     },
 }
 
-#: recall dimensions. Filters drop rows whose value differs; boosts only reorder,
-#: so a preference can never manufacture a match.
+#: recall dimensions. Filters rank matching rows first; excluded rows return only
+#: to fill a short result, and boosts never change a score.
+RECALL_FILTER_NOTE = (
+    " Excluded rows fill a short result and carry filter_fallback; "
+    "they never outrank a match."
+)
 RECALL_FILTER_PROPERTIES: dict = {
     "project": {
         "type": "string",
-        "description": "Hard filter: keep only memories recorded for this project.",
+        "description": "Filter: this project's memories come first."
+        + RECALL_FILTER_NOTE,
     },
     "ticket": {
         "type": "string",
-        "description": "Hard filter: keep only memories recorded for this work-item id.",
+        "description": "Filter: this work item's memories come first."
+        + RECALL_FILTER_NOTE,
     },
     "language": {
         "type": "string",
         "enum": list(LANGUAGE_TYPES),
-        "description": "Hard filter: keep only memories in this language.",
+        "description": "Filter: memories in this language come first."
+        + RECALL_FILTER_NOTE,
     },
 }
 

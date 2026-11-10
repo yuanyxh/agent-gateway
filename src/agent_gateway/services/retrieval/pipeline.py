@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from agent_gateway.core.log_utils import setup_logging
@@ -192,10 +192,16 @@ class Pipeline:
         # Narrowing runs before fusion truncates, or a matching row ranked below
         # the fused cut would be dropped without ever being checked.
         retrieved = sum(len(arm.items) for _, arms in passes for arm in arms)
-        passes = [
-            (label, [self._filtered_arm(arm, query) for arm in arms])
-            for label, arms in passes
-        ]
+        narrowed: list[tuple[str, list[ArmResult]]] = []
+        fallback: list[RetrievedItem] = []
+        for label, arms in passes:
+            kept: list[ArmResult] = []
+            for arm in arms:
+                result, rejected = self._filtered_arm(arm, query)
+                kept.append(result)
+                fallback.extend(rejected)
+            narrowed.append((label, kept))
+        passes = narrowed
         filtered = retrieved - sum(len(arm.items) for _, arms in passes for arm in arms)
 
         fuse_started = time.perf_counter()
@@ -225,9 +231,12 @@ class Pipeline:
         # Expansion reaches other groups through edges; a constraint must still
         # hold for what the caller sees as related context.
         related = self._narrow(query, related)
-        verdict = self.gate.judge(query, items[:limit], related)
 
-        top = items[:limit]
+        # Strict matches stay first; a shortfall is padded from rows the filter
+        # excluded, each marked with the dimensions it failed.
+        top, fallback_count = self._fill_filtered(query, items[:limit], fallback, limit)
+        verdict = self.gate.judge(query, top, related)
+
         related = related[:limit]
         errors = [
             {"pass": label, "arm": arm.name, "error": arm.error}
@@ -251,6 +260,8 @@ class Pipeline:
             # Rows a caller's constraint removed; a miss and a filtered-out
             # match look identical otherwise.
             "filtered": filtered,
+            # How many of those rows came back to fill a short result.
+            "fallback_count": fallback_count,
             # Arm failures are otherwise indistinguishable from a real miss.
             "errors": errors,
             "trace_id": trace_payload["trace_id"],
@@ -263,17 +274,57 @@ class Pipeline:
         text = str(value or "")
         return {text} if text else set()
 
-    def _filtered_arm(self, result: ArmResult, query: Query) -> ArmResult:
-        """Apply the caller's constraint inside one arm, before fusion truncates."""
+    def _filtered_arm(
+        self, result: ArmResult, query: Query
+    ) -> tuple[ArmResult, list[RetrievedItem]]:
+        """Split one arm into kept rows and rows the constraint excluded."""
         items = self._narrow(query, result.items)
         if len(items) == len(result.items):
-            return result
-        return ArmResult(
-            name=result.name,
-            items=items,
-            elapsed_ms=result.elapsed_ms,
-            error=result.error,
+            return result, []
+        kept_ids = {item.id for item in items}
+        return (
+            ArmResult(
+                name=result.name,
+                items=items,
+                elapsed_ms=result.elapsed_ms,
+                error=result.error,
+            ),
+            [item for item in result.items if item.id not in kept_ids],
         )
+
+    def _fill_filtered(
+        self,
+        query: Query,
+        top: list[RetrievedItem],
+        fallback: list[RetrievedItem],
+        limit: int,
+    ) -> tuple[list[RetrievedItem], int]:
+        """Pad a short result with floor-passing rows the filters excluded."""
+        remaining = limit - len(top)
+        if remaining <= 0 or not fallback:
+            return top, 0
+        seen = {item.id for item in top}
+        pool: dict[str, RetrievedItem] = {}
+        for item in fallback:
+            if item.id in seen:
+                continue
+            current = pool.get(item.id)
+            if current is None or item.score > current.score:
+                pool[item.id] = item
+        rank_key = getattr(self.fusion, "rank_key", None)
+        if rank_key is None:
+            ordered = sorted(pool.values(), key=lambda i: float(i.score), reverse=True)
+        else:
+            ordered = sorted(pool.values(), key=rank_key, reverse=True)
+        added: list[RetrievedItem] = []
+        for item in ordered[:remaining]:
+            misses = [
+                key
+                for key, values in query.filters.items()
+                if str(item.extra.get(key) or "") not in self._allowed(values)
+            ]
+            added.append(replace(item, extra={**item.extra, "filter_fallback": misses}))
+        return [*top, *added], len(added)
 
     def _narrow(self, query: Query, items: list[RetrievedItem]) -> list[RetrievedItem]:
         """Drop rows a caller's exact-value constraint rules out."""
@@ -360,6 +411,7 @@ class Pipeline:
                     "score": float(item.score),
                     "score_kind": item.score_kind,
                     "locator": item.locator,
+                    "filter_fallback": item.extra.get("filter_fallback") or [],
                 }
                 for item in top
             ],

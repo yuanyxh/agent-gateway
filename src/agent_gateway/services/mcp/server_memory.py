@@ -1289,6 +1289,7 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     await asyncio.to_thread(_touch_hot_access, top)
     status = out["status"]
     filtered = int(out.get("filtered") or 0)
+    fallback_count = int(out.get("fallback_count") or 0)
     payload = {
         "status": status,
         "results": top,
@@ -1296,12 +1297,19 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         "count": len(top),
         # Rows a dimension filter removed, so an empty result is explainable.
         "filtered": filtered,
+        # Excluded rows that returned only because the strict result was short.
+        "fallback_count": fallback_count,
         "errors": out.get("errors") or [],
         # The pipeline already writes this trace; returning it lets callers and
         # adoption analysis join a result back to its arms.
         "trace_id": out.get("trace_id") or "",
     }
-    if filtered and status in ("weak_match", "no_match"):
+    if fallback_count:
+        payload["hint"] = (
+            f"{fallback_count} result(s) miss the dimension filter; each carries "
+            "filter_fallback with the failed dimensions."
+        )
+    elif filtered and status in ("weak_match", "no_match"):
         payload["hint"] = (
             f"{filtered} row(s) failed the dimension filter; rows without that "
             "field, including legacy and notes results, never match."

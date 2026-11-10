@@ -149,7 +149,7 @@ class QueryConstraintTest(unittest.TestCase):
         )
         return pipeline.run_query(Query(text="q", **kwargs), limit=limit)
 
-    def test_filter_drops_rows_with_another_value(self):
+    def test_filter_keeps_strict_matches_first(self):
         rows = [
             item("a", 0.9, extra={"project": "p"}),
             item("b", 0.8, extra={"project": "o"}),
@@ -158,7 +158,22 @@ class QueryConstraintTest(unittest.TestCase):
 
         out = self._run(rows, filters={"project": "p"})
 
+        self.assertEqual([row["id"] for row in out["results"]], ["a", "b", "c"])
+        self.assertNotIn("filter_fallback", out["results"][0])
+        self.assertEqual(out["results"][1]["filter_fallback"], ["project"])
+        self.assertEqual(out["results"][2]["filter_fallback"], ["project"])
+        self.assertEqual(out["fallback_count"], 2)
+
+    def test_filter_does_not_pad_when_the_limit_is_full(self):
+        rows = [
+            item("a", 0.9, extra={"project": "p"}),
+            item("b", 0.8, extra={"project": "o"}),
+        ]
+
+        out = self._run(rows, limit=1, filters={"project": "p"})
+
         self.assertEqual([row["id"] for row in out["results"]], ["a"])
+        self.assertEqual(out["fallback_count"], 0)
 
     def test_filter_accepts_several_allowed_values(self):
         rows = [
@@ -166,7 +181,7 @@ class QueryConstraintTest(unittest.TestCase):
             item("b", 0.8, extra={"language": "en"}),
         ]
 
-        out = self._run(rows, filters={"language": ["zh", "mixed"]})
+        out = self._run(rows, limit=1, filters={"language": ["zh", "mixed"]})
 
         self.assertEqual([row["id"] for row in out["results"]], ["a"])
 
@@ -194,8 +209,10 @@ class QueryConstraintTest(unittest.TestCase):
 
         out = self._run(rows, limit=2, filters={"project": "p"})
 
-        self.assertEqual([row["id"] for row in out["results"]], ["target"])
+        self.assertEqual([row["id"] for row in out["results"]], ["target", "n0"])
         self.assertEqual(out["filtered"], 8)
+        self.assertEqual(out["fallback_count"], 1)
+        self.assertEqual(out["results"][1]["filter_fallback"], ["project"])
 
     def test_related_rows_obey_the_constraint(self):
         def expander(query, items, filters):

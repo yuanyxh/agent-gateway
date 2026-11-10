@@ -21,6 +21,7 @@ RECALL_TOP_KEYS = {
     "related",
     "count",
     "filtered",
+    "fallback_count",
     "errors",
     "trace_id",
 }
@@ -35,6 +36,7 @@ RECALL_ITEM_KEYS = {
     "context",
     "edge",
     "metadata",
+    "filter_fallback",
 }
 RECALL_META_KEYS = {"tags", "status", "confidence"}
 

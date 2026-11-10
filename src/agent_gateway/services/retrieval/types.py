@@ -77,6 +77,7 @@ class RetrievedItem:
         "caller_count",
         "top_callers",
         "resolver",
+        "filter_fallback",
     )
     RESULT_META_KEYS = ("tags", "status", "confidence")
 
