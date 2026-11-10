@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from agent_gateway.core import config_loader
 from agent_gateway.services.graph import indexer, project_scan
@@ -53,6 +54,37 @@ class ProjectScanTest(unittest.TestCase):
         project_scan.sync(str(self.root), "2", "1")
         after = (self.root / ".agent-gateway" / "graph.sqlite").stat().st_mtime_ns
         self.assertEqual(before, after)
+
+    def test_head_change_forces_rebuild(self):
+        with mock.patch.object(project_scan, "_git_head", return_value="aaa"):
+            project_scan.sync(str(self.root), "2", "1")
+        with mock.patch.object(project_scan, "_git_head", return_value="bbb"):
+            project_scan.sync(str(self.root), "2", "1")
+        conn = sqlite3.connect(self.root / ".agent-gateway" / "graph.sqlite")
+        try:
+            value = conn.execute(
+                "SELECT value FROM meta WHERE key='git_head'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(value, "bbb")
+
+    def _meta(self, key):
+        conn = sqlite3.connect(self.root / ".agent-gateway" / "graph.sqlite")
+        try:
+            return conn.execute(
+                "SELECT value FROM meta WHERE key=?", (key,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_same_head_keeps_graph(self):
+        with mock.patch.object(project_scan, "_git_head", return_value="aaa"):
+            project_scan.sync(str(self.root), "2", "1")
+            first = self._meta("built_at")
+            project_scan.sync(str(self.root), "2", "1")
+            second = self._meta("built_at")
+        self.assertEqual(first, second)
 
     def test_index_file_writes_and_remove_deletes(self):
         project_scan.sync(str(self.root), "2", "1")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -238,12 +239,28 @@ def _file_rows(
     return rows
 
 
+def _git_head(root: str) -> str:
+    """Current HEAD when the project is a git worktree, otherwise an empty string."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", root, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
 def sync(root: str, engine: str, schema: str) -> dict:
     """Reconcile the project graph; a changed project is rebuilt atomically."""
     root = os.path.realpath(root)
     if not os.path.isdir(root):
         raise FileNotFoundError(root)
     started = time.perf_counter()
+    current_head = _git_head(root)
     db_path = project_paths.graph_db_path(root)
     project_paths.copy_legacy(project_paths.legacy_graph_db_path(root), db_path)
     db = store.GraphStore(str(db_path))
@@ -251,20 +268,28 @@ def sync(root: str, engine: str, schema: str) -> dict:
         discovered = _discover(root)
         known = db.all_file_meta()
         if db.is_up_to_date(root, engine, schema):
-            changed = False
-            for rel, item in discovered.items():
-                meta = known.get(rel)
-                if (
-                    meta is not None
-                    and meta[0] == item.size
-                    and abs(meta[1] - item.mtime) < 0.001
-                ):
-                    continue
-                changed = True
-                break
-            removed = set(known) - set(discovered)
-            if not changed and not removed:
-                return {"ok": True, "stats": db.stats(), "db_path": str(db_path)}
+            meta = db.meta()
+            known_head = meta.get("git_head", "")
+            head_changed = bool(
+                current_head and known_head and known_head != current_head
+            )
+            if current_head and not known_head:
+                db.set_meta("git_head", current_head)
+            if not head_changed:
+                changed = False
+                for rel, item in discovered.items():
+                    meta = known.get(rel)
+                    if (
+                        meta is not None
+                        and meta[0] == item.size
+                        and abs(meta[1] - item.mtime) < 0.001
+                    ):
+                        continue
+                    changed = True
+                    break
+                removed = set(known) - set(discovered)
+                if not changed and not removed:
+                    return {"ok": True, "stats": db.stats(), "db_path": str(db_path)}
 
         index = ProjectIndex(root)
         analyses = _parse(index, discovered)
@@ -282,6 +307,7 @@ def sync(root: str, engine: str, schema: str) -> dict:
             "engine_version": engine,
             "schema_version": schema,
             "root": root,
+            "git_head": current_head,
             "built_at": datetime.now(timezone.utc).isoformat(),
             "full_build_elapsed_ms": str(elapsed_ms),
         }

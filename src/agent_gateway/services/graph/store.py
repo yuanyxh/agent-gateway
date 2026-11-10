@@ -182,6 +182,14 @@ class GraphStore:
             and meta.get("root") == root
         )
 
+    def set_meta(self, key: str, value: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO meta(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+
     def all_file_meta(self) -> dict[str, tuple[int, float, str]]:
         return {
             row["path"]: (row["size"], row["mtime"], row["content_hash"])
