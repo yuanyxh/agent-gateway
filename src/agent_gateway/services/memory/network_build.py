@@ -670,7 +670,7 @@ async def build_synapse_candidates(
         )
         decisions = reviewed["decisions"]
     else:
-        reviewed = {"calls": 0, "parse_failed": 0, "rejected": 0}
+        reviewed = {"calls": 0, "parse_failed": 0, "failed_pairs": 0, "rejected": 0}
         decisions = [
             {
                 **pair,
@@ -685,6 +685,7 @@ async def build_synapse_candidates(
         "decisions": decisions,
         "calls": reviewed["calls"],
         "parse_failed": reviewed["parse_failed"],
+        "failed_pairs": reviewed.get("failed_pairs", 0),
         "rejected": reviewed["rejected"],
         "truncated": built["truncated"],
         "llm_skipped": bool(pairs) and not use_llm,
