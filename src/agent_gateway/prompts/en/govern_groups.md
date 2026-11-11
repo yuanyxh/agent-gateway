@@ -17,6 +17,7 @@ Rules:
 - For split, groups must cover every member exactly once and must not overlap.
 - For a multi-member group, merge_with must be another candidate_id in the same batch.
 - For a pair, merge means the two memories belong in one group; merge_with is not needed.
+- For a group_pair, only keep or merge are allowed; merge means the two groups should become one, with no merge_with.
 
 Return JSON: {"decisions": [{"candidate_id": "<id>", "action": "keep|split|merge", "groups": [["<member id>"]], "merge_with": "<candidate id>", "reason": "<at most 50 chars>"}]}
 

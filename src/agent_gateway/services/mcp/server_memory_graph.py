@@ -17,7 +17,7 @@ from agent_gateway.services.mcp.server_constants import COLD_COLLECTION, NOTES_D
 from agent_gateway.services.mcp.server_state import get_hot_memory, get_qdrant
 from agent_gateway.services.mcp.server_tool_schema import DEFAULT_GRAPH_LIMIT
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
-from agent_gateway.services.memory import graph, store
+from agent_gateway.services.memory import graph, network, store
 
 logger = setup_logging("server")
 
@@ -109,8 +109,13 @@ async def handle_memory_graph(arguments: dict) -> list[TextContent]:
     limit = max(
         1, min(int_arg(arguments, "limit", DEFAULT_GRAPH_LIMIT), MAX_GRAPH_NODES)
     )
-    if edge not in graph.EDGE_TYPES:
-        return _reply({"error": f"edge must be one of: {', '.join(graph.EDGE_TYPES)}"})
+    if edge not in (*graph.EDGE_TYPES, "synapse", "associative"):
+        return _reply(
+            {
+                "error": "edge must be one of: "
+                + ", ".join((*graph.EDGE_TYPES, "synapse", "associative"))
+            }
+        )
     if direction not in ("up", "down", "both"):
         return _reply({"error": "direction must be up, down or both"})
     node = _resolve(node_id)
@@ -118,6 +123,54 @@ async def handle_memory_graph(arguments: dict) -> list[TextContent]:
         logger.info(f"[memory-tool] memory_graph miss: {node_id}")
         return _reply({"node_id": node_id, "found": False})
     canonical = str(node.get("node_id") or node_id)
+    if edge in ("synapse", "associative"):
+        group = network.neuron_of(canonical) or str(
+            (node.get("metadata") or {}).get("episode_id") or ""
+        )
+        if not group:
+            return _reply(
+                {"found": True, "node_id": canonical, "group": "", "links": []}
+            )
+        if edge == "synapse":
+            links = []
+            for link in await asyncio.to_thread(
+                network.synapses_of, group, limit=limit
+            ):
+                other = await asyncio.to_thread(network.get_neuron, link["other"])
+                links.append(
+                    {
+                        "group": link["other"],
+                        "weight": link["weight"],
+                        "relation": link.get("relation") or "",
+                        "status": link.get("status") or "",
+                        "member_count": (other or {}).get("member_count", 0),
+                    }
+                )
+            return _reply(
+                {
+                    "found": True,
+                    "node_id": canonical,
+                    "group": group,
+                    "links": links,
+                }
+            )
+        from agent_gateway.services.retrieval.arms.associative import spread
+
+        result = await asyncio.to_thread(
+            spread,
+            [{"memory_id": canonical, "neuron_id": group, "activation": 1.0}],
+            visited_cap=limit,
+        )
+        return _reply(
+            {
+                "found": True,
+                "node_id": canonical,
+                "group": group,
+                "activated": result["activated"],
+                "visited": result["visited"],
+                "truncated": result["truncated"],
+            }
+        )
     try:
         if edge == "derived_from":
             result = await asyncio.to_thread(

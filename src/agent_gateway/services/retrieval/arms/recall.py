@@ -495,7 +495,16 @@ def expand_episodes(
         _expand_cold(items, query_vec, min_score) if server_state.get_qdrant() else []
     )
     edges = _expand_edges(items, query_vec, min_score, reader_agent)
-    combined = hot + cold + edges
+    associated = []
+    try:
+        from agent_gateway.services.retrieval.arms.associative import (
+            associative_expand,
+        )
+
+        associated = associative_expand(query, items, filters)
+    except Exception as e:  # noqa: BLE001 - association is optional context
+        logger.warning(f"Associative expansion failed: {e}")
+    combined = hot + cold + edges + associated
     combined.sort(key=heat_key, reverse=True)
     return combined
 

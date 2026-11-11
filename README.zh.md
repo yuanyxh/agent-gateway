@@ -27,6 +27,9 @@
 - **记忆图谱。** SQLite 图记录版本链、episode 归属、派生关系、矛盾、关联与提及，
   并通过 `memory_graph` 查询。
 - **有界增长。** 定时任务归档过期条目、整合摘要并按预算折叠，避免热层无限增长。
+- **关联网络。** episode 分组成为神经元，神经元之间以带权突触相连，由每日向量近邻
+  加 LLM 审查建立。检索可以沿最强路径扩散；同批被召回的记忆会强化对应神经元之间的
+  突触；每周任务把神经元归入 active、warm、archive、trash 并按时限物理清理。
 
 ### 检索
 
@@ -304,6 +307,10 @@ token 代理额外提供：
 | `memory`、`notes` | Qdrant、嵌入模型、记忆上限、笔记路径与规则 |
 | `search` | 引擎列表、顺序、各引擎端点与限速 |
 | `knowledge`、`summary`、`graph` | 产品模块与项目图配置 |
+
+`memory.neuron` 配置关联网络：`enabled`、`build`、`maintenance` 开关，扩散
+`maxDepth` / `beam` / `activationFloor`，分层保留 `archiveDays` / `trashDays`，
+每日建边 `llmPairs`，以及并行审查批次 `reviewConcurrency`。
 
 `contracts/env.json` 从实现生成，列出本包读取的全部环境变量；
 `contracts/entries.json` 列出宿主可以启动的模块入口。消费方可以基于这些文件校验，

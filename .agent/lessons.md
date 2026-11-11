@@ -121,3 +121,35 @@
 - **决策**：查询路径只读缓存，补缓存只能由后台预热做，按文件批次提交并记录进度；锁粒度按数据所有者（项目）划分，全局锁会让一个项目的重建拖住所有项目。
 - **范围**：可能通用。
 - **晋升**：未评估。
+
+### 2026-11-11 端侧流程 500 的根因是端口上的旧进程，不是业务代码
+
+- **场景**：VM 内 daily 巩固稳定 500（mem0 `Invalid user_id: cannot be empty`），而同一环境直接调用写记忆成功；新加的调试写文件毫无输出。
+- **事实**：9015 上跑着早前脚本遗留的 MCP 进程（`ps eww` 里没有 `GATEWAY_USER_ID`），新子进程绑定失败但 `/health` 由旧进程应答；旧进程加载的还是加调试行之前的源码，所以 traceback 行号与现象自相矛盾。
+- **决策**：任何长流程脚本启动前先探测端口占用并硬失败，子进程一律 try/finally 终止；排查「同环境两种结果」先看「请求到底落在哪个进程」。
+- **范围**：通用（带常驻端口的端到端验证）。
+- **晋升**：未评估。
+
+### 2026-11-11 无头克隆的 macOS 无法跑 GUI 应用
+
+- **场景**：Lume 克隆 `utility-env` 想启动 `Utility.app` 验证应用级流程。
+- **事实**：首次登录停在 Setup Assistant（Apple ID 面板，创建账号触发 `NSXMLParserErrorDomain 111`）；SSH 会话不在 Aqua bootstrap 命名空间，`open`/`launchctl asuser` 均报 `OSLaunchdErrorDomain 125`；直接跑二进制无 WindowServer 连接。
+- **决策**：无头克隆只做 MCP 层 L3 验证并如实标注应用级未验；要应用级流程必须先在 VNC 里完成 Setup Assistant 并登录桌面，或使用带桌面会话的宿主。
+- **范围**：通用。
+- **晋升**：未评估。
+
+### 2026-11-11 事件循环阻塞会藏在「已改造函数」内部
+
+- **场景**：daily/weekly 的调用点全部改成 `asyncio.to_thread` 后，VM 心跳仍测到 8.712 秒停顿。
+- **事实**：`govern_daily` 本身是 `async`，内部 `build_candidates`、`_load_active_nodes`、`_apply_decisions` 仍是同步全量读写；`score_relevance`、`forget_expired`、`VACUUM` 同理。单测里这些函数被 mock 或数据量小，review 按调用点检查也看不出来。
+- **决策**：判断是否阻塞要看「async 函数体内的每一次同步调用」，而不是外层有没有 `await`；用真实库 + 每 0.5 秒一次 health 采样做验证，max 延迟是唯一可靠指标。
+- **范围**：通用（ASGI/事件循环服务）。
+- **晋升**：未评估。
+
+### 2026-11-11 默认模板的嵌套结构必须与 Codable 结构同构
+
+- **场景**：utility `default-config.yaml` 把 neuron 配置写成嵌套 `mcp.neuron:`，Swift `MCPConfig` 用平铺属性解码。
+- **事实**：YAMLDecoder 按 `key.stringValue` 精确匹配，嵌套块整块被忽略；`readConfigOrDefault` 解码失败还会静默回退到内置模板，十个配置键长期不可达，保存时嵌套块又被丢弃。
+- **决策**：配置模板与解码结构必须同构，新增配置块时先写「与默认值不同」的解码测试（默认值相等会掩盖失败）；解码失败不应静默回退到别的模板。
+- **范围**：通用（Swift/Yams 配置层）。
+- **晋升**：未评估。

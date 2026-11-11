@@ -35,6 +35,11 @@ HTTP endpoints and JSON contracts instead of importing internals.
   `memory_graph`.
 - **Bounded growth.** Scheduled jobs archive stale entries, consolidate summaries and
   fold summary budgets, so the hot layer does not grow without limit.
+- **Associative network.** Episode groups become neurons joined by weighted synapses,
+  built by a daily vector-neighbour search plus LLM review. Recall can spread along
+  the strongest paths, memories recalled together reinforce the synapse between their
+  neurons, and the weekly pass tiers neurons into active, warm, archive and trash with
+  timed physical cleanup.
 
 ### Retrieval
 
@@ -319,6 +324,11 @@ Main `agent-gateway.yaml` sections:
 | `memory`, `notes` | Qdrant, embedder, memory limits, note paths/rules |
 | `search` | Engine list, order, per-engine endpoints and rate limits |
 | `knowledge`, `summary`, `graph` | Product modules and project graph settings |
+
+`memory.neuron` configures the associative network: `enabled`, `build` and
+`maintenance` gates, spread `maxDepth` / `beam` / `activationFloor`, tier retention
+`archiveDays` / `trashDays`, `llmPairs` per daily build, and `reviewConcurrency` for
+parallel LLM review batches.
 
 `contracts/env.json` is generated from the implementation and lists every
 environment variable the package reads. `contracts/entries.json` lists the module

@@ -22,6 +22,9 @@ from agent_gateway.core.paths import gateway_home
 
 logger = setup_logging("server")
 
+#: Bump whenever SCHEMA gains a table or index; `connect` only replays DDL below it.
+SCHEMA_VERSION = 1
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_nodes (
   node_id TEXT PRIMARY KEY,
@@ -50,6 +53,76 @@ CREATE TABLE IF NOT EXISTS memory_edges (
 );
 CREATE INDEX IF NOT EXISTS idx_edges_from ON memory_edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON memory_edges(to_id);
+
+CREATE TABLE IF NOT EXISTS neurons (
+  neuron_id TEXT PRIMARY KEY,
+  episode_id TEXT UNIQUE,
+  title TEXT,
+  summary TEXT,
+  centroid BLOB,
+  member_count INTEGER NOT NULL DEFAULT 0,
+  tier TEXT NOT NULL DEFAULT 'active',
+  status TEXT NOT NULL DEFAULT 'active',
+  heat REAL NOT NULL DEFAULT 0.0,
+  importance REAL NOT NULL DEFAULT 0.0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  metadata TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_neurons_tier ON neurons(tier);
+CREATE INDEX IF NOT EXISTS idx_neurons_status ON neurons(status);
+
+CREATE TABLE IF NOT EXISTS neuron_members (
+  neuron_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  layer TEXT NOT NULL DEFAULT 'hot',
+  weight REAL NOT NULL DEFAULT 1.0,
+  role TEXT NOT NULL DEFAULT 'member',
+  joined_at TEXT NOT NULL,
+  PRIMARY KEY (neuron_id, memory_id)
+);
+CREATE INDEX IF NOT EXISTS idx_members_memory ON neuron_members(memory_id);
+
+CREATE TABLE IF NOT EXISTS synapses (
+  synapse_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_neuron TEXT NOT NULL,
+  to_neuron TEXT NOT NULL,
+  weight REAL NOT NULL DEFAULT 0.0,
+  base_weight REAL NOT NULL DEFAULT 0.0,
+  relation TEXT NOT NULL DEFAULT '',
+  directed INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  last_activated_at TEXT,
+  activation_count INTEGER NOT NULL DEFAULT 0,
+  decay_rate REAL NOT NULL DEFAULT 0.0,
+  reinforce_rate REAL NOT NULL DEFAULT 0.0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  metadata TEXT,
+  UNIQUE(from_neuron, to_neuron)
+);
+CREATE INDEX IF NOT EXISTS idx_syn_from ON synapses(from_neuron);
+CREATE INDEX IF NOT EXISTS idx_syn_to ON synapses(to_neuron);
+CREATE INDEX IF NOT EXISTS idx_syn_status ON synapses(status);
+
+CREATE TABLE IF NOT EXISTS memory_activation (
+  node_id TEXT PRIMARY KEY,
+  strength REAL NOT NULL DEFAULT 0.0,
+  tier TEXT NOT NULL DEFAULT 'active',
+  last_activated_at TEXT,
+  activation_count INTEGER NOT NULL DEFAULT 0,
+  tier_changed_at TEXT,
+  purge_after TEXT,
+  metadata TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_activation_tier ON memory_activation(tier);
+CREATE INDEX IF NOT EXISTS idx_activation_purge ON memory_activation(purge_after);
+
+CREATE TABLE IF NOT EXISTS network_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 NODE_FIELDS = (
@@ -114,13 +187,22 @@ def cold_point_id(source_file: str, content: str) -> str:
 
 
 @contextmanager
-def connect(db_path: str | None = None) -> Iterator[sqlite3.Connection]:
+def connect(
+    db_path: str | None = None, *, readonly: bool = False
+) -> Iterator[sqlite3.Connection]:
     path = db_path or str(graph_db_path())
+    if readonly:
+        with readonly_connect(path) as connection:
+            yield connection
+        return
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite_conn(path, timeout=10.0) as connection:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA busy_timeout=5000")
-        connection.executescript(SCHEMA)
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version < SCHEMA_VERSION:
+            connection.executescript(SCHEMA)
+            connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         yield connection
 
 

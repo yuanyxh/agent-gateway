@@ -56,6 +56,19 @@ _YAML_FALLBACKS: dict[str, tuple[str, str]] = {
     "MEMORY_MAX_SUMMARIES": ("memory.maxSummaries", "text"),
     "MEMORY_MAX_SUMMARIES_PER_EPISODE": ("memory.maxSummariesPerEpisode", "text"),
     "MEMORY_GOVERNANCE_APPLY": ("memory.governanceApply", "text"),
+    "MEMORY_NEURON_ENABLED": ("memory.neuron.enabled", "text"),
+    "MEMORY_NEURON_BUILD": ("memory.neuron.build", "text"),
+    "MEMORY_NEURON_MAINTENANCE": ("memory.neuron.maintenance", "text"),
+    "MEMORY_NEURON_MAX_DEPTH": ("memory.neuron.maxDepth", "text"),
+    "MEMORY_NEURON_BEAM": ("memory.neuron.beam", "text"),
+    "MEMORY_NEURON_ACTIVATION_FLOOR": ("memory.neuron.activationFloor", "text"),
+    "MEMORY_NEURON_ARCHIVE_DAYS": ("memory.neuron.archiveDays", "text"),
+    "MEMORY_NEURON_TRASH_DAYS": ("memory.neuron.trashDays", "text"),
+    "MEMORY_NEURON_LLM_PAIRS": ("memory.neuron.llmPairs", "text"),
+    "MEMORY_NEURON_REVIEW_CONCURRENCY": (
+        "memory.neuron.reviewConcurrency",
+        "text",
+    ),
     "RANK_SIGNAL_RECENCY": ("memory.rankSignal.recency", "text"),
     "RANK_SIGNAL_ACCESS": ("memory.rankSignal.access", "text"),
     "RANK_SIGNAL_QUALITY": ("memory.rankSignal.quality", "text"),
@@ -210,6 +223,65 @@ def memory_max_summaries_per_episode() -> int | None:
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+def _flag(raw: str, default: bool) -> bool:
+    value = raw.strip().lower()
+    if not value:
+        return default
+    return value not in ("0", "false", "off", "no")
+
+
+def memory_neuron_enabled() -> bool:
+    return _flag(get("MEMORY_NEURON_ENABLED", ""), True)
+
+
+def memory_neuron_build_enabled() -> bool:
+    return _flag(get("MEMORY_NEURON_BUILD", ""), True)
+
+
+def memory_neuron_maintenance_enabled() -> bool:
+    return _flag(get("MEMORY_NEURON_MAINTENANCE", ""), True)
+
+
+def memory_neuron_max_depth() -> int:
+    return max(1, min(5, _int(get("MEMORY_NEURON_MAX_DEPTH", ""), 3)))
+
+
+def memory_neuron_beam() -> int:
+    return max(1, min(20, _int(get("MEMORY_NEURON_BEAM", ""), 5)))
+
+
+def memory_neuron_activation_floor() -> float:
+    raw = get("MEMORY_NEURON_ACTIVATION_FLOOR", "").strip()
+    if not raw:
+        return 0.15
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.15
+    return max(0.0, min(1.0, value))
+
+
+def memory_neuron_archive_days() -> int:
+    """Retention for archived tiers; 0 or negative falls back to the default."""
+    value = _int(get("MEMORY_NEURON_ARCHIVE_DAYS", ""), 180)
+    return value if value > 0 else 180
+
+
+def memory_neuron_trash_days() -> int:
+    """Retention for trashed tiers; 0 or negative falls back to the default."""
+    value = _int(get("MEMORY_NEURON_TRASH_DAYS", ""), 30)
+    return value if value > 0 else 30
+
+
+def memory_neuron_llm_pairs() -> int:
+    return max(0, _int(get("MEMORY_NEURON_LLM_PAIRS", ""), 100))
+
+
+def memory_neuron_review_concurrency() -> int:
+    """Parallel LLM review batches; 1 keeps the sequential behavior."""
+    return max(1, min(32, _int(get("MEMORY_NEURON_REVIEW_CONCURRENCY", ""), 1)))
 
 
 def _weight(raw: str) -> float:

@@ -243,7 +243,14 @@ mcp = MCPServer(SERVER_NAME, version=SERVER_VERSION)
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request):
-    return JSONResponse({"status": "ok", "service": SERVER_NAME})
+    payload = {"status": "ok", "service": SERVER_NAME}
+    try:
+        from agent_gateway.services.memory import network
+
+        payload["memory_network"] = await asyncio.to_thread(network.stats)
+    except Exception as e:  # noqa: BLE001 - health must answer even without a graph
+        payload["memory_network"] = {"error": str(e)}
+    return JSONResponse(payload)
 
 
 HANDLERS: dict[str, callable] = dict(MEMORY_HANDLERS)

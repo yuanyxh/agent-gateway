@@ -79,8 +79,8 @@ class LoadGroupsTest(_Base):
         member = next(item for item in members if item["id"] == "f1")
 
         self.assertEqual(member["text_source"], "fact")
-        self.assertEqual(len(member["text"]), group_governance.TEXT_LIMIT)
-        self.assertTrue(member["truncated"])
+        self.assertEqual(member["text"], "完整正文" * 1001)
+        self.assertNotIn("truncated", member)
 
     def test_body_marks_title_as_degraded_when_fact_is_missing(self):
         self.add("t1", "ep_t", "只有标题")
@@ -108,7 +108,6 @@ class SingleGroupTest(_Base):
         member = group_governance.load_groups(self.db)["singles"][0]
 
         self.assertEqual(member["text_source"], "title")
-        self.assertFalse(member["truncated"])
 
     def test_load_groups_pages_until_short_page(self):
         pages = [
@@ -162,6 +161,22 @@ class CandidatesTest(_Base):
 
         self.assertEqual(len(candidates["pairs"]), 1)
         self.assertTrue(candidates["truncated"])
+
+    def test_readonly_never_creates_or_writes(self):
+        missing = os.path.join(self._tmp.name, "missing.sqlite")
+        with self.assertRaises(FileNotFoundError):
+            group_governance.build_candidates(db_path=missing, readonly=True)
+
+        def snapshot():
+            return {
+                name: os.stat(os.path.join(self._tmp.name, name)).st_mtime_ns
+                for name in os.listdir(self._tmp.name)
+            }
+
+        with mock.patch.object(group_governance, "_try_hot", return_value=None):
+            before = snapshot()
+            group_governance.build_candidates(db_path=self.db, readonly=True)
+            self.assertEqual(snapshot(), before)
 
 
 class DecideTest(unittest.TestCase):
@@ -378,6 +393,8 @@ class GovernDailyTest(_Base):
         self.assertEqual(second["metadata"]["episode_prev"], "ep_a")
         self.assertEqual(result["applied"], 1)
         self.assertEqual(result["written"], 1)
+        self.assertIn("ep_a", result["touched"])
+        self.assertEqual(len(result["touched"]), 2)
         self.assertFalse(
             any(
                 edge["type"] == "episode"

@@ -316,18 +316,15 @@ class DailyTest(_Base):
         govern.assert_awaited_once()
         compress.assert_awaited_once()
         merge.assert_awaited_once()
-        self.assertEqual(
-            result,
-            {
-                "scored": 4,
-                "pairs": 1,
-                "edges": 1,
-                "clusters": 1,
-                "compressed": 1,
-                "merged": 0,
-                "governance": {"status": "skipped"},
-            },
-        )
+        self.assertEqual(result["scored"], 4)
+        self.assertEqual(result["pairs"], 1)
+        self.assertEqual(result["edges"], 1)
+        self.assertEqual(result["clusters"], 1)
+        self.assertEqual(result["compressed"], 1)
+        self.assertEqual(result["merged"], 0)
+        self.assertEqual(result["governance"], {"status": "skipped"})
+        self.assertIn("network", result)
+        self.assertIn("synapses", result)
 
 
 class MergeBudgetTest(unittest.TestCase):
@@ -768,9 +765,9 @@ class WeeklyTest(_Base):
         ):
             result = asyncio.run(consolidate.run_weekly(db_path=self.db, now=NOW))
 
-        self.assertEqual(
-            result, {"disputes": {"pairs": 2, "disputes": 1}, "archived": 3}
-        )
+        self.assertEqual(result["disputes"], {"pairs": 2, "disputes": 1})
+        self.assertEqual(result["archived"], 3)
+        self.assertIn("network", result)
 
 
 if __name__ == "__main__":

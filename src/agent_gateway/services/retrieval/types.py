@@ -78,6 +78,11 @@ class RetrievedItem:
         "top_callers",
         "resolver",
         "filter_fallback",
+        "path",
+        "hops",
+        "neuron_id",
+        "activation",
+        "truncated",
     )
     RESULT_META_KEYS = ("tags", "status", "confidence")
 

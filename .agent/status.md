@@ -17,6 +17,7 @@
 | 记忆体第二轮改进 | 近邻矛盾候选、打分批量写、受保护记忆、dry-run、检索层归档过滤、多信号排序（默认关）、摘要预算折叠已实现并通过 379 例；等打包部署 | — |
 | gateway 与 utility 完全解耦 | 配置/路径/项目数据/图库写权已落地；legacy 适配保留一个发布周期；522 例与 ruff 通过；待用户验证与提交 | — |
 | 记忆分组治理 | 已接入日任务：增量候选、默认应用 split/merge、写 `episode_prev`/`episode_source`、12 次调用预算；628 例通过 | 待重启 MCP 生效；离线报告仍全量运行 |
+| 记忆神经网 v2 | T1-T18 完成；2026-11-11 两仓 review 修复 11 项与三观察项（事件循环阻塞、readonly、时区锚点、治理断边、配置嵌套），724 例与 ruff 通过；Lume VM 复验 daily/weekly 心跳 max 204/326 ms、`llm_skipped=false`、共激活建边 13（证据 `tests/eval/memory_network/2026-11-11/vm-fixes/`） | 待重新打包 utility；关联臂召回质量尚无前后对比；治理 split/merge 的 seed 重建未端到端 |
 
 ## 已完成
 
@@ -85,6 +86,8 @@
 - 2026-11-08 分组治理审查修复：只读 `mode=ro&immutable=1` + 分页加载（生产 5322 条不再漏 322）、单条显式组不进配对、singles 带 `text_source`/`truncated`、批次 32k 字符预算、LLM 异常与畸形 split 隔离、报告标注明细截断；新增 `store.readonly_connect`、`link.fact_from_data` 与 8 例测试；624 例通过
 
 - 2026-11-09 分组治理接入日任务：`govern_daily` 按 `since` 后新记忆所在组筛选候选、默认应用 split/merge、写 `episode_prev`/`episode_source`/`governance_run`、日任务预算 12 次调用；应用时同步 mem0 metadata 并重建 episode 边；回滚脚本先同步 mem0、只扫 hot；调度器传上次日任务时间；629 例通过
+
+- 2026-11-10 记忆神经网 v2（T1-T18）：新增 `services/memory/{network,network_build,strength,lifecycle}.py`、`retrieval/arms/associative.py`、`prompts/{zh-Hans,en}/neuron_link.md`、迁移/基准/E2E/回滚四个脚本；`memory_graph` 增加 `synapse`/`associative` 边，`recall` 接入关联扩展，`/health` 暴露网络统计；18 项任务全部落地。审查发现并修复：reconcile 以陈旧 `member_count` 删活神经元（改查成员表）、`unbind_weak` 立即归档新建共激活突触（改按创建时间）、扩散首达锁定丢弃更强路径、关联结果未排除已命中 id、purge 在热/冷存储缺失时仍删图行、weekly dry-run 仍写分层/突触/度数、group_pairs 候选被 `no_candidates` 短路、治理写失败未回滚、`merge_neurons` 只迁 200 成员、回滚导出 BLOB 失败且 drop 会被重建、`ACTIVATION_FLOOR=0` 被吞、archive/trash 配置未消费。验证：710 例通过、ruff 通过、隔离 E2E 全项 PASS（生产库哈希不变）、50k/5k/100k bench spread p95 72ms；另在 Lume macOS 26.4 一次性 VM 内复跑 710 例、真实数据 E2E、100k/10k/200k 基准与 100 次批量召回，全部通过。期间修复 E2E 脚本 `_config_qdrant` 只认 JSON 导致 YAML 配置下误把仓库目录当 Qdrant 源的问题。
 
 ## 下一步
 
@@ -156,8 +159,31 @@
 | 2026-11-08 | 分组治理 MVP：`unittest discover` / `ruff format --check` / `ruff check` / `GATEWAY_HOME` 临时目录 `--check` | 613 例通过 / 265 文件 / 0 条 / check passed |
 | 2026-11-08 | `scripts/group_governance_eval.py` 生产库只读 + 1 次 LLM | 454 组 + 20 对；10 决策；0 解析失败 |
 | 2026-11-08 | 审查修复后全量测试与只读连接 | 624 例通过；ruff 266 文件通过；只读读生产库 2 行成功 |
+| 2026-11-10 | 记忆神经网 v2 T1：`PYTHONPATH=src .venv/bin/python -m unittest tests.test_memory_network` | 13 例通过；全量 666 例通过；ruff format/check 通过 |
+| 2026-11-10 | 记忆神经网 v2 审查修复后 `unittest discover` / `ruff check` / `swift build` | 710 例通过 / 0 条 / Build complete |
+| 2026-11-10 | `scripts/memory_network_e2e.py --copy-prod --port 9013` | all_ok：迁移 5540 节点幂等、a→b→c 扩散、MCP associative、清理 2 条、治理合并 1 对、recall 返回、生产 graph/qdrant 哈希不变 |
+| 2026-11-10 | `scripts/memory_network_bench.py --nodes 50000 --neurons 5000 --synapses 100000` | spread p95 72ms、decay 1.44ms、tiers 1390ms，预算全通过；degree p95 20 |
+| 2026-11-10 | Lume VM（macOS 26.4）全量 `unittest discover` / `ruff check` | 710 例通过（3 skipped）/ 0 条 |
+| 2026-11-10 | Lume VM 内 `memory_network_e2e.py --copy-prod`（真实 5556 节点 + 6106 向量） | all_ok：迁移幂等、a→b→c 扩散、MCP associative、清理 2 条、治理合并 1 对；生产 graph/qdrant 哈希不变 |
+| 2026-11-10 | Lume VM 内 bench 100k 节点 / 10k 神经元 / 200k 突触 | spread p95 163ms、decay 2.16ms、tiers 3800ms，预算全通过；degree p95 20 |
+| 2026-11-10 | Lume VM 内 100 次真实 recall + 20 次 associative 图查询 | 100/100 无错误（20 ok / 80 no_match，未复制 notes 层）；关联图 20/20 命中；recall p50 7.3ms、p95 13ms |
+| 2026-11-10 | VM 拆除 | `lume ls` 为空；无 lume LaunchAgent；VM 内证据已回收到 `tests/eval/memory_network/2026-11-10/vm/` |
+| 2026-11-11 | 重建 Lume 基础镜像 + 端侧克隆（用户要求镜像保留） | `macos-base-clean`（源 `macos-tahoe-vanilla`）保留；克隆 `utility-env` 复制 Clash/LLM 配置/记忆库/Utility.app |
+| 2026-11-11 | `utility-env` 内完整流程实跑（真实代理 + 真实 LLM + 5587 节点） | daily 200/500s（pairs 11、compressed 8、governance applied 1）；weekly dry-run 无写；recall 50/50 ok（p50 668ms）；graph 20/20；证据 `vm-fullflow/` |
+| 2026-11-11 | VM 内神经网批量实验：3k 节点/600 神经元、20k 节点/4000 神经元 | 迁移/关联(910、2000)/扩散/强化/衰减/解绑(40)/分层/度上限/合并/拆分全部按预期；20k 全流程 113.5s；证据 `tests/eval/memory_network/2026-11-11/` |
+| 2026-11-11 | 移除后台 LLM 输入截断（关联审查 400 字、治理正文 4000 字） | 改为完整正文；新增完整正文用例；712 例 + ruff 通过；VM 内 6000 字正文实测完整 |
+| 2026-11-11 | 真实库 16 轮（112 天）生命周期演化 | active 16 / warm 0 / archive 5580，神经元 4217/成员 5596 全程不变、0 orphan；证据 `stability-16w.json` |
+| 2026-11-11 | 真实 LLM daily 三轮 + 16 轮稳定态 | 每轮 100 对审查、写入 86-87、耗时 13-19 分钟；突触 4→98（权重 0.69-0.94）；112 天后 active16/archive5593、0 orphan；证据 `real-llm.md` |
+| 2026-11-11 | 关联审查并发 + 全量回填 | 新增 `MEMORY_NEURON_REVIEW_CONCURRENCY`（默认 1）接入 Python 与宿主；2000 对并发 10 回填 25.6 分钟、写入 1096 条，突触 98→1108、度 max 7；714 例 + ruff + swift build 通过；证据 `backfill.md` |
+| 2026-11-11 | 检索质量评测（15 自由查询 + 7 指定关键词） | 指定词 7/7 命中主题、无关 0；发现长句整句作为 keywords 会假阴性（0→拆词后 8）；覆盖受 limit 限制；证据 `recall.md` |
+| 2026-11-11 | 真实 Claude Agent 检索评测（VM 内 8 条意图） | 7/8 回答与库中记忆吻合；绣仪因 literal_coverage=0.5 被多词/中英混写误杀（单词语 ok 6、加 Xiu Yi 后 no_match）；agent 会自拟词并多轮换词；证据 `agent-recall.md` |
+
+| 2026-11-11 | Lume VM 内 v2 修复复验（真实 LLM daily/weekly + 心跳 + recall） | daily 233.6s / weekly 242.3s；期间 health max 204/326 ms、0 错误；written 19、`llm_skipped=false`；coactivation 13；724 例 + ruff 通过 |
 
 ## 已知问题
+
+- 2026-11-10 关联检索臂默认开启与 `retrieval-no-fitted-thresholds` 规则冲突：该规则要求新排序信号在没有同一评测集前后对比时默认关闭，并要求首位命中率/上下文长度数据。当前 `MEMORY_NEURON_ENABLED` 默认 true（用户既定「降级默认 ON」与最完善实现的延续），尚无 associative 臂的 before/after 指标；已在 `.agent/decisions.md` 记录为待评测风险，下一步用固定快照做开关对照后再定默认值。
+- 2026-11-10 网络层阈值（`PAIR_FLOOR=0.56`、`MIN_SYNAPSE_WEIGHT=0.62`、半衰期 30/90 天、分层 0.45/0.20、idle 30/90 天）仍为代码常量，未走 `floors_for` 或用户配置；属上述规则的同一待标定项。
 
 - 2026-11-08 自动化截断审计与修复：8 处判断输入改为完整正文（分组取 `fact`、矛盾 500、合并 150/120/80、recall 语义过滤 200 全部移除截断）；`link.py` 白名单补 `fact` 并从 Qdrant 回填 5610 条（99.9%，备份 `memory_graph.sqlite.bak-20261108225909`）；616 例通过。待重启 MCP 使判定与白名单修复生效后复验（`todo-20261108-002`）。
 - 2026-11-08 分组治理审查修复：5 类缺陷已修（只读分页、显式单条组、输入标记、批次预算、输出校验）；回填脚本改为读分片副本并剥离 mem0 `Context:` 后缀，已 apply 1046 条（备份 `memory_graph.sqlite.bak-20261108235634`），fact 覆盖 5332/5332、候选 654→674。`SUMMARY_FACTS_MAX_CHARS=20000` 与 `SUMMARY_RULE_SUMMARY_MAX_CHARS=2000` 取代无界输入。待重启 MCP 复验。

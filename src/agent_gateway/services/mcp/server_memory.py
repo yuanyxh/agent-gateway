@@ -106,6 +106,7 @@ from agent_gateway.services.mcp.server_tool_schema import (
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
 from agent_gateway.services.memory import link as memory_link
 from agent_gateway.services.memory import store as memory_store
+from agent_gateway.services.memory import strength as memory_strength
 from agent_gateway.services.retrieval.arms.recall import (
     ColdMemoryArm,
     HotMemoryArm,
@@ -1265,7 +1266,10 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         return pipeline.run_query(
             request,
             limit,
-            {"reader_agent_id": str(arguments.get("agent_id") or "unknown")},
+            {
+                "reader_agent_id": str(arguments.get("agent_id") or "unknown"),
+                "include_archived": include_archived,
+            },
             "recall",
         )
 
@@ -1287,6 +1291,11 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         )
     # After truncation: only the rows that survived are ones the caller saw.
     await asyncio.to_thread(_touch_hot_access, top)
+    try:
+        await asyncio.to_thread(memory_strength.reinforce_after_recall, top)
+        await asyncio.to_thread(memory_strength.coactivate_recalled, top)
+    except Exception as e:  # noqa: BLE001 - reinforcement must not drop recalled rows
+        logger.warning(f"[memory] reinforce after recall failed: {e}")
     status = out["status"]
     filtered = int(out.get("filtered") or 0)
     fallback_count = int(out.get("fallback_count") or 0)

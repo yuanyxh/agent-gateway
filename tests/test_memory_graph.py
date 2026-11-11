@@ -338,8 +338,57 @@ class SchemaTest(unittest.TestCase):
 
         tool = next(item for item in build_tools() if item.name == "memory_graph")
         self.assertEqual(
-            tuple(tool.input_schema["properties"]["edge"]["enum"]), graph.EDGE_TYPES
+            tuple(tool.input_schema["properties"]["edge"]["enum"]),
+            (*graph.EDGE_TYPES, "synapse", "associative"),
         )
+
+
+class NeuronGraphToolTest(_GraphCase):
+    def setUp(self):
+        super().setUp()
+        from agent_gateway.services.memory import network
+
+        self.network = network
+        for node_id, episode in (("h1", "ep_a"), ("h2", "ep_b")):
+            self.node(node_id, episode=episode)
+            network.ensure_neuron(
+                {"neuron_id": episode, "episode_id": episode}, db_path=self.db
+            )
+            network.upsert_member(episode, node_id, db_path=self.db)
+        network.upsert_synapse(
+            {"from_neuron": "ep_a", "to_neuron": "ep_b", "weight": 0.8},
+            db_path=self.db,
+        )
+
+    def test_synapse_edge_returns_neighbour(self):
+        with mock.patch.object(
+            server_memory_graph.store, "graph_db_path", return_value=Path(self.db)
+        ):
+            out = asyncio.run(
+                server_memory_graph.handle_memory_graph(
+                    {"node_id": "h1", "edge": "synapse"}
+                )
+            )
+        data = json.loads(out[0].text)
+        self.assertTrue(data["found"])
+        self.assertEqual(data["group"], "ep_a")
+        self.assertEqual(data["links"][0]["group"], "ep_b")
+        self.assertAlmostEqual(data["links"][0]["weight"], 0.8)
+
+    def test_associative_edge_returns_path(self):
+        with mock.patch.object(
+            server_memory_graph.store, "graph_db_path", return_value=Path(self.db)
+        ):
+            out = asyncio.run(
+                server_memory_graph.handle_memory_graph(
+                    {"node_id": "h1", "edge": "associative"}
+                )
+            )
+        data = json.loads(out[0].text)
+        self.assertTrue(data["found"])
+        self.assertEqual(data["group"], "ep_a")
+        visited = {item["neuron_id"] for item in data["activated"]}
+        self.assertEqual(visited, {"ep_a", "ep_b"})
 
 
 class FactFromDataTest(unittest.TestCase):

@@ -17,6 +17,7 @@ json_keys: [decisions]
 - split 的 groups 必须覆盖该候选的全部成员，且各组互不重叠。
 - 多成员组执行 merge 时，merge_with 必须是同批次另一个 candidate_id。
 - pair 执行 merge 表示这两条记忆应归为一组，不需要 merge_with。
+- group_pair 只允许 keep 或 merge；merge 表示两个组应合并为一组，不需要 merge_with。
 
 返回 JSON: {"decisions": [{"candidate_id": "<id>", "action": "keep|split|merge", "groups": [["<member id>"]], "merge_with": "<candidate id>", "reason": "<不超过 50 字>"}]}
 

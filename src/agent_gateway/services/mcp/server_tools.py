@@ -526,6 +526,8 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
                 "disputes",
                 "relates",
                 "mentions",
+                "synapse",
+                "associative",
             ],
             Field(default="supersedes", description=param_text("param.memory_edge")),
         ] = "supersedes",

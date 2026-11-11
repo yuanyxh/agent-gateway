@@ -7,6 +7,7 @@ episode fields.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -17,7 +18,7 @@ from typing import Awaitable, Callable
 from agent_gateway.core import config, prompt_loader
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.llm import client as llm_client
-from agent_gateway.services.memory import graph, store
+from agent_gateway.services.memory import graph, network, network_build, store
 
 logger = setup_logging("server")
 
@@ -33,7 +34,6 @@ TITLE_LOOKUP_LIMIT = 10
 DEFAULT_EXPANDED_FLOOR = 0.56
 MAX_BATCH = 10
 MAX_CALLS = 85
-TEXT_LIMIT = 4000
 ACTIONS = {"keep", "split", "merge"}
 
 LlmCallable = Callable[..., Awaitable[str | None]]
@@ -52,8 +52,8 @@ def _body(node: dict) -> tuple[str, str]:
     meta = _meta(node)
     fact = str(meta.get("fact") or "").strip()
     if fact:
-        return fact[:TEXT_LIMIT], "fact"
-    return str(node.get("title") or "")[:TEXT_LIMIT], "title"
+        return fact, "fact"
+    return str(node.get("title") or ""), "title"
 
 
 def _member(node: dict, episode: str = "") -> dict:
@@ -63,7 +63,6 @@ def _member(node: dict, episode: str = "") -> dict:
         "episode_id": episode or _episode(node),
         "text": text,
         "text_source": source,
-        "truncated": len(str(_meta(node).get("fact") or "")) > TEXT_LIMIT,
         "created_at": str(node.get("created_at") or ""),
     }
 
@@ -338,14 +337,20 @@ def build_candidates(
     pairs = nearby_single_candidates(
         loaded["singles"], members, limit=single_pair_limit, hot=hot
     )
-    total = len(loaded["groups"]) + len(pairs)
+    group_pairs = (
+        load_group_pair_candidates(db_path=db_path, readonly=readonly)
+        if config.memory_neuron_enabled()
+        else []
+    )
+    total = len(loaded["groups"]) + len(pairs) + len(group_pairs)
     truncated = total > MAX_CANDIDATES or (0 < single_pair_limit <= len(pairs))
     if total > MAX_CANDIDATES:
-        room = max(0, MAX_CANDIDATES - len(loaded["groups"]))
+        room = max(0, MAX_CANDIDATES - len(loaded["groups"]) - len(group_pairs))
         pairs = pairs[:room]
     return {
         "groups": loaded["groups"],
         "pairs": pairs,
+        "group_pairs": group_pairs,
         "singles": loaded["singles"],
         "explicit_suspect": loaded["explicit_suspect"],
         "oversized": loaded["oversized"],
@@ -354,8 +359,76 @@ def build_candidates(
     }
 
 
+def load_group_pair_candidates(
+    *,
+    db_path: str | None = None,
+    min_weight: float = network_build.MIN_SYNAPSE_WEIGHT,
+    limit: int = 50,
+    readonly: bool = False,
+) -> list[dict]:
+    """High-weight neuron links become group merge candidates."""
+    out: list[dict] = []
+    links = [
+        link
+        for link in network.all_synapses(
+            min_weight=min_weight,
+            limit=limit * 4,
+            db_path=db_path,
+            readonly=readonly,
+        )
+        if str(link.get("from_neuron") or "").startswith("ep_")
+        and str(link.get("to_neuron") or "").startswith("ep_")
+    ]
+    neurons = {str(link.get("from_neuron") or "") for link in links} | {
+        str(link.get("to_neuron") or "") for link in links
+    }
+    members_by_neuron = network.members_of_many(
+        list(neurons),
+        limit=MAX_GROUP_MEMBERS + 1,
+        db_path=db_path,
+        readonly=readonly,
+    )
+    for link in links:
+        left = str(link.get("from_neuron") or "")
+        right = str(link.get("to_neuron") or "")
+        left_members = members_by_neuron.get(left, [])
+        right_members = members_by_neuron.get(right, [])
+        if not (
+            2 <= len(left_members) <= MAX_GROUP_MEMBERS
+            and 2 <= len(right_members) <= MAX_GROUP_MEMBERS
+        ):
+            continue
+        if len(left_members) + len(right_members) > MAX_GROUP_MEMBERS:
+            continue
+        explicit = any(
+            str((member.get("metadata") or {}).get("episode_source") or "")
+            == "explicit"
+            for member in left_members + right_members
+        )
+        if explicit:
+            continue
+        members = [_member(m, left) for m in left_members]
+        members += [_member(m, right) for m in right_members]
+        out.append(
+            {
+                "candidate_id": f"group_pair:{left}|{right}",
+                "kind": "group_pair",
+                "groups": [left, right],
+                "members": members,
+                "score": link.get("weight", 0.0),
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _candidate_items(candidates: dict) -> list[dict]:
-    return list(candidates.get("groups") or []) + list(candidates.get("pairs") or [])
+    return (
+        list(candidates.get("groups") or [])
+        + list(candidates.get("pairs") or [])
+        + list(candidates.get("group_pairs") or [])
+    )
 
 
 def render_candidates(items: list[dict]) -> str:
@@ -397,6 +470,8 @@ def _validate_decision(decision: dict, batch: list[dict]) -> tuple[dict | None, 
     action = str(decision.get("action") or "")
     if action not in ACTIONS:
         return None, "unknown_action"
+    if target["kind"] == "group_pair" and action == "split":
+        return None, "bad_split"
     member_ids = {member["id"] for member in target["members"]}
     if action == "split":
         groups = decision.get("groups")
@@ -525,6 +600,7 @@ def _recent_candidates(candidates: dict, since: str) -> dict:
         **candidates,
         "groups": [g for g in candidates.get("groups") or [] if touched(g)],
         "pairs": [p for p in candidates.get("pairs") or [] if touched(p)],
+        "group_pairs": [p for p in candidates.get("group_pairs") or [] if touched(p)],
     }
 
 
@@ -598,13 +674,24 @@ def _apply_decisions(
     single_ids: set[str],
     db_path: str | None,
     now: datetime,
-) -> tuple[int, int, int, int]:
-    """Write split/merge decisions; returns (applied, written, skipped, errors)."""
+) -> tuple[int, int, int, int, list[str]]:
+    """Write split/merge decisions; returns counts plus touched episode ids."""
     by_id = {item["candidate_id"]: item for item in _candidate_items(candidates)}
     run_at = now.isoformat()
     updates: dict[str, dict] = {}
     applied = skipped = errors = 0
     compensation: dict[str, dict] = {}
+
+    def touched_neurons() -> list[str]:
+        values = {
+            str(
+                ((nodes.get(member_id) or {}).get("metadata") or {}).get("episode_id")
+                or ""
+            )
+            for member_id in updates
+        }
+        values |= {str(patch.get("episode_id") or "") for patch in updates.values()}
+        return sorted(value for value in values if value)
 
     def queue(member_id: str, new_episode: str) -> bool:
         nonlocal errors
@@ -657,6 +744,32 @@ def _apply_decisions(
             continue
         if action != "merge":
             continue
+        if item["kind"] == "group_pair":
+            groups = item.get("groups") or []
+            if len(groups) != 2:
+                skipped += 1
+                continue
+            counts = {
+                group: sum(
+                    1 for member in item["members"] if member["episode_id"] == group
+                )
+                for group in groups
+            }
+            target_episode = sorted(groups, key=lambda group: (-counts[group], group))[
+                0
+            ]
+            changed = any(
+                [
+                    queue(member["id"], target_episode)
+                    for member in item["members"]
+                    if member["episode_id"] != target_episode
+                ]
+            )
+            if changed:
+                applied += 1
+            else:
+                skipped += 1
+            continue
         if item["kind"] == "pair":
             members = [member["id"] for member in item["members"]]
             if any(member_id not in single_ids for member_id in members):
@@ -702,10 +815,30 @@ def _apply_decisions(
         )
         errors += len(compensation)
         applied = 0
-        return applied, written, skipped, errors
-    if updates and written:
+        return applied, written, skipped, errors, []
+    if updates and written != len(updates):
+        logger.error(
+            "[governance] local metadata write incomplete (%d/%d); rolling back",
+            written,
+            len(updates),
+        )
+        _restore_mem0(compensation)
+        _rebuild_episode_edges(list(compensation), db_path)
+        errors += len(compensation)
+        return 0, written, skipped, errors, []
+    if updates:
         _rebuild_episode_edges(list(updates), db_path)
-    return applied, written, skipped, errors
+        if config.memory_neuron_enabled():
+            try:
+                network_build.sync_episode_updates(updates, nodes, db_path=db_path)
+            except Exception as e:  # noqa: BLE001 - roll back both sides together
+                logger.error(f"[governance] network sync failed; rolling back: {e}")
+                store.batch_update_metadata(list(compensation.items()), db_path)
+                _restore_mem0(compensation)
+                _rebuild_episode_edges(list(compensation), db_path)
+                errors += len(compensation)
+                applied = 0
+    return applied, written, skipped, errors, touched_neurons()
 
 
 async def govern_daily(
@@ -724,16 +857,20 @@ async def govern_daily(
         "skipped": 0,
         "calls": 0,
         "errors": 0,
+        "touched": [],
     }
     if not config.memory_governance_apply():
         return {**empty, "status": "disabled"}
     if not llm_client.is_configured():
         return {**empty, "status": "llm_unavailable"}
     try:
-        candidates = build_candidates(db_path=db_path)
-        nodes = {node["node_id"]: node for node in _load_active_nodes(db_path)}
+        candidates = await asyncio.to_thread(build_candidates, db_path=db_path)
+        nodes = {
+            node["node_id"]: node
+            for node in await asyncio.to_thread(_load_active_nodes, db_path)
+        }
         scoped = _recent_candidates(candidates, since)
-        if not scoped["groups"] and not scoped["pairs"]:
+        if not scoped["groups"] and not scoped["pairs"] and not scoped["group_pairs"]:
             return {**empty, "status": "no_candidates"}
         result = await decide(
             scoped,
@@ -742,7 +879,8 @@ async def govern_daily(
             max_calls=max_calls,
         )
         single_ids = {member["id"] for member in candidates.get("singles") or []}
-        applied, written, skipped, sync_errors = _apply_decisions(
+        applied, written, skipped, sync_errors, touched = await asyncio.to_thread(
+            _apply_decisions,
             result["decisions"],
             scoped,
             nodes,
@@ -752,12 +890,17 @@ async def govern_daily(
         )
         return {
             "status": result["status"],
-            "candidates": len(scoped["groups"]) + len(scoped["pairs"]),
+            "candidates": (
+                len(scoped["groups"])
+                + len(scoped["pairs"])
+                + len(scoped["group_pairs"])
+            ),
             "applied": applied,
             "written": written,
             "skipped": skipped,
             "calls": result["calls"],
             "errors": result["parse_failed"] + sync_errors,
+            "touched": touched,
         }
     except Exception as e:  # noqa: BLE001 - daily work must not block on governance
         logger.warning(f"[governance] daily pass failed: {e}", exc_info=True)
@@ -786,7 +929,6 @@ def render_report(candidates: dict, result: dict) -> str:
     ]
     members = [member for item in reviewed for member in item.get("members") or []]
     degraded = sum(1 for member in members if member.get("text_source") == "title")
-    clipped = sum(1 for member in members if member.get("truncated"))
     total = len(items)
     rate = len(decisions) / total * 100 if total else 0.0
     calls = "—（render-only）" if result.get("render_only") else result.get("calls", 0)
@@ -799,8 +941,8 @@ def render_report(candidates: dict, result: dict) -> str:
         f"- 已生成建议：{len(decisions)}（覆盖率 {rate:.1f}%）",
         f"- 单条组：{len(candidates.get('singles') or [])}；疑似显式组：{len(candidates.get('explicit_suspect') or [])}；超限组：{len(candidates.get('oversized') or [])}",
         f"- LLM 调用：{calls}；解析失败：{result.get('parse_failed', 0)}；拒绝：{result.get('rejected') or {}}；动作分布：{dict(actions)}",
-        f"- 正文来源：fact {len(members) - degraded} / title {degraded}（degraded）；超 4000 字截断 {clipped}",
-        f"- 向量近邻：{bool(candidates.get('vector'))}；截断：{bool(candidates.get('truncated'))}",
+        f"- 正文来源：fact {len(members) - degraded} / title {degraded}（degraded）；正文完整不截断",
+        f"- 向量近邻：{bool(candidates.get('vector'))}；候选超上限：{bool(candidates.get('truncated'))}",
         "",
         f"## 抽检明细（{min(len(decisions), 50)}/{len(decisions)} 条）",
         "",

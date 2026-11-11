@@ -78,6 +78,10 @@ class ConfigFallbackTest(unittest.TestCase):
         (self.root / "config.yaml").write_text(text, encoding="utf-8")
         config_loader.reset_cache()
 
+    def test_neuron_review_concurrency_reads_yaml(self):
+        self._write("memory:\n  neuron:\n    reviewConcurrency: 6\n")
+        self.assertEqual(config.memory_neuron_review_concurrency(), 6)
+
     def test_env_wins_over_yaml(self):
         self._write("ai:\n  apiKey: from-yaml\n")
         os.environ["AI_API_KEY"] = "from-env"

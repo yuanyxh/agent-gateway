@@ -218,7 +218,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "tool_resource": "Load a file under references or a script under scripts when instructed.",
     "set_memory_processed": "Set or reset the processed bit of memories. Idempotent.",
     "memory_get": "Trigger: you have a memory id from recall or remember and need its full body, lifecycle status, or an archived entry.",
-    "memory_graph": "Trigger: you need the version chain, episode group, contradictions, or source chain around one memory id. Follows edges until the chain ends.",
+    "memory_graph": "Trigger: you need the version chain, episode group, contradictions, source chain, synapses, or associative path around one memory id. Follows edges until the chain ends.",
     "websearch_engine": "Trigger: user says web search/search online/look up/latest info. Returns result links and, when fetch_top>0, Markdown text of top pages.",
     "read_url": "Trigger: user says read this link, check this URL, fetch this page, 看这个链接/读一下/抓取网页. when a link needs to be read, returns the page as Markdown.",
 }
@@ -499,6 +499,8 @@ def build_tools() -> list[Tool]:
                             "disputes",
                             "relates",
                             "mentions",
+                            "synapse",
+                            "associative",
                         ],
                         "default": "supersedes",
                         "description": param_text("param.memory_edge"),

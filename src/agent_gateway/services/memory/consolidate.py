@@ -21,12 +21,24 @@ from agent_gateway.core import prompt_loader
 from agent_gateway.core.config import (
     memory_max_summaries,
     memory_max_summaries_per_episode,
+    memory_neuron_build_enabled,
+    memory_neuron_enabled,
+    memory_neuron_llm_pairs,
+    memory_neuron_review_concurrency,
+    memory_neuron_maintenance_enabled,
     memory_protect_importance,
 )
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.core.memory_lifecycle import is_public
 from agent_gateway.llm import client as llm_client
-from agent_gateway.services.memory import graph, retention, store
+from agent_gateway.services.memory import (
+    graph,
+    lifecycle,
+    network_build,
+    retention,
+    strength,
+    store,
+)
 from agent_gateway.services.memory.group_governance import govern_daily
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
 
@@ -483,12 +495,44 @@ async def run_daily(
     governance_since: str = "",
 ) -> dict:
     now = now or datetime.now()
-    scored = score_relevance(db_path=db_path, now=now)
+    scored = await asyncio.to_thread(score_relevance, db_path=db_path, now=now)
     governed = await govern_daily(
         db_path=db_path,
         since=governance_since or (now - timedelta(days=1)).isoformat(),
     )
-    sampled = sample_relations(db_path=db_path, now=now, sample_size=sample_size)
+    migrated = {}
+    repaired = {}
+    if memory_neuron_enabled():
+        migrated = await asyncio.to_thread(
+            network_build.migrate_network, db_path=db_path, apply=True, now=now
+        )
+        if memory_neuron_maintenance_enabled():
+            migrated["decay"] = await asyncio.to_thread(
+                strength.apply_decay, now=now, db_path=db_path
+            )
+        if memory_neuron_build_enabled():
+            built = await network_build.build_synapse_candidates(
+                db_path=db_path,
+                since=governance_since,
+                seed_neurons=governed.get("touched") or None,
+                llm_limit=memory_neuron_llm_pairs(),
+                concurrency=memory_neuron_review_concurrency(),
+            )
+            repaired = {
+                "pairs": len(built["pairs"]),
+                "written": await asyncio.to_thread(
+                    network_build.write_synapses,
+                    built["decisions"],
+                    db_path=db_path,
+                ),
+                "calls": built["calls"],
+                "truncated": built["truncated"],
+                "llm_skipped": built.get("llm_skipped", False),
+                "vector_unavailable": built["vector_unavailable"],
+            }
+    sampled = await asyncio.to_thread(
+        sample_relations, db_path=db_path, now=now, sample_size=sample_size
+    )
     compressed = await compress_clusters(
         sampled["clusters"], sampled["rows"], now=now, db_path=db_path
     )
@@ -501,6 +545,8 @@ async def run_daily(
         "compressed": compressed,
         "merged": merged,
         "governance": governed,
+        "network": migrated,
+        "synapses": repaired,
     }
 
 
@@ -699,10 +745,38 @@ async def run_weekly(
     disputes = await detect_contradictions(
         db_path=db_path, now=now, sample_size=sample_size, dry_run=dry_run
     )
-    archived = 0 if dry_run else forget_expired(db_path=db_path, now=now)
+    archived = (
+        0
+        if dry_run
+        else await asyncio.to_thread(forget_expired, db_path=db_path, now=now)
+    )
+    network_result = {}
+    if memory_neuron_enabled() and memory_neuron_maintenance_enabled():
+        tiers = await asyncio.to_thread(
+            lifecycle.classify_tiers, now=now, db_path=db_path, dry_run=dry_run
+        )
+        unbound = await asyncio.to_thread(
+            strength.unbind_weak, now=now, db_path=db_path, dry_run=dry_run
+        )
+        purged = await asyncio.to_thread(
+            lifecycle.purge_expired, now=now, db_path=db_path, dry_run=dry_run
+        )
+        capped = await asyncio.to_thread(
+            network_build.enforce_degree_cap, db_path=db_path, dry_run=dry_run
+        )
+        network_result = {
+            "tiers": tiers,
+            "unbound": unbound,
+            "purged": purged,
+            "capped": capped,
+        }
     if not dry_run:
-        store.vacuum(db_path=db_path)
-    return {"disputes": disputes, "archived": archived}
+        await asyncio.to_thread(store.vacuum, db_path=db_path)
+    return {
+        "disputes": disputes,
+        "archived": archived,
+        "network": network_result,
+    }
 
 
 def _state_path():
@@ -747,7 +821,11 @@ async def consolidation_scheduler(
             if now_ts - float(state.get("daily", 0) or 0) >= daily_seconds:
                 started = time.monotonic()
                 previous = float(state.get("daily", 0) or 0)
-                since = datetime.fromtimestamp(previous).isoformat() if previous else ""
+                since = (
+                    datetime.fromtimestamp(previous).astimezone().isoformat()
+                    if previous
+                    else ""
+                )
                 result = await run_daily(governance_since=since)
                 state["daily"] = now_ts
                 write_state(state)

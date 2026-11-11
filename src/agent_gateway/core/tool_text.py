@@ -59,7 +59,8 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     ),
     "param.memory_edge": (
         "Edge to follow: supersedes (version chain), episode (same event), "
-        "derived_from (cold sources), disputes, relates, mentions"
+        "derived_from (cold sources), disputes, relates, mentions, "
+        "synapse (neuron links), associative (multi-hop path)"
     ),
     "param.memory_direction": (
         "up follows to_id -> from_id, down follows from_id -> to_id, both (default)"
