@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -36,11 +37,12 @@ class PathsTest(unittest.TestCase):
 
 class ConfigFileTest(unittest.TestCase):
     def test_defaults_to_home_config(self):
-        with patch.dict(os.environ, {"GATEWAY_HOME": "/tmp/gh"}, clear=True):
-            self.assertEqual(
-                config_loader.config_file(),
-                _resolved("/tmp/gh") / "agent-gateway.yaml",
-            )
+        with tempfile.TemporaryDirectory(prefix="gateway-home-") as home:
+            with patch.dict(os.environ, {"GATEWAY_HOME": home}, clear=True):
+                self.assertEqual(
+                    config_loader.config_file(),
+                    _resolved(home) / "agent-gateway.yaml",
+                )
 
     def test_gateway_config_wins(self):
         env = {"GATEWAY_CONFIG": "/tmp/x/custom.yaml", "GATEWAY_HOME": "/tmp/gh"}

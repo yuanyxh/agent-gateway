@@ -19,6 +19,8 @@ from datetime import datetime, timedelta
 
 from agent_gateway.core import prompt_loader
 from agent_gateway.core.config import (
+    memory_brain_pair_mode,
+    memory_brain_sparse_floor,
     memory_max_summaries,
     memory_max_summaries_per_episode,
     memory_neuron_build_enabled,
@@ -35,6 +37,7 @@ from agent_gateway.services.memory import (
     graph,
     lifecycle,
     network_build,
+    replay,
     retention,
     strength,
     store,
@@ -517,7 +520,13 @@ async def run_daily(
                 seed_neurons=governed.get("touched") or None,
                 llm_limit=memory_neuron_llm_pairs(),
                 concurrency=memory_neuron_review_concurrency(),
+                pair_mode=memory_brain_pair_mode(),
+                sparse_floor=memory_brain_sparse_floor(),
             )
+            if built.get("llm_skipped"):
+                logger.warning(
+                    "[consolidate] LLM review unavailable; writing centroid edges"
+                )
             repaired = {
                 "pairs": len(built["pairs"]),
                 "written": await asyncio.to_thread(
@@ -526,10 +535,15 @@ async def run_daily(
                     db_path=db_path,
                 ),
                 "calls": built["calls"],
-                "truncated": built["truncated"],
+                "budget_exhausted": built["budget_exhausted"],
                 "llm_skipped": built.get("llm_skipped", False),
                 "vector_unavailable": built["vector_unavailable"],
             }
+            repaired["bridges"] = await asyncio.to_thread(
+                network_build.write_bridges,
+                await asyncio.to_thread(network_build.bridge_components, db_path),
+                db_path=db_path,
+            )
     sampled = await asyncio.to_thread(
         sample_relations, db_path=db_path, now=now, sample_size=sample_size
     )
@@ -537,6 +551,7 @@ async def run_daily(
         sampled["clusters"], sampled["rows"], now=now, db_path=db_path
     )
     merged = await merge_summaries(db_path=db_path, now=now)
+    replayed = await replay.run_replay(db_path=db_path, now=now)
     return {
         "scored": scored,
         "pairs": len(sampled["pairs"]),
@@ -547,6 +562,7 @@ async def run_daily(
         "governance": governed,
         "network": migrated,
         "synapses": repaired,
+        "replay": replayed,
     }
 
 
@@ -621,13 +637,15 @@ async def detect_contradictions(
             db_path=db_path,
         )
         server_memory._supersede_older(left, right)
+        await asyncio.to_thread(strength.apply_ltd, left, db_path=db_path)
+        await asyncio.to_thread(strength.apply_ltd, right, db_path=db_path)
         confirmed += 1
     logger.info(
         f"[consolidate] contradictions: nodes={len(node_ids)} "
         f"candidates={len(candidates)} confirmed={confirmed} skipped={skipped} "
         f"dry_run={dry_run}"
     )
-    payload = {"pairs": len(candidates), "disputes": confirmed}
+    payload = {"pairs": len(candidates), "disputes": confirmed, "ltd": confirmed * 2}
     if dry_run:
         payload["dry_run"] = True
         payload["review"] = review

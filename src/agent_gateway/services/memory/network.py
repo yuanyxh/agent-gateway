@@ -47,6 +47,10 @@ SYNAPSE_FIELDS = (
     "created_at",
     "updated_at",
     "metadata",
+    "polarity",
+    "stability",
+    "kind",
+    "inferred",
 )
 ACTIVATION_FIELDS = (
     "node_id",
@@ -80,7 +84,9 @@ def _metadata(raw: str | None) -> dict:
 
 
 def encode_centroid(values) -> bytes:
-    return np.asarray(list(values or ()), dtype=np.float32).tobytes()
+    if values is None:
+        return b""
+    return np.asarray(values, dtype=np.float32).reshape(-1).tobytes()
 
 
 def decode_centroid(raw: bytes | None) -> list[float]:
@@ -160,6 +166,36 @@ def set_neuron_centroid(neuron_id: str, values, db_path: str | None = None) -> b
             (encode_centroid(values), datetime.now().isoformat(), neuron_id),
         )
     return cursor.rowcount > 0
+
+
+def set_neuron_sparse(
+    neuron_id: str,
+    code: bytes,
+    context: str,
+    db_path: str | None = None,
+) -> bool:
+    if not neuron_id:
+        return False
+    with store.connect(db_path) as connection:
+        cursor = connection.execute(
+            "UPDATE neurons SET sparse_code=?, context_key=?, updated_at=? "
+            "WHERE neuron_id=?",
+            (code, context, datetime.now().isoformat(), neuron_id),
+        )
+    return cursor.rowcount > 0
+
+
+def neuron_sparse(
+    neuron_id: str, db_path: str | None = None
+) -> tuple[bytes | None, str]:
+    with store.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT sparse_code, context_key FROM neurons WHERE neuron_id=?",
+            (neuron_id,),
+        ).fetchone()
+    if row is None:
+        return None, ""
+    return row[0], str(row[1] or "")
 
 
 def ensure_neuron(neuron: dict, db_path: str | None = None) -> bool:
@@ -505,17 +541,18 @@ def synapses_of_many(
               SELECT {fields}, from_neuron AS _neuron, to_neuron AS _other,
                      ROW_NUMBER() OVER (
                        PARTITION BY from_neuron ORDER BY weight DESC, synapse_id
-                     ) AS _rank
+                     ) AS _rank, 1 AS _direction
               FROM synapses
               WHERE status='active' AND weight>=? AND from_neuron IN ({marks})
               UNION ALL
               SELECT {fields}, to_neuron AS _neuron, from_neuron AS _other,
                      ROW_NUMBER() OVER (
                        PARTITION BY to_neuron ORDER BY weight DESC, synapse_id
-                     ) AS _rank
+                     ) AS _rank, 0 AS _direction
               FROM synapses
               WHERE status='active' AND weight>=? AND to_neuron IN ({marks})
             ) WHERE _rank<=?
+            ORDER BY _neuron, _direction DESC, _rank
             """,
             (min_weight, *ids, min_weight, *ids, limit),
         ).fetchall()

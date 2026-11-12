@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from agent_gateway.llm import client as llm_client
-from agent_gateway.core import prompt_loader
+from agent_gateway.core import config, prompt_loader
 from mem0 import Memory
 from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 from mcp.types import TextContent
@@ -104,6 +104,7 @@ from agent_gateway.services.mcp.server_tool_schema import (
     DEFAULT_RECALL_MAX_CHARS,
 )
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
+from agent_gateway.services.memory import entities as memory_entities
 from agent_gateway.services.memory import link as memory_link
 from agent_gateway.services.memory import store as memory_store
 from agent_gateway.services.memory import strength as memory_strength
@@ -119,6 +120,7 @@ from agent_gateway.services.retrieval.arms.recall import (  # noqa: F401
     project_hot_result as _project_hot_result,
 )
 from agent_gateway.core.config import memory_max_content_chars, rank_signal_weights
+from agent_gateway.services.retrieval.arms.semantic import SemanticArm
 from agent_gateway.services.retrieval.fusion.score import SignalWeightedFusion
 from agent_gateway.services.retrieval.gate.relevance import LayerPresenceGate
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
@@ -766,6 +768,52 @@ def _write_memory(item: dict, now_iso: str, db_path: str | None = None) -> dict:
     }
 
 
+async def _persist_semantics(memory_id: str, result: dict | None) -> None:
+    """Store entities/facts mined by the LLM; never block the memory write."""
+    if not result or not config.memory_brain_semantic():
+        return
+    entities = result.get("entities") or []
+    facts = result.get("facts") or []
+    if not entities and not facts:
+        return
+    parsed = {memory_id or "__unbound__": {"entities": entities, "facts": facts}}
+    try:
+        if memory_id:
+            await asyncio.to_thread(memory_entities.store_batch, parsed)
+        await asyncio.to_thread(memory_entities.store_facts, parsed)
+    except Exception as e:  # noqa: BLE001 - semantic layer is a side index
+        logger.warning(f"[entities] write failed for {memory_id}: {e}")
+
+
+async def _extract_semantics(content: str, memory_id: str) -> None:
+    """Run the extraction prompt when no similar band triggered the combined call."""
+    if not config.memory_brain_semantic() or not llm_client.is_configured():
+        return
+    try:
+        parsed = await memory_entities.extract_batch(
+            [{"id": memory_id, "text": content}]
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[entities] extraction failed for {memory_id}: {e}")
+        return
+    await _persist_semantics(memory_id, (parsed or {}).get(memory_id))
+
+
+def _cold_node_id(point_id: str) -> str:
+    try:
+        with memory_store.connect() as connection:
+            row = connection.execute(
+                "SELECT node_id FROM memory_nodes WHERE layer='cold' "
+                "AND json_valid(metadata) "
+                "AND json_extract(metadata, '$.point_id')=? LIMIT 1",
+                (str(point_id),),
+            ).fetchone()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[entities] cold id lookup failed: {e}")
+        return ""
+    return str(row[0]) if row else ""
+
+
 async def _check_contradiction(content: str, similar_items: list[dict]) -> dict | None:
     if not similar_items or not llm_client.is_configured():
         return None
@@ -978,8 +1026,6 @@ def _supersede_older(current_id: str, other_id: str) -> None:
         _mark_cold_stale(done)
 
 
-_pending_contradictions: set[asyncio.Task] = set()
-
 _MAX_CONTRADICTION_TASKS = 5
 
 
@@ -1016,8 +1062,11 @@ async def _contradiction_check_hot(content: str, memory_id: str) -> None:
             else similar_raw.get("results", [])
         )
         band = _contradiction_band(similar_list, memory_id)
-        if band:
+        if not band:
+            await _extract_semantics(content, memory_id)
+        else:
             result = await _check_contradiction(content, band)
+            await _persist_semantics(memory_id, result)
             if result and result.get("relation") == "contradiction":
                 cid, reason = result.get("conflicting_id", ""), result.get("reason", "")
                 _mark_hot_disputed(memory_id, cid, reason)
@@ -1029,15 +1078,36 @@ async def _contradiction_check_hot(content: str, memory_id: str) -> None:
         logger.warning(f"Hot contradiction check failed: {e}")
 
 
+_contradiction_queue: asyncio.Queue | None = None
+_contradiction_workers: set[asyncio.Task] = set()
+
+
+async def _contradiction_worker() -> None:
+    queue = _contradiction_queue
+    while queue is not None:
+        coro = await queue.get()
+        try:
+            await coro
+        except Exception as e:  # noqa: BLE001 - one memory must not kill the worker
+            logger.warning(f"[contradiction] task failed: {e}")
+        finally:
+            queue.task_done()
+
+
 def spawn_contradiction_check(coro) -> None:
-    """Spawn a contradiction check task, limiting concurrent tasks to avoid memory leak."""
-    # Clean up completed tasks
-    done = {t for t in _pending_contradictions if t.done()}
-    _pending_contradictions.difference_update(done)
-    if len(_pending_contradictions) >= _MAX_CONTRADICTION_TASKS:
-        return  # too many backed up, skip and wait for the next round
-    task = asyncio.create_task(coro)
-    _pending_contradictions.add(task)
+    """Queue a contradiction task; a bounded worker pool keeps backlog off the caller."""
+    global _contradiction_queue
+    if _contradiction_queue is None:
+        _contradiction_queue = asyncio.Queue(maxsize=1000)
+    for task in list(_contradiction_workers):
+        if task.done():
+            _contradiction_workers.discard(task)
+    while len(_contradiction_workers) < _MAX_CONTRADICTION_TASKS:
+        _contradiction_workers.add(asyncio.create_task(_contradiction_worker()))
+    try:
+        _contradiction_queue.put_nowait(coro)
+    except asyncio.QueueFull:
+        logger.warning("[contradiction] queue full; dropping one check")
 
 
 async def contradiction_check_cold(content: str, point_id: str) -> None:
@@ -1059,11 +1129,18 @@ async def contradiction_check_cold(content: str, point_id: str) -> None:
             <= float(r.score or 0)
             <= CONTRADICTION_SIMILARITY_MAX
         ]
-        if band:
+        if not band:
+            await _extract_semantics(
+                content, await asyncio.to_thread(_cold_node_id, point_id)
+            )
+        else:
             similar = [
                 {"id": r.id, "content": r.payload.get("content", "")} for r in band
             ]
             result = await _check_contradiction(content, similar)
+            await _persist_semantics(
+                await asyncio.to_thread(_cold_node_id, point_id), result
+            )
             if result and result.get("relation") == "contradiction":
                 cid, reason = result.get("conflicting_id", ""), result.get("reason", "")
                 for pid in [point_id, cid]:
@@ -1380,6 +1457,10 @@ def _build_recall_pipeline(
     stages: list[Stage] = []
     if memory_arms:
         stages.append(Stage(name="memory", arms=memory_arms))
+    if config.memory_brain_semantic():
+        semantic_arm = SemanticArm()
+        arms.append(semantic_arm)
+        stages.append(Stage(name="semantic", arms=[semantic_arm]))
     notes_arm = NotesArm(
         min_coverage=floors["notes_coverage"],
         min_semantic=floors["notes_semantic"],

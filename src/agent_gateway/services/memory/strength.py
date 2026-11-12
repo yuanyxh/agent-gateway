@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from agent_gateway.core import config
 from agent_gateway.core.log_utils import setup_logging
-from agent_gateway.services.memory import network, store
+from agent_gateway.services.memory import forgetting, network, store
 
 logger = setup_logging("server")
 
@@ -49,6 +49,15 @@ def _bump(current: float, delta: float) -> float:
     return min(1.0, current + delta * (1.0 - current))
 
 
+def _decay_synapses(days: float, db_path: str | None) -> int:
+    factor = math.exp(-math.log(2) * days / SYNAPSE_HALF_LIFE_DAYS)
+    with store.connect(db_path) as connection:
+        return connection.execute(
+            "UPDATE synapses SET weight=MAX(0.0, weight*?) WHERE status='active'",
+            (factor,),
+        ).rowcount
+
+
 def apply_decay(
     *,
     now: datetime | None = None,
@@ -62,17 +71,20 @@ def apply_decay(
     days = _days_between(last, now)
     if days <= 0:
         return {"memory_rows": 0, "synapse_rows": 0, "days": 0.0}
+    if config.memory_brain_forgetting():
+        result = forgetting.apply_decay_v3(now=now, db_path=db_path)
+        return {
+            "memory_rows": result["rows"],
+            "synapse_rows": _decay_synapses(days, db_path),
+            "days": result["days"],
+        }
     memory_factor = math.exp(-math.log(2) * days / STRENGTH_HALF_LIFE_DAYS)
-    synapse_factor = math.exp(-math.log(2) * days / SYNAPSE_HALF_LIFE_DAYS)
     with store.connect(db_path) as connection:
         memory_rows = connection.execute(
             "UPDATE memory_activation SET strength=MAX(0.0, strength*?)",
             (memory_factor,),
         ).rowcount
-        synapse_rows = connection.execute(
-            "UPDATE synapses SET weight=MAX(0.0, weight*?) WHERE status='active'",
-            (synapse_factor,),
-        ).rowcount
+    synapse_rows = _decay_synapses(days, db_path)
     network.set_meta("last_decay_at", now.isoformat(), db_path=db_path)
     return {"memory_rows": memory_rows, "synapse_rows": synapse_rows, "days": days}
 
@@ -86,6 +98,11 @@ def reinforce_memory(
 ) -> float:
     now = now or datetime.now()
     with store.connect(db_path) as connection:
+        previous = connection.execute(
+            "SELECT stability, difficulty, last_activated_at FROM memory_activation "
+            "WHERE node_id=?",
+            (node_id,),
+        ).fetchone()
         row = connection.execute(
             """
             INSERT INTO memory_activation
@@ -100,6 +117,21 @@ def reinforce_memory(
             """,
             (node_id, delta, now.isoformat(), delta),
         ).fetchone()
+        if config.memory_brain_forgetting():
+            stability = float(previous[0] or 0.0) if previous else 0.0
+            if stability <= 0:
+                stability = forgetting.initial_stability(5)
+            difficulty = float(previous[1] or 0.0) if previous else 0.0
+            last_at = previous[2] if previous else now.isoformat()
+            elapsed = forgetting.days_between(last_at, now)
+            retrievable = forgetting.retrievability(stability, elapsed)
+            grown = forgetting.next_stability(
+                stability, difficulty or forgetting.DEFAULT_DIFFICULTY, retrievable
+            )
+            connection.execute(
+                "UPDATE memory_activation SET stability=? WHERE node_id=?",
+                (grown, node_id),
+            )
     return float(row[0]) if row else 0.0
 
 
@@ -218,6 +250,47 @@ def coactivate_recalled(
         if coactivate(left, right, db_path=db_path):
             pairs += 1
     return pairs
+
+
+LTD_DELTA = 0.05
+STABILITY_FLOOR = 1.0
+
+
+def apply_ltd(
+    memory_id: str,
+    *,
+    delta: float = LTD_DELTA,
+    now: datetime | None = None,
+    db_path: str | None = None,
+) -> dict:
+    """Weaken the synapses around one memory and halve its stability."""
+    now = now or datetime.now()
+    neuron_id = network.neuron_of(memory_id, db_path=db_path)
+    if not neuron_id:
+        return {"synapses": 0, "stability": 0.0}
+    with store.connect(db_path) as connection:
+        rows = connection.execute(
+            "SELECT synapse_id FROM synapses WHERE status='active' "
+            "AND (from_neuron=? OR to_neuron=?)",
+            (neuron_id, neuron_id),
+        ).fetchall()
+        for (synapse_id,) in rows:
+            connection.execute(
+                "UPDATE synapses SET weight=MAX(0.0, weight-?), updated_at=? "
+                "WHERE synapse_id=?",
+                (delta, now.isoformat(), synapse_id),
+            )
+        row = connection.execute(
+            "SELECT stability FROM memory_activation WHERE node_id=?", (memory_id,)
+        ).fetchone()
+        stability = 0.0
+        if row is not None:
+            stability = max(STABILITY_FLOOR, float(row[0] or 30.0) / 2.0)
+            connection.execute(
+                "UPDATE memory_activation SET stability=? WHERE node_id=?",
+                (stability, memory_id),
+            )
+    return {"synapses": len(rows), "stability": round(stability, 3)}
 
 
 def unbind_weak(

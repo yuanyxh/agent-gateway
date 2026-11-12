@@ -53,7 +53,7 @@ def _probe_app():
 
 class McpServerWiringTest(unittest.TestCase):
     def test_tools_list_contains_static_and_skill_tools(self):
-        expected = 14 + len(scan_skills())
+        expected = 15 + len(scan_skills())
         with _client() as client:
             client.post("/", json=INITIALIZE, headers=ACCEPT)
             body = _rpc(client, 2, "tools/list")

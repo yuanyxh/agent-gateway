@@ -23,7 +23,7 @@ from agent_gateway.core.paths import gateway_home
 logger = setup_logging("server")
 
 #: Bump whenever SCHEMA gains a table or index; `connect` only replays DDL below it.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_nodes (
@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS memory_edges (
   weight REAL DEFAULT 1.0,
   created_at TEXT NOT NULL,
   metadata TEXT,
+  valid_from TEXT,
+  valid_to TEXT,
+  supports INTEGER DEFAULT 1,
+  contradicts INTEGER DEFAULT 0,
   UNIQUE(from_id, to_id, type)
 );
 CREATE INDEX IF NOT EXISTS idx_edges_from ON memory_edges(from_id);
@@ -67,7 +71,11 @@ CREATE TABLE IF NOT EXISTS neurons (
   importance REAL NOT NULL DEFAULT 0.0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  metadata TEXT
+  metadata TEXT,
+  kind TEXT DEFAULT 'episodic',
+  sparse_code BLOB,
+  context_key TEXT,
+  specificity REAL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_neurons_tier ON neurons(tier);
 CREATE INDEX IF NOT EXISTS idx_neurons_status ON neurons(status);
@@ -99,6 +107,10 @@ CREATE TABLE IF NOT EXISTS synapses (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   metadata TEXT,
+  polarity INTEGER DEFAULT 1,
+  stability REAL DEFAULT 90,
+  kind TEXT DEFAULT 'assoc',
+  inferred INTEGER DEFAULT 0,
   UNIQUE(from_neuron, to_neuron)
 );
 CREATE INDEX IF NOT EXISTS idx_syn_from ON synapses(from_neuron);
@@ -113,7 +125,10 @@ CREATE TABLE IF NOT EXISTS memory_activation (
   activation_count INTEGER NOT NULL DEFAULT 0,
   tier_changed_at TEXT,
   purge_after TEXT,
-  metadata TEXT
+  metadata TEXT,
+  stability REAL DEFAULT 30,
+  difficulty REAL DEFAULT 5,
+  unstable_until TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_activation_tier ON memory_activation(tier);
 CREATE INDEX IF NOT EXISTS idx_activation_purge ON memory_activation(purge_after);
@@ -123,6 +138,53 @@ CREATE TABLE IF NOT EXISTS network_meta (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS entities (
+  entity_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  type TEXT,
+  aliases TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS entity_mentions (
+  entity_id TEXT NOT NULL,
+  memory_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'mention',
+  confidence REAL DEFAULT 1.0,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (entity_id, memory_id, role)
+);
+CREATE INDEX IF NOT EXISTS idx_mentions_memory ON entity_mentions(memory_id);
+
+CREATE TABLE IF NOT EXISTS activation_buffer (
+  neuron_id TEXT PRIMARY KEY,
+  activation REAL NOT NULL DEFAULT 0.0,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS replay_runs (
+  run_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  sampled INTEGER DEFAULT 0,
+  reinforced INTEGER DEFAULT 0,
+  inferred INTEGER DEFAULT 0,
+  promoted INTEGER DEFAULT 0,
+  cost_tokens INTEGER DEFAULT 0,
+  metadata TEXT
+);
+"""
+
+#: Created after `_ensure_columns`, so old tables get their new columns first.
+INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_neurons_kind ON neurons(kind);
+CREATE INDEX IF NOT EXISTS idx_syn_kind ON synapses(kind, polarity);
+CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+CREATE INDEX IF NOT EXISTS idx_buffer_updated ON activation_buffer(updated_at);
 """
 
 NODE_FIELDS = (
@@ -186,6 +248,58 @@ def cold_point_id(source_file: str, content: str) -> str:
     )
 
 
+def table_names(connection: sqlite3.Connection) -> set[str]:
+    return {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+
+
+#: Columns added after v1; old databases get them via ALTER, new ones already have them.
+V3_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "neurons": (
+        ("kind", "TEXT DEFAULT 'episodic'"),
+        ("sparse_code", "BLOB"),
+        ("context_key", "TEXT"),
+        ("specificity", "REAL DEFAULT 0"),
+    ),
+    "synapses": (
+        ("polarity", "INTEGER DEFAULT 1"),
+        ("stability", "REAL DEFAULT 90"),
+        ("kind", "TEXT DEFAULT 'assoc'"),
+        ("inferred", "INTEGER DEFAULT 0"),
+    ),
+    "memory_activation": (
+        ("stability", "REAL DEFAULT 30"),
+        ("difficulty", "REAL DEFAULT 5"),
+        ("unstable_until", "TEXT"),
+    ),
+    "memory_edges": (
+        ("valid_from", "TEXT"),
+        ("valid_to", "TEXT"),
+        ("supports", "INTEGER DEFAULT 1"),
+        ("contradicts", "INTEGER DEFAULT 0"),
+    ),
+}
+
+
+def ensure_columns(connection: sqlite3.Connection) -> list[str]:
+    """Add missing v3 columns; returns the `table.column` names it created."""
+    tables = table_names(connection)
+    added: list[str] = []
+    for table, columns in V3_COLUMNS.items():
+        if table not in tables:
+            continue
+        existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        for name, ddl in columns:
+            if name not in existing:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+                added.append(f"{table}.{name}")
+    return added
+
+
 @contextmanager
 def connect(
     db_path: str | None = None, *, readonly: bool = False
@@ -202,6 +316,8 @@ def connect(
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if version < SCHEMA_VERSION:
             connection.executescript(SCHEMA)
+            ensure_columns(connection)
+            connection.executescript(INDEXES)
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         yield connection
 

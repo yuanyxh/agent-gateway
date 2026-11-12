@@ -326,6 +326,49 @@ class DailyTest(_Base):
         self.assertIn("network", result)
         self.assertIn("synapses", result)
 
+    def test_build_uses_brain_pair_mode_config(self):
+        built = {
+            "pairs": [],
+            "decisions": [],
+            "calls": 0,
+            "budget_exhausted": False,
+            "llm_skipped": False,
+            "vector_unavailable": False,
+        }
+        build = mock.AsyncMock(return_value=built)
+        with (
+            mock.patch.object(consolidate, "score_relevance", return_value=0),
+            mock.patch.object(
+                consolidate,
+                "govern_daily",
+                mock.AsyncMock(return_value={"status": "skipped", "touched": []}),
+            ),
+            mock.patch.object(
+                consolidate,
+                "sample_relations",
+                return_value={"pairs": [], "edges": 0, "clusters": [], "rows": {}},
+            ),
+            mock.patch.object(
+                consolidate, "compress_clusters", mock.AsyncMock(return_value=0)
+            ),
+            mock.patch.object(
+                consolidate, "merge_summaries", mock.AsyncMock(return_value=0)
+            ),
+            mock.patch.object(
+                consolidate.network_build, "build_synapse_candidates", build
+            ),
+            mock.patch.object(
+                consolidate.network_build, "write_bridges", return_value=0
+            ),
+            mock.patch.object(
+                consolidate.network_build, "bridge_components", return_value=[]
+            ),
+        ):
+            asyncio.run(consolidate.run_daily(db_path=self.db, now=NOW))
+        kwargs = build.await_args.kwargs
+        self.assertEqual(kwargs["pair_mode"], "v3")
+        self.assertEqual(kwargs["sparse_floor"], 0.0)
+
 
 class MergeBudgetTest(unittest.TestCase):
     def _groups(self, summaries, *, total, per_episode):
@@ -732,7 +775,7 @@ class ContradictionSkipTest(_Base):
             )
 
         judge.assert_not_awaited()
-        self.assertEqual(result, {"pairs": 1, "disputes": 0})
+        self.assertEqual(result, {"pairs": 1, "disputes": 0, "ltd": 0})
 
 
 class WeeklyTest(_Base):

@@ -17,7 +17,7 @@ from agent_gateway.services.mcp.server_constants import COLD_COLLECTION, NOTES_D
 from agent_gateway.services.mcp.server_state import get_hot_memory, get_qdrant
 from agent_gateway.services.mcp.server_tool_schema import DEFAULT_GRAPH_LIMIT
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
-from agent_gateway.services.memory import graph, network, store
+from agent_gateway.services.memory import graph, graph_index, network, store
 
 logger = setup_logging("server")
 
@@ -98,6 +98,23 @@ async def handle_memory_get(arguments: dict) -> list[TextContent]:
             f"[memory-tool] memory_get empty body: {node_id} layer={node.get('layer')}"
         )
     return _reply({"found": True, "node": node, "content": content})
+
+
+async def handle_memory_expand(arguments: dict) -> list[TextContent]:
+    node_id = str(arguments.get("node_id") or "").strip()
+    if not node_id:
+        return _reply({"error": "node_id is required"})
+    hops = max(1, min(10, int_arg(arguments, "hops", 2)))
+    limit = max(1, min(50, int_arg(arguments, "limit", 20)))
+    budget = max(1, min(5000, int_arg(arguments, "budget", 500)))
+    neuron_id = await asyncio.to_thread(network.neuron_of, node_id)
+    if not neuron_id:
+        return _reply({"node_id": node_id, "found": False})
+    index = await asyncio.to_thread(graph_index.current)
+    result = await asyncio.to_thread(
+        index.expand, neuron_id, hops=hops, limit=limit, budget=budget
+    )
+    return _reply({"node_id": node_id, "neuron_id": neuron_id, "found": True, **result})
 
 
 async def handle_memory_graph(arguments: dict) -> list[TextContent]:

@@ -366,16 +366,29 @@ class StrengthTest(_NetworkCase):
         )
         first = strength.apply_decay(now=now, db_path=self.db)
         self.assertAlmostEqual(
-            network.get_activation("m1", db_path=self.db)["strength"], 0.5, places=3
+            network.get_activation("m1", db_path=self.db)["strength"], 0.9, places=3
         )
         self.assertAlmostEqual(
             network.synapses_of("a", db_path=self.db)[0]["weight"], 0.7937, places=3
+        )
+        with store.connect(self.db) as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO memory_activation (node_id, strength, tier) "
+                "VALUES ('m2', 1.0, 'active')"
+            )
+        network.set_meta(
+            "last_decay_at", (now - timedelta(days=30)).isoformat(), db_path=self.db
+        )
+        with mock.patch.object(config, "memory_brain_forgetting", return_value=False):
+            strength.apply_decay(now=now, db_path=self.db)
+        self.assertAlmostEqual(
+            network.get_activation("m2", db_path=self.db)["strength"], 0.5, places=3
         )
         self.assertEqual(first["memory_rows"], 1)
         second = strength.apply_decay(now=now, db_path=self.db)
         self.assertEqual(second["days"], 0.0)
         self.assertAlmostEqual(
-            network.get_activation("m1", db_path=self.db)["strength"], 0.5, places=3
+            network.get_activation("m1", db_path=self.db)["strength"], 0.45, places=3
         )
 
     def test_reinforce_memory_and_synapse(self):
@@ -876,7 +889,7 @@ class SynapseBuildTest(_NetworkCase):
         self.assertIn(("ep_a", "ep_b"), pairs)
         self.assertNotIn(("ep_a", "ep_c"), pairs)
         self.assertFalse(result["vector_unavailable"])
-        self.assertEqual(result["truncated"], False)
+        self.assertEqual(result["budget_exhausted"], False)
 
     def test_since_anchors_compare_across_timezones(self):
         with sqlite3.connect(self.db) as conn:
@@ -925,6 +938,34 @@ class SynapseBuildTest(_NetworkCase):
         self.assertEqual(result["calls"], 0)
         self.assertEqual(result["parse_failed"], 0)
         self.assertTrue(result["decisions"])
+
+    def test_review_pairs_rejects_cross_batch_ids(self):
+        pairs = [
+            {
+                "pair_id": f"syn:{name}|{name}x",
+                "left_group": name,
+                "right_group": f"{name}x",
+                "score": 0.6,
+                "cosine": 0.6,
+                "left_samples": [],
+                "right_samples": [],
+            }
+            for name in ("a", "c")
+        ]
+        raw = json.dumps(
+            {
+                "decisions": [
+                    {"pair_id": "syn:c|cx", "relation": "same_task", "strength": 0.9}
+                ]
+            }
+        )
+        llm = mock.AsyncMock(return_value=raw)
+        result = asyncio.run(
+            network_build.review_pairs(pairs, llm=llm, batch_size=1, max_calls=2)
+        )
+        self.assertEqual(
+            [item["pair_id"] for item in result["decisions"]], ["syn:c|cx"]
+        )
 
     def test_review_pairs_validates_output(self):
         pair = {

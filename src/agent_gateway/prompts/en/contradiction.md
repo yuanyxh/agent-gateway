@@ -18,5 +18,9 @@ Decide the relation type and return JSON:
 - "duplicate": the new memory heavily duplicates an existing memory; merging is suggested
 - "unrelated": completely different subjects
 
-Return JSON: {"relation": "<type>", "reason": "<one-sentence reason>", "conflicting_id": "<id of the conflicting memory, only for contradiction>"}
+Also extract the durable semantic layer from the new memory:
+- "entities": named entities as {"name", "type", "aliases"}; type is one of person, project, system, file, concept, place, organization
+- "facts": subject-predicate-object triples as {"subject", "predicate", "object", "confidence"}, only when the memory states a stable fact
+
+Return JSON: {"relation": "<type>", "reason": "<one-sentence reason>", "conflicting_id": "<id of the conflicting memory, only for contradiction>", "entities": [...], "facts": [...]}
 Return a strict JSON object only, not wrapped in a code block.

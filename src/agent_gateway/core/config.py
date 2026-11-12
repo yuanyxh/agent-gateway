@@ -69,6 +69,13 @@ _YAML_FALLBACKS: dict[str, tuple[str, str]] = {
         "memory.neuron.reviewConcurrency",
         "text",
     ),
+    "MEMORY_BRAIN_PAIR_MODE": ("memory.brain.pairMode", "text"),
+    "MEMORY_BRAIN_SPARSE_FLOOR": ("memory.brain.sparseFloor", "text"),
+    "MEMORY_BRAIN_ATTRACTOR": ("memory.brain.attractor", "text"),
+    "MEMORY_BRAIN_FORGETTING": ("memory.brain.forgetting", "text"),
+    "MEMORY_BRAIN_BUFFER": ("memory.brain.buffer", "text"),
+    "MEMORY_BRAIN_REPLAY": ("memory.brain.replay", "text"),
+    "MEMORY_BRAIN_SEMANTIC": ("memory.brain.semantic", "text"),
     "RANK_SIGNAL_RECENCY": ("memory.rankSignal.recency", "text"),
     "RANK_SIGNAL_ACCESS": ("memory.rankSignal.access", "text"),
     "RANK_SIGNAL_QUALITY": ("memory.rankSignal.quality", "text"),
@@ -277,6 +284,42 @@ def memory_neuron_trash_days() -> int:
 
 def memory_neuron_llm_pairs() -> int:
     return max(0, _int(get("MEMORY_NEURON_LLM_PAIRS", ""), 100))
+
+
+def memory_brain_pair_mode() -> str:
+    mode = get("MEMORY_BRAIN_PAIR_MODE", "").strip().lower()
+    return mode if mode in {"v2", "v3"} else "v3"
+
+
+def memory_brain_attractor() -> bool:
+    return _flag(get("MEMORY_BRAIN_ATTRACTOR", ""), True)
+
+
+def memory_brain_forgetting() -> bool:
+    return _flag(get("MEMORY_BRAIN_FORGETTING", ""), True)
+
+
+def memory_brain_buffer() -> bool:
+    return _flag(get("MEMORY_BRAIN_BUFFER", ""), True)
+
+
+def memory_brain_replay() -> bool:
+    return _flag(get("MEMORY_BRAIN_REPLAY", ""), True)
+
+
+def memory_brain_semantic() -> bool:
+    return _flag(get("MEMORY_BRAIN_SEMANTIC", ""), True)
+
+
+def memory_brain_sparse_floor() -> float:
+    raw = get("MEMORY_BRAIN_SPARSE_FLOOR", "").strip()
+    if not raw:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.0
+    return max(0.0, min(1.0, value))
 
 
 def memory_neuron_review_concurrency() -> int:

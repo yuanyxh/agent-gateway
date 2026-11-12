@@ -17,7 +17,17 @@ import yaml
 from agent_gateway.core.paths import gateway_home
 from agent_gateway.services.memory import store
 
-TABLES = ("neurons", "neuron_members", "synapses", "memory_activation", "network_meta")
+TABLES = (
+    "neurons",
+    "neuron_members",
+    "synapses",
+    "memory_activation",
+    "network_meta",
+    "entities",
+    "entity_mentions",
+    "activation_buffer",
+    "replay_runs",
+)
 
 
 def _disable(config: Path) -> dict:
@@ -66,12 +76,14 @@ def _existing_tables(db: str) -> set[str]:
 
 
 def _export(db: str, target: Path) -> dict:
-    missing = [table for table in TABLES if table not in _existing_tables(db)]
-    if missing:
-        raise SystemExit(f"network tables missing, nothing to export: {missing}")
-    payload = {}
+    payload: dict = {"schema_version": store.SCHEMA_VERSION}
+    missing: list[str] = []
     with store.connect(db) as connection:
+        available = store.table_names(connection)
         for table in TABLES:
+            if table not in available:
+                missing.append(table)
+                continue
             rows = connection.execute(f"SELECT * FROM {table}").fetchall()
             columns = [
                 item[1] for item in connection.execute(f"PRAGMA table_info({table})")
@@ -80,11 +92,18 @@ def _export(db: str, target: Path) -> dict:
                 {key: _encode(value) for key, value in zip(columns, tuple(row))}
                 for row in rows
             ]
+    payload["missing_tables"] = missing
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    return {"path": str(target), "tables": {k: len(v) for k, v in payload.items()}}
+    counts = {k: len(v) for k, v in payload.items() if isinstance(v, list)}
+    return {
+        "path": str(target),
+        "tables": counts,
+        "missing_tables": missing,
+        "schema_version": store.SCHEMA_VERSION,
+    }
 
 
 def _import(db: str, source: Path) -> dict:
@@ -92,22 +111,39 @@ def _import(db: str, source: Path) -> dict:
     restored = {}
     with store.connect(db) as connection:
         connection.executescript(store.SCHEMA)
+        available = store.table_names(connection)
         for table in TABLES:
             rows = payload.get(table) or []
+            if table not in available:
+                restored[table] = 0
+                continue
+            connection.execute(f"DELETE FROM {table}")
             if not rows:
                 restored[table] = 0
                 continue
-            columns = [
+            columns = {
                 item[1] for item in connection.execute(f"PRAGMA table_info({table})")
-            ]
-            marks = ",".join("?" * len(columns))
-            connection.executemany(
-                f"INSERT OR REPLACE INTO {table} ({', '.join(columns)}) "
-                f"VALUES ({marks})",
-                [tuple(_decode(row.get(column)) for column in columns) for row in rows],
-            )
+            }
+            groups: dict[tuple[str, ...], list[dict]] = {}
+            for row in rows:
+                keys = tuple(sorted(key for key in row if key in columns))
+                if keys:
+                    groups.setdefault(keys, []).append(row)
+            for keys, group in groups.items():
+                marks = ",".join("?" * len(keys))
+                connection.executemany(
+                    f"INSERT OR REPLACE INTO {table} ({', '.join(keys)}) "
+                    f"VALUES ({marks})",
+                    [tuple(_decode(row.get(key)) for key in keys) for row in group],
+                )
             restored[table] = len(rows)
-    return {"path": str(source), "tables": restored}
+        if "activation_buffer" in available:
+            connection.execute("DELETE FROM activation_buffer")
+    return {
+        "path": str(source),
+        "tables": restored,
+        "schema_version": payload.get("schema_version"),
+    }
 
 
 def _drop(db: str) -> dict:

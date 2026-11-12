@@ -548,6 +548,25 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
             {"node_id": node_id, "edge": edge, "direction": direction, "limit": limit},
         )
 
+    @tool(name="memory_expand", description=TOOL_DESCRIPTIONS["memory_expand"])
+    async def memory_expand(
+        node_id: Annotated[str, Field(description=param_text("param.memory_node_id"))],
+        hops: Annotated[
+            int, Field(default=2, description=param_text("param.expand_hops"))
+        ] = 2,
+        limit: Annotated[
+            int, Field(default=20, description=param_text("param.max_results"))
+        ] = 20,
+        budget: Annotated[
+            int, Field(default=500, description=param_text("param.expand_budget"))
+        ] = 500,
+    ) -> str:
+        return await _run(
+            handlers,
+            "memory_expand",
+            {"node_id": node_id, "hops": hops, "limit": limit, "budget": budget},
+        )
+
     @tool(name="project_lookup", description=TOOL_DESCRIPTIONS["project_lookup"])
     async def project_lookup(
         path: Annotated[str, Field(description=param_text("param.project_dir"))],

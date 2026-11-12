@@ -14,7 +14,7 @@ from agent_gateway.services.mcp.server_constants import (
     DEFAULT_USER_ID,
     EPISODE_FIELD,
 )
-from agent_gateway.services.memory import network
+from agent_gateway.services.memory import attractor, buffer, graph_index, network
 from agent_gateway.services.retrieval.arms.recall import (
     cosine,
     dense_vector,
@@ -113,14 +113,24 @@ def spread(
             ]
     visited = set(activation)
     truncated = False
+    try:
+        index = graph_index.current(db_path)
+    except Exception:  # noqa: BLE001 - the SQL path stays as the fallback
+        index = None
     for _ in range(max(0, depth)):
         frontier = sorted(activation.items(), key=lambda item: -item[1])[:beam]
         following: dict[str, float] = {}
-        links_by_neuron = network.synapses_of_many(
-            [neuron_id for neuron_id, _ in frontier],
-            limit=MAX_EDGES_PER_NEURON,
-            db_path=db_path,
-        )
+        if index is None:
+            links_by_neuron = network.synapses_of_many(
+                [neuron_id for neuron_id, _ in frontier],
+                limit=MAX_EDGES_PER_NEURON,
+                db_path=db_path,
+            )
+        else:
+            links_by_neuron = {
+                neuron_id: index.neighbors(neuron_id, limit=MAX_EDGES_PER_NEURON)
+                for neuron_id, _ in frontier
+            }
         for current, value in frontier:
             for link in links_by_neuron.get(current, []):
                 other = link["other"]
@@ -262,6 +272,30 @@ def score_members(
     return list(out.values())
 
 
+def _refine(result: dict, *, db_path: str | None) -> dict:
+    """Run the attractor from the strongest spread results, keeping spread paths."""
+    items = result.get("activated") or []
+    if not items:
+        return result
+    paths = {item["neuron_id"]: item.get("path") or [] for item in items}
+    seeds = {
+        item["neuron_id"]: float(item["activation"])
+        for item in items[: config.memory_neuron_beam()]
+    }
+    refined = attractor.activate(seeds, db_path=db_path)
+    if not refined["activated"]:
+        return result
+    merged = [
+        {
+            "neuron_id": item["neuron_id"],
+            "activation": item["activation"],
+            "path": paths.get(item["neuron_id"], []),
+        }
+        for item in refined["activated"]
+    ]
+    return {**result, "activated": merged, "attractor": refined}
+
+
 def associative_expand(
     query: Query,
     items: list[RetrievedItem],
@@ -302,9 +336,25 @@ def associative_expand(
             db_path=db_path,
         )
     )
+    if config.memory_brain_buffer():
+        residual = buffer.read(db_path=db_path)
+        known_neurons = {seed["neuron_id"] for seed in seeds}
+        for seed in seeds:
+            seed["activation"] = max(
+                float(seed["activation"]), residual.get(seed["neuron_id"], 0.0)
+            )
+        for neuron_id, value in residual.items():
+            if neuron_id not in known_neurons:
+                seeds.append(
+                    {"memory_id": "", "neuron_id": neuron_id, "activation": value}
+                )
     if not seeds:
         return []
     result = spread(seeds, db_path=db_path)
+    if config.memory_brain_attractor():
+        result = _refine(result, db_path=db_path)
+    if config.memory_brain_buffer():
+        buffer.writeback(result["activated"][:20], db_path=db_path)
     return score_members(
         result["activated"],
         query_vec,

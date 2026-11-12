@@ -10,13 +10,21 @@ from agent_gateway.services.memory import network_build, store
 BATCH_ANCHORS = 200
 
 
-def anchor_ids(db_path: str, low: int = 2, high: int = 8) -> list[str]:
+def anchor_ids(
+    db_path: str, low: int = 2, high: int = 8, all_groups: bool = False
+) -> list[str]:
     with store.connect(db_path) as connection:
-        rows = connection.execute(
-            "SELECT neuron_id, COUNT(*) AS n FROM neuron_members "
-            "GROUP BY neuron_id HAVING n >= ? AND n <= ? ORDER BY neuron_id",
-            (low, high),
-        ).fetchall()
+        if all_groups:
+            rows = connection.execute(
+                "SELECT neuron_id FROM neuron_members GROUP BY neuron_id "
+                "ORDER BY neuron_id"
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT neuron_id, COUNT(*) AS n FROM neuron_members "
+                "GROUP BY neuron_id HAVING n >= ? AND n <= ? ORDER BY neuron_id",
+                (low, high),
+            ).fetchall()
     return [str(row[0]) for row in rows]
 
 
@@ -24,10 +32,12 @@ async def run(args) -> dict:
     from agent_gateway.services.mcp import server_memory
 
     if not await server_memory.ensure_hot_memory():
-        raise SystemExit(
-            "hot memory unavailable: vector store is locked by another process"
+        print(
+            json.dumps(
+                {"warning": "hot memory unavailable; falling back to stored centroids"}
+            )
         )
-    anchors = anchor_ids(args.db)
+    anchors = anchor_ids(args.db, all_groups=args.pair_mode == "v3")
     batches = [
         anchors[start : start + args.batch_anchors]
         for start in range(0, len(anchors), args.batch_anchors)
@@ -43,6 +53,8 @@ async def run(args) -> dict:
             pair_limit=args.pair_limit,
             llm_limit=args.llm_pairs,
             concurrency=args.concurrency,
+            pair_mode=args.pair_mode,
+            sparse_floor=args.sparse_floor,
         )
         written = 0
         if not args.dry_run:
@@ -63,12 +75,17 @@ async def run(args) -> dict:
         }
         report.append(item)
         print(json.dumps(item, ensure_ascii=False), flush=True)
+    bridges = 0
+    if not args.dry_run and args.pair_mode == "v3":
+        proposed = network_build.bridge_components(args.db)
+        bridges = network_build.write_bridges(proposed, db_path=args.db)
     return {
         "anchors": len(anchors),
         "batches": len(batches),
         "pairs": sum(item["pairs"] for item in report),
         "written": sum(item["written"] for item in report),
         "calls": sum(item["calls"] for item in report),
+        "bridges": bridges,
     }
 
 
@@ -80,6 +97,8 @@ def main() -> int:
     parser.add_argument("--llm-pairs", type=int, default=200)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--max-batches", type=int, default=0)
+    parser.add_argument("--pair-mode", default="v2", choices=("v2", "v3"))
+    parser.add_argument("--sparse-floor", type=float, default=0.0)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     summary = asyncio.run(run(args))

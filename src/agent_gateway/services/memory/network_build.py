@@ -12,10 +12,10 @@ from datetime import datetime
 import numpy as np
 from qdrant_client import models
 
-from agent_gateway.core import prompt_loader
+from agent_gateway.core import config, prompt_loader
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.llm import client as llm_client
-from agent_gateway.services.memory import network, retention, store
+from agent_gateway.services.memory import network, retention, sparse, store
 
 logger = setup_logging("server")
 
@@ -33,12 +33,12 @@ _ALL_MEMBERS = 10_000_000
 _ALL_SYNAPSES = 10_000_000
 
 
-def _active_nodes(db_path: str | None = None) -> list[dict]:
+def _active_nodes(db_path: str | None = None, *, layer: str = "") -> list[dict]:
     nodes: list[dict] = []
     offset = 0
     while True:
         page = store.list_nodes(
-            layer="hot",
+            layer=layer,
             status="active",
             limit=PAGE_SIZE,
             offset=offset,
@@ -76,7 +76,8 @@ def migrate_network(
     now: datetime | None = None,
 ) -> dict:
     now = now or datetime.now()
-    nodes = _active_nodes(db_path)
+    layer = "" if config.memory_brain_pair_mode() == "v3" else "hot"
+    nodes = _active_nodes(db_path, layer=layer)
     groups: dict[str, list[dict]] = defaultdict(list)
     for node in nodes:
         episode = str((node.get("metadata") or {}).get("episode_id") or "").strip()
@@ -328,39 +329,55 @@ def _group_nodes(db_path: str | None = None) -> dict[str, list[dict]]:
 
 
 def group_centroids(
-    groups: dict[str, list[dict]], hot
+    groups: dict[str, list[dict]], hot, *, cold_loader=None
 ) -> tuple[dict[str, np.ndarray], int]:
-    """Accumulate one centroid per group while streaming vectors in batches."""
-    if hot is None:
-        return {}, len(groups)
+    """Accumulate one centroid per group from hot vectors, then cold ones."""
     node_to_neuron = {
         item["node_id"]: neuron_id
         for neuron_id, members in groups.items()
         for item in members
     }
-    vector_store = hot.vector_store
     sums: dict[str, np.ndarray] = {}
     counts: dict[str, int] = defaultdict(int)
-    ids = list(node_to_neuron)
-    for start in range(0, len(ids), 100):
-        batch = ids[start : start + 100]
-        try:
-            points = vector_store.client.retrieve(
-                collection_name=vector_store.collection_name,
-                ids=batch,
-                with_payload=False,
-                with_vectors=True,
-            )
-        except Exception as e:  # noqa: BLE001 - a missing vector store is degraded mode
-            logger.warning(f"[memory-network] vector load failed: {e}")
-            break
-        for point in points:
-            vector = _dense(getattr(point, "vector", None))
-            neuron_id = node_to_neuron.get(str(point.id))
-            if not vector or neuron_id is None:
+    if hot is not None:
+        vector_store = hot.vector_store
+        ids = list(node_to_neuron)
+        for start in range(0, len(ids), 100):
+            batch = ids[start : start + 100]
+            try:
+                points = vector_store.client.retrieve(
+                    collection_name=vector_store.collection_name,
+                    ids=batch,
+                    with_payload=False,
+                    with_vectors=True,
+                )
+            except Exception as e:  # noqa: BLE001 - a missing vector store is degraded
+                logger.warning(f"[memory-network] vector load failed: {e}")
                 continue
-            dense = np.asarray(vector, dtype=np.float32)
-            sums[neuron_id] = sums[neuron_id] + dense if neuron_id in sums else dense
+            for point in points:
+                vector = _dense(getattr(point, "vector", None))
+                neuron_id = node_to_neuron.get(str(point.id))
+                if not vector or neuron_id is None:
+                    continue
+                dense = np.asarray(vector, dtype=np.float32)
+                sums[neuron_id] = (
+                    sums[neuron_id] + dense if neuron_id in sums else dense
+                )
+                counts[neuron_id] += 1
+    remaining = [node for node, neuron in node_to_neuron.items() if neuron not in sums]
+    if cold_loader is not None and remaining:
+        try:
+            vectors = cold_loader(remaining)
+        except Exception as e:  # noqa: BLE001 - cold vectors are an enhancement
+            logger.warning(f"[memory-network] cold vector load failed: {e}")
+            vectors = {}
+        for node, vector in (vectors or {}).items():
+            neuron_id = node_to_neuron.get(str(node))
+            dense = _dense(vector)
+            if neuron_id is None or not dense:
+                continue
+            array = np.asarray(dense, dtype=np.float32)
+            sums[neuron_id] = sums[neuron_id] + array if neuron_id in sums else array
             counts[neuron_id] += 1
     centroids: dict[str, np.ndarray] = {}
     for neuron_id, total in sums.items():
@@ -369,6 +386,70 @@ def group_centroids(
         if norm > 0:
             center = center / norm
         centroids[neuron_id] = np.asarray(center, dtype=np.float32)
+    return centroids, len(groups) - len(centroids)
+
+
+def _cold_loader(db_path: str | None):
+    """Fetch cold-node vectors from the cold Qdrant collection by point id."""
+
+    def load(node_ids: list[str]) -> dict[str, list[float]]:
+        from agent_gateway.services.mcp import server_memory
+
+        client = server_memory.get_qdrant()
+        if client is None:
+            return {}
+        node_ids = [str(node) for node in node_ids if node]
+        mapping: dict[str, str] = {}
+        with store.connect(db_path) as connection:
+            for start in range(0, len(node_ids), _VECTOR_CHUNK):
+                chunk = node_ids[start : start + _VECTOR_CHUNK]
+                marks = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    "SELECT node_id, json_extract(metadata, '$.point_id') "
+                    "FROM memory_nodes WHERE layer='cold' AND json_valid(metadata) "
+                    f"AND node_id IN ({marks})",
+                    chunk,
+                ).fetchall()
+                for node, point in rows:
+                    if point:
+                        mapping[str(point)] = str(node)
+        if not mapping:
+            return {}
+        points = client.retrieve(
+            collection_name=server_memory.COLD_COLLECTION,
+            ids=list(mapping),
+            with_vectors=True,
+        )
+        vectors: dict[str, list[float]] = {}
+        for point in points:
+            node = mapping.get(str(point.id))
+            vector = _dense(getattr(point, "vector", None))
+            if node and vector:
+                vectors[node] = vector
+        return vectors
+
+    return load
+
+
+def _stored_centroids(
+    groups: dict[str, list[dict]], db_path: str | None
+) -> tuple[dict[str, np.ndarray], int]:
+    with store.connect(db_path) as connection:
+        rows = connection.execute(
+            "SELECT neuron_id, centroid FROM neurons WHERE centroid IS NOT NULL"
+        ).fetchall()
+    wanted = set(groups)
+    centroids: dict[str, np.ndarray] = {}
+    for neuron_id, raw in rows:
+        key = str(neuron_id)
+        if key not in wanted:
+            continue
+        values = network.decode_centroid(raw)
+        if not values:
+            continue
+        center = np.asarray(values, dtype=np.float32)
+        norm = float(np.linalg.norm(center))
+        centroids[key] = center / norm if norm > 0 else center
     return centroids, len(groups) - len(centroids)
 
 
@@ -402,6 +483,9 @@ def candidate_pairs(
     per_anchor: int = PER_ANCHOR,
     floor: float = PAIR_FLOOR,
     limit: int = PAIR_LIMIT,
+    pair_mode: str = "v2",
+    codes: dict[str, np.ndarray] | None = None,
+    sparse_floor: float = 0.0,
 ) -> dict:
     node_to_neuron = {
         item["node_id"]: neuron_id
@@ -411,12 +495,24 @@ def candidate_pairs(
     anchor_ids = [
         neuron_id
         for neuron_id, members in groups.items()
-        if 2 <= len(members) <= 8
+        if (pair_mode != "v2" or 2 <= len(members) <= 8)
         and neuron_id in centroids
         and (anchors is None or neuron_id in anchors)
     ]
-    if hot is None or not anchor_ids:
-        return {"pairs": [], "truncated": False}
+    if not anchor_ids:
+        return {"pairs": [], "budget_exhausted": False}
+    if hot is None:
+        return _centroid_pairs(
+            anchor_ids,
+            centroids,
+            groups,
+            per_anchor=per_anchor,
+            floor=floor,
+            limit=limit,
+            pair_mode=pair_mode,
+            codes=codes,
+            sparse_floor=sparse_floor,
+        )
     vector_store = hot.vector_store
     scored: dict[tuple[str, str], dict] = {}
     per_anchor_count: dict[str, int] = defaultdict(int)
@@ -437,25 +533,79 @@ def candidate_pairs(
             )
         except Exception as e:  # noqa: BLE001 - candidate build must degrade
             logger.warning(f"[memory-network] centroid query failed: {e}")
-            continue
+            hits = []
+            for request in requests:
+                try:
+                    single = vector_store.client.query_batch_points(
+                        collection_name=vector_store.collection_name,
+                        requests=[request],
+                    )
+                    hits.append(single[0] if single else None)
+                except Exception:  # noqa: BLE001 - one bad anchor must not stop all
+                    hits.append(None)
         for neuron_id, result in zip(batch, hits):
-            for point in getattr(result, "points", result):
+            if result is None:
+                continue
+            for point in getattr(result, "points", result) or []:
                 target = node_to_neuron.get(str(point.id))
                 if not target or target == neuron_id:
                     continue
-                score = float(point.score)
-                if score < floor:
+                cosine = float(point.score)
+                if cosine < floor:
+                    continue
+                score = _blend_score(
+                    neuron_id,
+                    target,
+                    cosine,
+                    pair_mode=pair_mode,
+                    codes=codes,
+                    sparse_floor=sparse_floor,
+                )
+                if score is None:
                     continue
                 if per_anchor_count[neuron_id] >= per_anchor:
                     continue
                 key = tuple(sorted((neuron_id, target)))
                 if key not in scored:
-                    scored[key] = {"left": key[0], "right": key[1], "score": score}
+                    scored[key] = {
+                        "left": key[0],
+                        "right": key[1],
+                        "score": score,
+                        "cosine": cosine,
+                    }
                     per_anchor_count[neuron_id] += 1
                 else:
                     scored[key]["score"] = max(scored[key]["score"], score)
+                    scored[key]["cosine"] = max(scored[key]["cosine"], cosine)
+    return _shape_pairs(scored, groups, limit)
+
+
+def _blend_score(
+    neuron_id: str,
+    target: str,
+    score: float,
+    *,
+    pair_mode: str,
+    codes: dict | None,
+    sparse_floor: float,
+) -> float | None:
+    if pair_mode != "v3" or not codes:
+        return score
+    left_code = codes.get(neuron_id)
+    right_code = codes.get(target)
+    if left_code is None or right_code is None:
+        return score
+    overlap = sparse.jaccard(left_code, right_code)
+    if overlap < sparse_floor:
+        return None
+    return 0.5 * score + 0.5 * overlap
+
+
+def _shape_pairs(
+    scored: dict[tuple[str, str], dict], groups: dict[str, list[dict]], limit: int
+) -> dict:
     ordered = sorted(scored.values(), key=lambda item: -item["score"])
-    truncated = len(ordered) > limit
+    budget_exhausted = len(ordered) > limit
     pairs = []
     for item in ordered[:limit]:
         pair_id = f"syn:{item['left']}|{item['right']}"
@@ -465,11 +615,78 @@ def candidate_pairs(
                 "left_group": item["left"],
                 "right_group": item["right"],
                 "score": round(item["score"], 3),
+                "cosine": round(item.get("cosine", item["score"]), 3),
                 "left_samples": _sample(groups.get(item["left"], [])),
                 "right_samples": _sample(groups.get(item["right"], [])),
             }
         )
-    return {"pairs": pairs, "truncated": truncated}
+    return {"pairs": pairs, "budget_exhausted": budget_exhausted}
+
+
+def _centroid_pairs(
+    anchor_ids: list[str],
+    centroids: dict[str, np.ndarray],
+    groups: dict[str, list[dict]],
+    *,
+    per_anchor: int,
+    floor: float,
+    limit: int,
+    pair_mode: str,
+    codes: dict | None,
+    sparse_floor: float,
+) -> dict:
+    ids: dict[int, list[str]] = defaultdict(list)
+    for key, vector in centroids.items():
+        ids[len(vector)].append(key)
+    scored: dict[tuple[str, str], dict] = {}
+    per_anchor_count: dict[str, int] = defaultdict(int)
+    for dims, keys in ids.items():
+        matrix = np.stack([centroids[key] for key in keys]).astype(np.float32)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        matrix = matrix / np.clip(norms, 1e-8, None)
+        position = {key: index for index, key in enumerate(keys)}
+        block_index = [position[node] for node in anchor_ids if node in position]
+        for start in range(0, len(block_index), 32):
+            block = block_index[start : start + 32]
+            scores = matrix[block] @ matrix.T
+            for offset, index in enumerate(block):
+                neuron_id = keys[index]
+                row = scores[offset]
+                take = min(len(row), per_anchor + 3)
+                order = np.argpartition(-row, take - 1)[:take]
+                order = order[np.argsort(-row[order])]
+                for target_index in order:
+                    if int(target_index) == index:
+                        continue
+                    target = keys[int(target_index)]
+                    cosine = float(row[int(target_index)])
+                    if cosine < floor:
+                        continue
+                    score = _blend_score(
+                        neuron_id,
+                        target,
+                        cosine,
+                        pair_mode=pair_mode,
+                        codes=codes,
+                        sparse_floor=sparse_floor,
+                    )
+                    if score is None:
+                        continue
+                    if per_anchor_count[neuron_id] >= per_anchor:
+                        continue
+                    key = tuple(sorted((neuron_id, target)))
+                    if key not in scored:
+                        scored[key] = {
+                            "left": key[0],
+                            "right": key[1],
+                            "score": score,
+                            "cosine": cosine,
+                        }
+                        per_anchor_count[neuron_id] += 1
+                    else:
+                        scored[key]["score"] = max(scored[key]["score"], score)
+                        scored[key]["cosine"] = max(scored[key]["cosine"], cosine)
+    return _shape_pairs(scored, groups, limit)
 
 
 def render_pairs(pairs: list[dict]) -> str:
@@ -535,7 +752,6 @@ async def review_pairs(
     llm=llm_client.achat,
 ) -> dict:
     selected = pairs[:limit]
-    by_id = {pair["pair_id"]: pair for pair in selected}
     batches = _batch_pairs(selected, batch_size, PROMPT_PAIR_CHARS)[:max_calls]
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
@@ -561,6 +777,7 @@ async def review_pairs(
     failed_pairs = 0
     rejected = 0
     for batch, raw in results:
+        by_id = {pair["pair_id"]: pair for pair in batch}
         parsed = _parse_json(raw)
         if parsed is None or not isinstance(parsed.get("decisions"), list):
             parse_failed += 1
@@ -592,7 +809,9 @@ async def review_pairs(
                     **pair,
                     "relation": relation,
                     "strength": strength,
-                    "final_weight": merge_weight(pair["score"], strength),
+                    "final_weight": merge_weight(
+                        pair.get("cosine", pair["score"]), strength
+                    ),
                 }
             )
     return {
@@ -604,9 +823,26 @@ async def review_pairs(
     }
 
 
+def _load_codes(db_path: str | None) -> dict[str, np.ndarray]:
+    with store.connect(db_path) as connection:
+        rows = connection.execute(
+            "SELECT neuron_id, sparse_code FROM neurons WHERE sparse_code IS NOT NULL"
+        ).fetchall()
+    return {str(row[0]): sparse.decode(row[1]) for row in rows}
+
+
 def _persist_centroids(centroids: dict[str, np.ndarray], db_path: str | None) -> None:
-    for neuron_id, center in centroids.items():
-        network.set_neuron_centroid(neuron_id, center.tolist(), db_path=db_path)
+    if not centroids:
+        return
+    now = datetime.now().isoformat()
+    rows = [
+        (network.encode_centroid(center), now, neuron_id)
+        for neuron_id, center in centroids.items()
+    ]
+    with store.connect(db_path) as connection:
+        connection.executemany(
+            "UPDATE neurons SET centroid=?, updated_at=? WHERE neuron_id=?", rows
+        )
 
 
 async def build_synapse_candidates(
@@ -618,18 +854,40 @@ async def build_synapse_candidates(
     llm_limit: int = LLM_PAIRS,
     concurrency: int = 1,
     seed_neurons: list[str] | None = None,
+    pair_mode: str = "v2",
+    sparse_floor: float = 0.0,
 ) -> dict:
     groups = await asyncio.to_thread(_group_nodes, db_path)
     hot = hot if hot is not None else _try_hot()
     centroids, missing = await asyncio.to_thread(group_centroids, groups, hot)
-    if hot is None:
+    if hot is not None and not centroids:
+        hot = None
+    pending = {key: value for key, value in groups.items() if key not in centroids}
+    if pending:
+        cold, _ = await asyncio.to_thread(
+            group_centroids, pending, None, cold_loader=_cold_loader(db_path)
+        )
+        centroids.update(cold)
+        missing = len(groups) - len(centroids)
+    if not centroids:
+        centroids, missing = await asyncio.to_thread(_stored_centroids, groups, db_path)
+        hot = None
+    elif missing:
+        pending = {key: value for key, value in groups.items() if key not in centroids}
+        stored, _ = await asyncio.to_thread(_stored_centroids, pending, db_path)
+        centroids.update(stored)
+        missing = len(groups) - len(centroids)
+    dims = sorted({int(vector.shape[0]) for vector in centroids.values()})
+    if len(dims) > 1:
+        logger.warning(f"[memory-network] mixed centroid dims {dims}")
+    if not centroids:
         return {
             "pairs": [],
             "decisions": [],
             "calls": 0,
             "parse_failed": 0,
             "rejected": 0,
-            "truncated": False,
+            "budget_exhausted": False,
             "vector_missing": missing,
             "vector_unavailable": True,
         }
@@ -650,7 +908,9 @@ async def build_synapse_candidates(
     seeds = {str(value) for value in (seed_neurons or []) if value}
     if seeds:
         anchors = (anchors or set()) | seeds
-    await asyncio.to_thread(_persist_centroids, centroids, db_path)
+    if hot is not None:
+        await asyncio.to_thread(_persist_centroids, centroids, db_path)
+    codes = await asyncio.to_thread(_load_codes, db_path) if pair_mode == "v3" else {}
     built = await asyncio.to_thread(
         candidate_pairs,
         groups,
@@ -658,6 +918,9 @@ async def build_synapse_candidates(
         hot=hot,
         anchors=anchors,
         limit=pair_limit,
+        pair_mode=pair_mode,
+        codes=codes,
+        sparse_floor=sparse_floor,
     )
     pairs = built["pairs"]
     use_llm = llm_limit > 0 and bool(pairs) and llm_client.is_configured()
@@ -676,7 +939,7 @@ async def build_synapse_candidates(
                 **pair,
                 "relation": "centroid",
                 "strength": pair["score"],
-                "final_weight": pair["score"],
+                "final_weight": pair.get("cosine", pair["score"]),
             }
             for pair in pairs
         ]
@@ -687,10 +950,10 @@ async def build_synapse_candidates(
         "parse_failed": reviewed["parse_failed"],
         "failed_pairs": reviewed.get("failed_pairs", 0),
         "rejected": reviewed["rejected"],
-        "truncated": built["truncated"],
+        "budget_exhausted": built["budget_exhausted"],
         "llm_skipped": bool(pairs) and not use_llm,
         "vector_missing": missing,
-        "vector_unavailable": False,
+        "vector_unavailable": hot is None,
     }
 
 
@@ -720,6 +983,138 @@ def write_synapses(
             db_path=db_path,
         ):
             written += 1
+    return written
+
+
+BRIDGE_KIND = "bridge"
+BRIDGE_MAX_MAIN = 4000
+_VECTOR_CHUNK = 500
+
+
+def _components(edges) -> list[list[str]]:
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    for left, right in edges:
+        adjacency[left].add(right)
+        adjacency[right].add(left)
+    components: list[list[str]] = []
+    seen: set[str] = set()
+    for start in adjacency:
+        if start in seen:
+            continue
+        stack = [start]
+        seen.add(start)
+        members: list[str] = []
+        while stack:
+            node = stack.pop()
+            members.append(node)
+            for neighbor in adjacency[node]:
+                if neighbor not in seen:
+                    seen.add(neighbor)
+                    stack.append(neighbor)
+        components.append(members)
+    components.sort(key=len, reverse=True)
+    return components
+
+
+def _vectors_for(ids, db_path) -> dict[str, np.ndarray]:
+    wanted = sorted(set(ids))
+    vectors: dict[str, np.ndarray] = {}
+    with store.connect(db_path) as connection:
+        for start in range(0, len(wanted), _VECTOR_CHUNK):
+            chunk = wanted[start : start + _VECTOR_CHUNK]
+            rows = connection.execute(
+                "SELECT neuron_id, centroid FROM neurons WHERE neuron_id IN "
+                f"({','.join('?' for _ in chunk)}) AND centroid IS NOT NULL",
+                chunk,
+            ).fetchall()
+            for neuron_id, raw in rows:
+                values = network.decode_centroid(raw)
+                if not values:
+                    continue
+                vector = np.asarray(values, dtype=np.float32)
+                norm = float(np.linalg.norm(vector))
+                if norm > 0:
+                    vectors[str(neuron_id)] = vector / norm
+    return vectors
+
+
+def bridge_components(
+    db_path: str | None = None, *, max_main: int = BRIDGE_MAX_MAIN
+) -> list[dict]:
+    with store.connect(db_path) as connection:
+        edges = connection.execute(
+            "SELECT from_neuron, to_neuron FROM synapses WHERE status='active'"
+        ).fetchall()
+    components = _components(edges)
+    if len(components) < 2:
+        return []
+    main = components[0]
+    degree = defaultdict(int)
+    for left, right in edges:
+        degree[left] += 1
+        degree[right] += 1
+    main_nodes = sorted(main, key=lambda node: -degree[node])[:max_main]
+    small_nodes = [node for component in components[1:] for node in component]
+    vectors = _vectors_for(main_nodes + small_nodes, db_path)
+    by_dims: dict[int, tuple[list[str], np.ndarray]] = {}
+    for target in main_nodes:
+        vector = vectors.get(target)
+        if vector is None or len(vector) in by_dims:
+            continue
+        members = [
+            node
+            for node in main_nodes
+            if vectors.get(node) is not None and vectors[node].shape == vector.shape
+        ]
+        matrix = np.stack([vectors[node] for node in members]).astype(np.float32)
+        by_dims[len(vector)] = (members, matrix)
+    bridges = []
+    for component in components[1:]:
+        best = (0.0, "", "")
+        for node in component:
+            vector = vectors.get(node)
+            entry = by_dims.get(len(vector)) if vector is not None else None
+            if entry is None:
+                continue
+            members, matrix = entry
+            scores = matrix @ vector
+            index = int(np.argmax(scores))
+            score = float(scores[index])
+            if score > best[0]:
+                best = (score, node, members[index])
+        if not best[1]:
+            continue
+        bridges.append(
+            {
+                "left_group": best[1],
+                "right_group": best[2],
+                "relation": BRIDGE_KIND,
+                "strength": round(best[0], 3),
+                "final_weight": round(best[0], 3),
+            }
+        )
+    return bridges
+
+
+def write_bridges(bridges: list[dict], *, db_path: str | None = None) -> int:
+    now = datetime.now().isoformat()
+    written = 0
+    with store.connect(db_path) as connection:
+        for item in bridges:
+            left, right = sorted((item["left_group"], item["right_group"]))
+            weight = float(item.get("final_weight") or 0.0)
+            cursor = connection.execute(
+                "INSERT INTO synapses (from_neuron, to_neuron, weight, "
+                "base_weight, relation, kind, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?) "
+                "ON CONFLICT(from_neuron, to_neuron) DO UPDATE SET "
+                "status='active', weight=MAX(synapses.weight, excluded.weight), "
+                "base_weight=MAX(synapses.base_weight, excluded.base_weight), "
+                "updated_at=excluded.updated_at "
+                "WHERE synapses.status!='active'",
+                (left, right, weight, weight, BRIDGE_KIND, BRIDGE_KIND, now, now),
+            )
+            written += cursor.rowcount
     return written
 
 

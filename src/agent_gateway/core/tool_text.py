@@ -65,6 +65,10 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
     "param.memory_direction": (
         "up follows to_id -> from_id, down follows from_id -> to_id, both (default)"
     ),
+    "param.expand_hops": "Hops to walk from the start neuron; default 2, max 10",
+    "param.expand_budget": (
+        "Max neurons visited per call; defaults to 500 and truncates the result"
+    ),
     "param.memory_id": "Memory ID to delete",
     "param.point_id": "Optional point ID",
     "param.layer": "Layer to delete from; default hot",

@@ -83,6 +83,7 @@ from agent_gateway.services.mcp.server_state import (
     set_qdrant,
 )
 from agent_gateway.services.mcp.server_memory_graph import (
+    handle_memory_expand,
     handle_memory_get,
     handle_memory_graph,
 )
@@ -289,6 +290,11 @@ async def _handle_memory_get(arguments: dict) -> list[TextContent]:
 @_register("memory_graph")
 async def _handle_memory_graph(arguments: dict) -> list[TextContent]:
     return await handle_memory_graph(arguments)
+
+
+@_register("memory_expand")
+async def _handle_memory_expand(arguments: dict) -> list[TextContent]:
+    return await handle_memory_expand(arguments)
 
 
 async def _schedule_project_refresh(path: str) -> None:
