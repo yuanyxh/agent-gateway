@@ -38,7 +38,7 @@
 - 当前入口：`services.mcp.server` / `services.proxy.token_proxy` / `services.summarize.summarize` /
   `services.knowledge.knowledge_refill` / `scanner.ast_extractor`
 - 宿主随包分发本仓 wheel，首启装进 venv；依赖只从 wheel extras（`proxy,memory,server`）来，不另发 `requirements.txt`
-- 提示词与 `scanner/ast-js` 必须留在包内（wheel 里），宿主读的是打包时拷出的副本
+- 提示词与 `scanner/ast-js` 必须留在包内（wheel 里），宿主读的是打包时拷出的副本；新增或修改提示词后，utility 仓 `Sources/Gateway/prompts/` 副本必须同步
 - i18n 语言包自持：`src/agent_gateway/locales/<lang>.json`（扁平 `{key: text}`），
   `core/l10n.py` 启动时加载；不再由宿主生成，两仓各自维护自己的语言包
 

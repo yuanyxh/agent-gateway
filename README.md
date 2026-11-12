@@ -35,11 +35,12 @@ HTTP endpoints and JSON contracts instead of importing internals.
   `memory_graph`.
 - **Bounded growth.** Scheduled jobs archive stale entries, consolidate summaries and
   fold summary budgets, so the hot layer does not grow without limit.
-- **Associative network.** Episode groups become neurons joined by weighted synapses,
-  built by a daily vector-neighbour search plus LLM review. Recall can spread along
-  the strongest paths, memories recalled together reinforce the synapse between their
-  neurons, and the weekly pass tiers neurons into active, warm, archive and trash with
-  timed physical cleanup.
+- **Associative network.** Episode groups become neurons joined by weighted synapses
+  built by a daily vector-neighbour search plus LLM review; edges use raw cosine with a
+  0.62 gate and sparse engram codes rank candidates. Recall spreads through an
+  attractor activation, co-recalled memories reinforce synapses, and nightly replay
+  adds low-weight inferred edges (revoked after 14 days without review). The weekly
+  pass tiers neurons into active, warm, archive and trash with timed physical cleanup.
 
 ### Retrieval
 
@@ -329,6 +330,13 @@ Main `agent-gateway.yaml` sections:
 `maintenance` gates, spread `maxDepth` / `beam` / `activationFloor`, tier retention
 `archiveDays` / `trashDays`, `llmPairs` per daily build, and `reviewConcurrency` for
 parallel LLM review batches.
+
+`memory.brain` holds gateway-native switches (`pairMode` defaults to v3, `sparseFloor`,
+`attractor`, `forgetting`, `buffer`, `replay`, `semantic`); the host persists `mcp.brain`
+into `agent-gateway.yaml`, so edit the user `config.yaml` and restart. `neurons.centroid` must
+share the active `EMBEDDER_MODEL` space: after switching models, run
+`scripts/memory_centroids.py` and then `memory_brain_backfill.py --sparse --force`;
+cosine across different models is meaningless.
 
 `contracts/env.json` is generated from the implementation and lists every
 environment variable the package reads. `contracts/entries.json` lists the module
