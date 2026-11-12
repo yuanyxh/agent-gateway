@@ -94,16 +94,32 @@ def websearch(
     fetch_top: int = 0,
     max_chars: int = 6000,
     engines=None,
+    on_progress=None,
 ) -> dict:
     """Search, then read the top `fetch_top` pages as Markdown (bounded by total budget)."""
     limit = max(1, min(int(limit), 10))
     fetch_top = max(0, min(int(fetch_top), 3))
     max_chars = max(1000, min(int(max_chars), 10000))
+    total = 2 + fetch_top
+    sent = 0
+
+    def progress(value: int, message: str) -> None:
+        nonlocal sent
+        if on_progress is None or value <= sent:
+            return
+        sent = value
+        try:
+            on_progress(value, total, message)
+        except Exception:
+            pass
+
+    progress(1, "searching")
     started = time.monotonic()
     results, report = search_report(query, engines=engines, min_results=limit)
     results = results[:limit]
     for result in results:
         result["id"] = url_id(result.get("url", ""))
+    progress(2, f"{len(results)} results")
     pages = []
     page_errors = []
     budget = MAX_TOTAL_CHARS
@@ -140,6 +156,7 @@ def websearch(
                 }
             )
             budget -= page["chars"]
+            progress(2 + len(pages), f"fetched {len(pages)}/{fetch_top}")
         except Exception as exc:
             page_errors.append(
                 {
@@ -148,6 +165,7 @@ def websearch(
                     "error": f"{type(exc).__name__}: {exc}",
                 }
             )
+    progress(total, "done")
     payload = {
         "query": query,
         "results": results,

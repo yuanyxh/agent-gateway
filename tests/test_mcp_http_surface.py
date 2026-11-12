@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 
@@ -26,6 +27,16 @@ INITIALIZE = {
 ACCEPT = {"Accept": "application/json, text/event-stream"}
 
 
+def _payload(response):
+    """Read the JSON-RPC body from a plain JSON or an SSE response."""
+    if response.headers.get("content-type", "").startswith("text/event-stream"):
+        for line in response.text.splitlines():
+            if line.startswith("data:"):
+                return json.loads(line[5:].strip())
+        raise AssertionError("no SSE data event")
+    return response.json()
+
+
 def _app():
     async def api_ping(request):
         return JSONResponse({"ok": True})
@@ -50,7 +61,7 @@ class McpHttpSurfaceTest(unittest.TestCase):
         with TestClient(_app(), base_url="http://127.0.0.1:9001") as client:
             response = client.post("/", json=INITIALIZE, headers=ACCEPT)
         self.assertEqual(response.status_code, 200)
-        body = response.json()
+        body = _payload(response)
         self.assertEqual(body["jsonrpc"], "2.0")
         self.assertIn("result", body)
 
@@ -58,7 +69,7 @@ class McpHttpSurfaceTest(unittest.TestCase):
         with TestClient(_app(), base_url="http://127.0.0.1:9001") as client:
             response = client.post("/mcp", json=INITIALIZE, headers=ACCEPT)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("result", response.json())
+        self.assertIn("result", _payload(response))
 
     def test_oversized_body_is_rejected(self):
         with TestClient(_app(), base_url="http://127.0.0.1:9001") as client:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Callable, Literal
 
+from mcp.server.mcpserver import Context
 from pydantic import Field
 
 from agent_gateway.core.tool_text import param_text
@@ -34,7 +35,14 @@ from agent_gateway.services.mcp.graph_tools import (
 )
 
 
-async def _run(handlers: dict[str, Callable], name: str, arguments: dict) -> str:
+async def _run(
+    handlers: dict[str, Callable],
+    name: str,
+    arguments: dict,
+    ctx: Context | None = None,
+) -> str:
+    if ctx is not None:
+        arguments = {**arguments, "_ctx": ctx}
     blocks = await handlers[name](arguments)
     return "\n".join(block.text for block in blocks if block.type == "text")
 
@@ -697,6 +705,7 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
         engines: Annotated[
             str | None, Field(description=param_text("param.engines"))
         ] = None,
+        ctx: Context | None = None,
     ) -> str:
         return await _run(
             handlers,
@@ -710,6 +719,7 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
                     "engines": engines,
                 }
             ),
+            ctx=ctx,
         )
 
     @tool(name="read_url", description=TOOL_DESCRIPTIONS["read_url"])

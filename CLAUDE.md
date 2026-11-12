@@ -41,6 +41,8 @@
 - 提示词与 `scanner/ast-js` 必须留在包内（wheel 里），宿主读的是打包时拷出的副本；新增或修改提示词后，utility 仓 `Sources/Gateway/prompts/` 副本必须同步
 - i18n 语言包自持：`src/agent_gateway/locales/<lang>.json`（扁平 `{key: text}`），
   `core/l10n.py` 启动时加载；不再由宿主生成，两仓各自维护自己的语言包
+- MCP 通知（含 `notifications/progress`）依赖 SSE 响应流：`build_asgi` 的 `json_response` 必须为 `False`；
+  JSON 单响应没有 sink，进度会被静默丢弃
 
 ## 加载策略
 

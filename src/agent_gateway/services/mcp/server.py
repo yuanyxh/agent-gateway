@@ -599,6 +599,7 @@ def _record_web_trace(
 
 @_register("websearch_engine")
 async def _handle_websearch_engine(arguments: dict) -> list[TextContent]:
+    ctx = arguments.pop("_ctx", None)
     query = str(arguments.get("query", "")).strip()
     if not query:
         return [TextContent(type="text", text=dumps({"error": "query is required"}))]
@@ -616,8 +617,20 @@ async def _handle_websearch_engine(arguments: dict) -> list[TextContent]:
         engines = None
     # urllib is blocking; keep the MCP event loop free for other calls.
     started = time.perf_counter()
+    loop = asyncio.get_running_loop() if ctx is not None else None
+
+    def on_progress(value: int, total: int, message: str) -> None:
+        if loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                ctx.report_progress(value, total, message), loop
+            )
+        except Exception:
+            pass
+
     result = await asyncio.to_thread(
-        web_search.websearch, query, limit, fetch_top, max_chars, engines
+        web_search.websearch, query, limit, fetch_top, max_chars, engines, on_progress
     )
     trace_id = _record_web_trace(
         "websearch_engine",
@@ -655,7 +668,8 @@ register_skill_tools(mcp)
 def build_asgi(rest_app: Starlette) -> Starlette:
     app = mcp.streamable_http_app(
         streamable_http_path="/",
-        json_response=True,
+        # SSE stream is required for notifications/progress; JSON mode drops them.
+        json_response=False,
         stateless_http=True,
         host="127.0.0.1",
     )

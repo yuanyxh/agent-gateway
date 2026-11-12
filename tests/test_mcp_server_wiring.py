@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 
@@ -29,11 +30,21 @@ def _client():
     return TestClient(server.build_asgi(Starlette()), base_url="http://127.0.0.1:9001")
 
 
+def _payload(response):
+    """Read the JSON-RPC body from a plain JSON or an SSE response."""
+    if response.headers.get("content-type", "").startswith("text/event-stream"):
+        for line in response.text.splitlines():
+            if line.startswith("data:"):
+                return json.loads(line[5:].strip())
+        raise AssertionError("no SSE data event")
+    return response.json()
+
+
 def _rpc(client, request_id, method, params=None):
     body = {"jsonrpc": "2.0", "id": request_id, "method": method}
     if params is not None:
         body["params"] = params
-    return client.post("/", json=body, headers=ACCEPT).json()
+    return _payload(client.post("/", json=body, headers=ACCEPT))
 
 
 def _probe_app():
