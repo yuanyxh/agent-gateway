@@ -94,7 +94,7 @@ func spawn() {
             edges, unresolved = resolver.resolve_file(analyses["src/a.swift"], index)
         self.assertNotIn("run", {edge["raw_name"] for edge in edges})
         self.assertIn(
-            ("run", "no_binding"), {(u["raw_name"], u["reason"]) for u in unresolved}
+            ("run", "external"), {(u["raw_name"], u["reason"]) for u in unresolved}
         )
 
     def test_import_scope_with_multiple_files_is_ambiguous(self):
@@ -227,3 +227,21 @@ class LanguageFamilyTest(unittest.TestCase):
         self.assertIn(
             ("foo", "no_binding"), {(u["raw_name"], u["reason"]) for u in unresolved}
         )
+
+
+class ExternalReasonTest(unittest.TestCase):
+    def test_receiver_call_is_external(self):
+        files = {"a.py": b"def run(items):\n    items.append(1)\n"}
+        with tempfile.TemporaryDirectory() as root:
+            index, analyses = _index(root, files)
+            _, unresolved = resolver.resolve_file(analyses["a.py"], index)
+
+        self.assertEqual([row["reason"] for row in unresolved], ["external"])
+
+    def test_unknown_function_stays_no_binding(self):
+        files = {"a.py": b"def run():\n    missing_helper()\n"}
+        with tempfile.TemporaryDirectory() as root:
+            index, analyses = _index(root, files)
+            _, unresolved = resolver.resolve_file(analyses["a.py"], index)
+
+        self.assertEqual([row["reason"] for row in unresolved], ["no_binding"])

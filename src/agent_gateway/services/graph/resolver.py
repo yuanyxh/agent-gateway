@@ -12,6 +12,8 @@ from typing import Iterable, Protocol
 
 from agent_gateway.services.graph.constants import (
     CALLABLE_KINDS,
+    EXTERNAL_CALL_NAMES,
+    EXTERNAL_TYPE_NAMES,
     JS_EXTENSIONS,
     LANG_FAMILY,
     TYPE_KINDS,
@@ -372,6 +374,22 @@ def _edge(
     }
 
 
+def _external_reason(reference: Reference) -> str | None:
+    """Receiver or builtin name that no project file can define."""
+    if reference.receiver and reference.receiver not in (
+        "self",
+        "super",
+        "this",
+        "cls",
+    ):
+        return "external"
+    if reference.raw_name in EXTERNAL_TYPE_NAMES:
+        return "external"
+    if reference.kind == "call" and reference.raw_name in EXTERNAL_CALL_NAMES:
+        return "external"
+    return None
+
+
 def _unresolved(reference: Reference, reason: str) -> dict:
     return {
         "raw_name": reference.raw_name,
@@ -492,7 +510,9 @@ def resolve_file(
                 if exported is not None:
                     edges.append(_edge(reference, exported, "re_export"))
                     continue
-            unresolved.append(_unresolved(reference, "no_binding"))
+            unresolved.append(
+                _unresolved(reference, _external_reason(reference) or "no_binding")
+            )
             continue
 
         local_pool = analysis.symbols
@@ -564,10 +584,14 @@ def resolve_file(
             if family in ("", _family(analysis.path)):
                 edges.append(_edge(reference, candidate, "global_unique"))
                 continue
-            unresolved.append(_unresolved(reference, "no_binding"))
+            unresolved.append(
+                _unresolved(reference, _external_reason(reference) or "no_binding")
+            )
             continue
 
         reason = "ambiguous" if candidates else "no_binding"
+        if reason == "no_binding":
+            reason = _external_reason(reference) or reason
         unresolved.append(_unresolved(reference, reason))
 
     edges.sort(
