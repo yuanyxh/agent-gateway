@@ -2,7 +2,10 @@
 
 ## 当前目标
 
-完成公开发布准备：双语 README、MIT 许可证与打包元数据；提交与推送由用户决定。
+2026-11-16 审查后续：图索引 external 分类、`memory_edges` schema v4、热层退避与进度 future 已提交，待端到端验证。
+
+- 计划：utility 仓 `.agent/plans/2026-11-16-review-followups/`
+- 未验证：VM 内 v4 迁移、锁占用下的退避日志、external 占比复核
 
 ## 进行中
 
