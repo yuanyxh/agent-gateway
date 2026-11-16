@@ -598,13 +598,13 @@ def _record_web_trace(
     return trace_id
 
 
-@_register("websearch_engine")
 def _consume_future(future: concurrent.futures.Future) -> None:
     """Retrieve a progress result; a cancelled future raises on exception()."""
     if not future.cancelled():
         future.exception()
 
 
+@_register("websearch_engine")
 async def _handle_websearch_engine(arguments: dict) -> list[TextContent]:
     ctx = arguments.pop("_ctx", None)
     query = str(arguments.get("query", "")).strip()
