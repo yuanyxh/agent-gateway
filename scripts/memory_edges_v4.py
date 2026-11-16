@@ -14,12 +14,23 @@ from agent_gateway.services.memory import store
 
 def _counts(connection: sqlite3.Connection) -> dict[str, int]:
     controlled = ",".join(f"'{kind}'" for kind in store.CONTROLLED_EDGE_TYPES)
-    facts = connection.execute(
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(memory_edges)")}
+    free_text = connection.execute(
         f"SELECT COUNT(*) FROM memory_edges WHERE type NOT IN ({controlled})"
     ).fetchone()[0]
-    structural = connection.execute(
-        f"SELECT COUNT(*) FROM memory_edges WHERE type IN ({controlled})"
-    ).fetchone()[0]
+    if "predicate" in columns:
+        facts = connection.execute(
+            "SELECT COUNT(*) FROM memory_edges WHERE type='fact' AND predicate != ''"
+        ).fetchone()[0]
+        structural = connection.execute(
+            f"SELECT COUNT(*) FROM memory_edges "
+            f"WHERE type IN ({controlled}) AND predicate = ''"
+        ).fetchone()[0]
+    else:
+        facts = 0
+        structural = connection.execute(
+            f"SELECT COUNT(*) FROM memory_edges WHERE type IN ({controlled})"
+        ).fetchone()[0]
     groups = connection.execute(
         "SELECT COUNT(*) FROM (SELECT content_hash FROM memory_nodes "
         "WHERE status='active' GROUP BY content_hash HAVING COUNT(*) > 1)"
@@ -33,6 +44,7 @@ def _counts(connection: sqlite3.Connection) -> dict[str, int]:
         if "importance" not in meta:
             missing += 1
     return {
+        "free_text": free_text,
         "facts": facts,
         "structural": structural,
         "duplicate_groups": groups,
