@@ -67,7 +67,8 @@ SUMMARY_LLM_TEMPERATURE = 0.1
 AI_API_KEY = ai_api_key()
 
 HOT_INIT_MAX_RETRIES = 3
-HOT_INIT_RETRY_DELAY = 5
+HOT_INIT_RETRY_BASE = 0.5
+HOT_INIT_RETRY_MAX = 8.0
 
 # Overridable via SERVER_TIMEOUT (Swift reads it from GeneralConfig.httpTimeout)
 DEFAULT_TIMEOUT = float(os.environ.get("SERVER_TIMEOUT", "60.0"))

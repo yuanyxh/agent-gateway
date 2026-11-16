@@ -65,7 +65,8 @@ from agent_gateway.services.mcp.server_constants import (
     ERR_VALUE_INVALID,
     HOT_INIT_MAX_RETRIES,
     HOT_INIT_MAX_RUNTIME_FAILURES,
-    HOT_INIT_RETRY_DELAY,
+    HOT_INIT_RETRY_BASE,
+    HOT_INIT_RETRY_MAX,
     HOT_INIT_RUNTIME_COOLDOWN,
     MEM0_QDRANT_PATH,
     PROCESSED_FIELD,
@@ -203,6 +204,11 @@ _hot_runtime_failures = 0
 _hot_last_init_attempt = 0.0
 
 
+def _hot_retry_delay(attempt: int) -> float:
+    """Exponential backoff capped so a held lock never stalls startup."""
+    return min(HOT_INIT_RETRY_BASE * (2**attempt), HOT_INIT_RETRY_MAX)
+
+
 def _init_hot_memory() -> bool:
     # mem0's built-in PostHog telemetry blocks initialization, so force-disable it
     try:
@@ -225,8 +231,11 @@ def _init_hot_memory() -> bool:
                 f"Hot layer init attempt {attempt + 1}/{HOT_INIT_MAX_RETRIES} failed: {e}"
             )
             if attempt < HOT_INIT_MAX_RETRIES - 1:
-                time.sleep(HOT_INIT_RETRY_DELAY)
-    logger.error(f"Hot layer init failed after {HOT_INIT_MAX_RETRIES} attempts")
+                time.sleep(_hot_retry_delay(attempt))
+    logger.error(
+        f"Hot layer init failed after {HOT_INIT_MAX_RETRIES} attempts "
+        f"(qdrant_path={MEM0_QDRANT_PATH})"
+    )
     return False
 
 

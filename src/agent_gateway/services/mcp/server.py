@@ -623,11 +623,12 @@ async def _handle_websearch_engine(arguments: dict) -> list[TextContent]:
         if loop is None:
             return
         try:
-            asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 ctx.report_progress(value, total, message), loop
             )
         except Exception:
-            pass
+            return
+        future.add_done_callback(lambda done: done.exception())
 
     result = await asyncio.to_thread(
         web_search.websearch, query, limit, fetch_top, max_chars, engines, on_progress
