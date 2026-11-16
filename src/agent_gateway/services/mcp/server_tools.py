@@ -534,6 +534,7 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
                 "disputes",
                 "relates",
                 "mentions",
+                "fact",
                 "synapse",
                 "associative",
             ],

@@ -529,6 +529,7 @@ def build_tools() -> list[Tool]:
                             "disputes",
                             "relates",
                             "mentions",
+                            "fact",
                             "synapse",
                             "associative",
                         ],

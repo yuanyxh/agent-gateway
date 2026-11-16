@@ -115,6 +115,7 @@ class StoreWriteTest(unittest.TestCase):
                 "files": 1,
                 "symbols": 1,
                 "unresolved": 1,
+                "unresolved_external": 0,
             },
         )
 

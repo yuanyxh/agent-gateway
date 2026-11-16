@@ -164,7 +164,8 @@ class GraphStore:
         symbols = count("SELECT COUNT(*) FROM symbols")
         edges = count("SELECT COUNT(*) FROM edges")
         stale = count("SELECT COUNT(*) FROM edges WHERE status='stale'")
-        unresolved = count("SELECT COUNT(*) FROM unresolved")
+        unresolved = count("SELECT COUNT(*) FROM unresolved WHERE reason != 'external'")
+        external = count("SELECT COUNT(*) FROM unresolved WHERE reason = 'external'")
         return {
             "nodes": files + symbols,
             "edges": edges,
@@ -172,6 +173,7 @@ class GraphStore:
             "files": files,
             "symbols": symbols,
             "unresolved": unresolved,
+            "unresolved_external": external,
         }
 
     def is_up_to_date(self, root: str, engine: str, schema: str) -> bool:

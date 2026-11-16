@@ -16,19 +16,20 @@ from agent_gateway.services.memory import store
 
 logger = setup_logging("server")
 
-EDGE_TYPES = (
-    "supersedes",
-    "episode",
-    "derived_from",
-    "disputes",
-    "relates",
-    "mentions",
-)
+EDGE_TYPES = store.CONTROLLED_EDGE_TYPES
 
 #: Written once and read from either endpoint.
 SYMMETRIC_EDGE_TYPES = ("episode", "disputes", "relates")
 
-EDGE_FIELDS = ("from_id", "to_id", "type", "weight", "created_at", "metadata")
+EDGE_FIELDS = (
+    "from_id",
+    "to_id",
+    "type",
+    "predicate",
+    "weight",
+    "created_at",
+    "metadata",
+)
 
 #: Per-type node ceilings; a version chain is short, an episode group is capped
 #: at write time already, and an unbounded sweep would let one bad edge fan out.
@@ -85,9 +86,9 @@ def add_edges(edges: list[tuple], db_path: str | None = None) -> int:
             connection.executemany(
                 """
                 INSERT INTO memory_edges
-                  (from_id, to_id, type, weight, created_at, metadata)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(from_id, to_id, type) DO UPDATE SET
+                  (from_id, to_id, type, predicate, weight, created_at, metadata)
+                VALUES (?, ?, ?, '', ?, ?, ?)
+                ON CONFLICT(from_id, to_id, type, predicate) DO UPDATE SET
                   weight=excluded.weight,
                   metadata=excluded.metadata
                 """,

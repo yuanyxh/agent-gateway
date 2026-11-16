@@ -169,7 +169,7 @@ def merge_fact(
     evidence = str(evidence_memory_id or "").strip()
     row = connection.execute(
         "SELECT edge_id, valid_to, metadata FROM memory_edges "
-        "WHERE from_id=? AND to_id=? AND type=?",
+        "WHERE from_id=? AND to_id=? AND type='fact' AND predicate=?",
         (left, right, predicate),
     ).fetchone()
     if row is not None and row[1] is None:
@@ -182,7 +182,7 @@ def merge_fact(
         return "updated"
     closed = connection.execute(
         "SELECT edge_id FROM memory_edges "
-        "WHERE from_id=? AND type=? AND valid_to IS NULL",
+        "WHERE from_id=? AND type='fact' AND predicate=? AND valid_to IS NULL",
         (left, predicate),
     ).fetchall()
     for (edge_id,) in closed:
@@ -192,9 +192,10 @@ def merge_fact(
             (now, edge_id),
         )
     connection.execute(
-        "INSERT INTO memory_edges (from_id, to_id, type, weight, created_at, "
-        "metadata, valid_from, supports, contradicts) VALUES (?, ?, ?, 1.0, ?, ?, ?, 1, 0) "
-        "ON CONFLICT(from_id, to_id, type) DO UPDATE SET "
+        "INSERT INTO memory_edges (from_id, to_id, type, predicate, weight, "
+        "created_at, metadata, valid_from, supports, contradicts) "
+        "VALUES (?, ?, 'fact', ?, 1.0, ?, ?, ?, 1, 0) "
+        "ON CONFLICT(from_id, to_id, type, predicate) DO UPDATE SET "
         "valid_to=NULL, valid_from=excluded.valid_from, metadata=excluded.metadata",
         (left, right, predicate, now, _fact_meta(fact, evidence), now),
     )
@@ -203,8 +204,9 @@ def merge_fact(
 
 def current_facts(connection, subject: str) -> list[dict]:
     rows = connection.execute(
-        "SELECT to_id, type, supports, contradicts, valid_from FROM memory_edges "
-        "WHERE from_id=? AND valid_to IS NULL ORDER BY supports DESC, type",
+        "SELECT to_id, predicate, supports, contradicts, valid_from FROM memory_edges "
+        "WHERE from_id=? AND type='fact' AND valid_to IS NULL "
+        "ORDER BY supports DESC, predicate",
         (entity_id(subject),),
     ).fetchall()
     return [

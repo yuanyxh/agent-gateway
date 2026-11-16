@@ -204,7 +204,7 @@ class FactTimelineTests(unittest.TestCase):
             weights = dict(
                 (row[0], row[1])
                 for row in connection.execute(
-                    "SELECT type, weight FROM memory_edges"
+                    "SELECT predicate, weight FROM memory_edges"
                 ).fetchall()
             )
         self.assertEqual(promoted, 1)

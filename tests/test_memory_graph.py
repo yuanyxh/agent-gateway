@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -13,7 +14,7 @@ os.environ.setdefault("QDRANT_PATH", tempfile.mkdtemp(prefix="agent-gateway-test
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agent_gateway.services.mcp import server_memory_graph  # noqa: E402
-from agent_gateway.services.memory import graph, link, store  # noqa: E402
+from agent_gateway.services.memory import entities, graph, link, store  # noqa: E402
 
 
 class _GraphCase(unittest.TestCase):
@@ -397,6 +398,63 @@ class FactFromDataTest(unittest.TestCase):
 
     def test_plain_body_is_unchanged(self):
         self.assertEqual(link.fact_from_data("正文"), "正文")
+
+
+class EdgePredicateTest(_GraphCase):
+    def test_merge_fact_writes_predicate_column(self):
+        with store.connect(self.db) as connection:
+            action = entities.merge_fact(
+                connection,
+                {"subject": "alpha", "predicate": "为", "object": "beta"},
+                "mem-1",
+            )
+
+        self.assertEqual(action, "inserted")
+        with store.connect(self.db) as connection:
+            row = connection.execute(
+                "SELECT type, predicate FROM memory_edges"
+            ).fetchone()
+        self.assertEqual(tuple(row), ("fact", "为"))
+
+    def test_same_pair_keeps_distinct_predicates(self):
+        with store.connect(self.db) as connection:
+            for predicate in ("为", "包含"):
+                entities.merge_fact(
+                    connection,
+                    {"subject": "alpha", "predicate": predicate, "object": "beta"},
+                    f"mem-{predicate}",
+                )
+
+        with store.connect(self.db) as connection:
+            count = connection.execute("SELECT COUNT(*) FROM memory_edges").fetchone()[
+                0
+            ]
+        self.assertEqual(count, 2)
+
+    def test_v4_upgrade_moves_free_text_types(self):
+        with sqlite3.connect(self.db) as raw:
+            raw.executescript(
+                """
+                CREATE TABLE memory_edges (
+                  edge_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL,
+                  weight REAL DEFAULT 1.0, created_at TEXT NOT NULL, metadata TEXT,
+                  valid_from TEXT, valid_to TEXT, supports INTEGER DEFAULT 1,
+                  contradicts INTEGER DEFAULT 0, UNIQUE(from_id, to_id, type)
+                );
+                INSERT INTO memory_edges (from_id, to_id, type, created_at)
+                  VALUES ('a', 'b', '为', 't');
+                INSERT INTO memory_edges (from_id, to_id, type, created_at)
+                  VALUES ('a', 'c', 'episode', 't');
+                """
+            )
+            store.upgrade_edges_v4(raw)
+
+        with sqlite3.connect(self.db) as raw:
+            rows = raw.execute(
+                "SELECT type, predicate FROM memory_edges ORDER BY to_id"
+            ).fetchall()
+        self.assertEqual(rows, [("fact", "为"), ("episode", "")])
 
 
 if __name__ == "__main__":

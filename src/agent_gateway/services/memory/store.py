@@ -23,7 +23,18 @@ from agent_gateway.core.paths import gateway_home
 logger = setup_logging("server")
 
 #: Bump whenever SCHEMA gains a table or index; `connect` only replays DDL below it.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+#: Controlled edge vocabulary; free-text predicates live in ``predicate``.
+CONTROLLED_EDGE_TYPES = (
+    "supersedes",
+    "episode",
+    "derived_from",
+    "disputes",
+    "relates",
+    "mentions",
+    "fact",
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_nodes (
@@ -46,6 +57,7 @@ CREATE TABLE IF NOT EXISTS memory_edges (
   from_id TEXT NOT NULL,
   to_id TEXT NOT NULL,
   type TEXT NOT NULL,
+  predicate TEXT NOT NULL DEFAULT '',
   weight REAL DEFAULT 1.0,
   created_at TEXT NOT NULL,
   metadata TEXT,
@@ -53,7 +65,7 @@ CREATE TABLE IF NOT EXISTS memory_edges (
   valid_to TEXT,
   supports INTEGER DEFAULT 1,
   contradicts INTEGER DEFAULT 0,
-  UNIQUE(from_id, to_id, type)
+  UNIQUE(from_id, to_id, type, predicate)
 );
 CREATE INDEX IF NOT EXISTS idx_edges_from ON memory_edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON memory_edges(to_id);
@@ -281,6 +293,7 @@ V3_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("valid_to", "TEXT"),
         ("supports", "INTEGER DEFAULT 1"),
         ("contradicts", "INTEGER DEFAULT 0"),
+        ("predicate", "TEXT NOT NULL DEFAULT ''"),
     ),
 }
 
@@ -300,6 +313,58 @@ def ensure_columns(connection: sqlite3.Connection) -> list[str]:
     return added
 
 
+def _edges_have_predicate_unique(connection: sqlite3.Connection) -> bool:
+    for row in connection.execute("PRAGMA index_list(memory_edges)"):
+        if not row[2]:
+            continue
+        columns = [
+            info[2] for info in connection.execute(f"PRAGMA index_info({row[1]})")
+        ]
+        if columns == ["from_id", "to_id", "type", "predicate"]:
+            return True
+    return False
+
+
+def upgrade_edges_v4(connection: sqlite3.Connection) -> bool:
+    """Rebuild the edge table so free-text predicates leave ``type``."""
+    if "memory_edges" not in table_names(connection):
+        return False
+    if _edges_have_predicate_unique(connection):
+        return False
+    controlled = ",".join(f"'{kind}'" for kind in CONTROLLED_EDGE_TYPES)
+    connection.executescript(
+        f"""
+        CREATE TABLE memory_edges_v4 (
+          edge_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          from_id TEXT NOT NULL,
+          to_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          predicate TEXT NOT NULL DEFAULT '',
+          weight REAL DEFAULT 1.0,
+          created_at TEXT NOT NULL,
+          metadata TEXT,
+          valid_from TEXT,
+          valid_to TEXT,
+          supports INTEGER DEFAULT 1,
+          contradicts INTEGER DEFAULT 0,
+          UNIQUE(from_id, to_id, type, predicate)
+        );
+        INSERT INTO memory_edges_v4
+          (from_id, to_id, type, predicate, weight, created_at, metadata,
+           valid_from, valid_to, supports, contradicts)
+        SELECT from_id, to_id,
+               CASE WHEN type IN ({controlled}) THEN type ELSE 'fact' END,
+               CASE WHEN type IN ({controlled}) THEN '' ELSE type END,
+               weight, created_at, metadata, valid_from, valid_to, supports,
+               contradicts
+        FROM memory_edges;
+        DROP TABLE memory_edges;
+        ALTER TABLE memory_edges_v4 RENAME TO memory_edges;
+        """
+    )
+    return True
+
+
 @contextmanager
 def connect(
     db_path: str | None = None, *, readonly: bool = False
@@ -317,6 +382,7 @@ def connect(
         if version < SCHEMA_VERSION:
             connection.executescript(SCHEMA)
             ensure_columns(connection)
+            upgrade_edges_v4(connection)
             connection.executescript(INDEXES)
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         yield connection
