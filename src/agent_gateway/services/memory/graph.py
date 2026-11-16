@@ -59,6 +59,8 @@ def add_edge(
         return False
     if type not in EDGE_TYPES:
         raise ValueError(f"unknown edge type: {type}")
+    if type == "fact":
+        raise ValueError("fact edges go through entities.merge_fact")
     return add_edges([(from_id, to_id, type, weight, metadata)], db_path=db_path) > 0
 
 

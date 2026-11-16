@@ -325,8 +325,26 @@ def _edges_have_predicate_unique(connection: sqlite3.Connection) -> bool:
     return False
 
 
+def _backup_before_upgrade(
+    connection: sqlite3.Connection, path: str, version: int
+) -> None:
+    """Keep a restorable copy before an automatic v3 → v4 rebuild."""
+    if version != 3:
+        return
+    source = Path(path)
+    if list(source.parent.glob(f"{source.stem}.pre-v4-*.sqlite")):
+        return
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    target = source.with_name(f"{source.stem}.pre-v4-{stamp}.sqlite")
+    connection.execute("VACUUM INTO ?", (str(target),))
+
+
 def upgrade_edges_v4(connection: sqlite3.Connection) -> bool:
-    """Rebuild the edge table so free-text predicates leave ``type``."""
+    """Rebuild the edge table so free-text predicates leave ``type``.
+
+    Runs in one transaction: a failure rolls back to the v3 table, and a killed
+    process recovers from the WAL. The old table is renamed, never dropped first.
+    """
     if "memory_edges" not in table_names(connection):
         return False
     if _edges_have_predicate_unique(connection):
@@ -334,7 +352,9 @@ def upgrade_edges_v4(connection: sqlite3.Connection) -> bool:
     controlled = ",".join(f"'{kind}'" for kind in CONTROLLED_EDGE_TYPES)
     connection.executescript(
         f"""
-        CREATE TABLE memory_edges_v4 (
+        BEGIN IMMEDIATE;
+        ALTER TABLE memory_edges RENAME TO memory_edges_v3;
+        CREATE TABLE memory_edges (
           edge_id INTEGER PRIMARY KEY AUTOINCREMENT,
           from_id TEXT NOT NULL,
           to_id TEXT NOT NULL,
@@ -349,7 +369,7 @@ def upgrade_edges_v4(connection: sqlite3.Connection) -> bool:
           contradicts INTEGER DEFAULT 0,
           UNIQUE(from_id, to_id, type, predicate)
         );
-        INSERT INTO memory_edges_v4
+        INSERT INTO memory_edges
           (from_id, to_id, type, predicate, weight, created_at, metadata,
            valid_from, valid_to, supports, contradicts)
         SELECT from_id, to_id,
@@ -357,9 +377,9 @@ def upgrade_edges_v4(connection: sqlite3.Connection) -> bool:
                CASE WHEN type IN ({controlled}) THEN '' ELSE type END,
                weight, created_at, metadata, valid_from, valid_to, supports,
                contradicts
-        FROM memory_edges;
-        DROP TABLE memory_edges;
-        ALTER TABLE memory_edges_v4 RENAME TO memory_edges;
+        FROM memory_edges_v3;
+        DROP TABLE memory_edges_v3;
+        COMMIT;
         """
     )
     return True
@@ -380,6 +400,7 @@ def connect(
         connection.execute("PRAGMA busy_timeout=5000")
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if version < SCHEMA_VERSION:
+            _backup_before_upgrade(connection, path, version)
             connection.executescript(SCHEMA)
             ensure_columns(connection)
             upgrade_edges_v4(connection)

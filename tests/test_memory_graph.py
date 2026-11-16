@@ -457,5 +457,69 @@ class EdgePredicateTest(_GraphCase):
         self.assertEqual(rows, [("fact", "为"), ("episode", "")])
 
 
+V3_EDGES_DDL = """
+CREATE TABLE memory_edges (
+  edge_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_id TEXT NOT NULL, to_id TEXT NOT NULL, type TEXT NOT NULL,
+  weight REAL DEFAULT 1.0, created_at TEXT NOT NULL, metadata TEXT,
+  valid_from TEXT, valid_to TEXT, supports INTEGER DEFAULT 1,
+  contradicts INTEGER DEFAULT 0, UNIQUE(from_id, to_id, type)
+);
+"""
+
+
+class EdgeUpgradeFailureTest(_GraphCase):
+    def _seed_v3(self):
+        with sqlite3.connect(self.db) as raw:
+            raw.executescript(V3_EDGES_DDL)
+            raw.execute("PRAGMA user_version=3")
+            raw.executemany(
+                "INSERT INTO memory_edges (from_id, to_id, type, created_at) "
+                "VALUES (?, ?, ?, 't')",
+                [("a", "b", "为"), ("a", "c", "episode")],
+            )
+
+    def test_failed_upgrade_keeps_v3_table(self):
+        self._seed_v3()
+        with mock.patch.object(store, "CONTROLLED_EDGE_TYPES", ("fact'",)):
+            with self.assertRaises(sqlite3.OperationalError):
+                with store.connect(self.db):
+                    pass
+
+        with sqlite3.connect(self.db) as raw:
+            rows = raw.execute("SELECT COUNT(*) FROM memory_edges").fetchone()[0]
+            renamed = raw.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='memory_edges_v3'"
+            ).fetchone()[0]
+        self.assertEqual(rows, 2)
+        self.assertEqual(renamed, 0)
+
+    def test_auto_upgrade_writes_backup(self):
+        self._seed_v3()
+
+        with store.connect(self.db):
+            pass
+
+        backups = list(Path(self.db).parent.glob("*.pre-v4-*.sqlite"))
+        self.assertEqual(len(backups), 1)
+
+    def test_auto_upgrade_reuses_existing_backup(self):
+        self._seed_v3()
+        existing = Path(self.db).with_name(f"{Path(self.db).stem}.pre-v4-keep.sqlite")
+        existing.write_bytes(b"")
+
+        with store.connect(self.db):
+            pass
+
+        backups = list(Path(self.db).parent.glob("*.pre-v4-*.sqlite"))
+        self.assertEqual(backups, [existing])
+
+
+class FactEdgeGuardTest(_GraphCase):
+    def test_add_edge_rejects_fact_type(self):
+        with self.assertRaises(ValueError):
+            graph.add_edge("a", "b", "fact", db_path=self.db)
+
+
 if __name__ == "__main__":
     unittest.main()
