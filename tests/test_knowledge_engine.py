@@ -35,5 +35,27 @@ class GatherEvidenceTest(unittest.TestCase):
         )
 
 
+class OffTopicCardTest(unittest.TestCase):
+    def test_empty_card_counts_as_content_failure(self):
+        def fake_llm(prompt, **kwargs):
+            return {
+                "knowledge_expand": {"concept": "健康检查", "why_now": "实例死活"},
+                "knowledge_gate": {"accept": True},
+                "knowledge_card": {"card": ""},
+            }.get(kwargs.get("feature"))
+
+        with (
+            patch.object(engine, "prompt_loader") as loader,
+            patch.object(engine, "_llm_json", side_effect=fake_llm),
+            patch.object(
+                engine, "gather_evidence", return_value={"text": "t", "urls": []}
+            ),
+        ):
+            loader.prompt.return_value = "prompt"
+            r = engine.advance("Java 后端", "")
+        self.assertEqual(r["code"], engine.CARD_FAIL)
+        self.assertEqual(r["concept"], "健康检查")
+
+
 if __name__ == "__main__":
     unittest.main()

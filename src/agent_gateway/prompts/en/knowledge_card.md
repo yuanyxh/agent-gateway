@@ -17,6 +17,7 @@ Source points (**rely only on these**; do not add numbers, versions or facts tha
 How to write it:
 
 - Write only about this concept's mechanism and principle: do not expand into a domain overview, and do not cover products, vendor solutions or industry trends
+- **Check the source material belongs to the topic's domain first**: the same term can mean different things in different fields. If the material covers a namesake concept from another domain and has nothing to do with the theme or scope, do not force a card — output {"card": ""}
 - Use Markdown: headings, **bold** for key judgements, lists for parallel items — do not cram everything into one block
 - Open with a concrete dilemma, not with "X is ..."
 - Cover three things: why you cannot avoid it, what it actually buys you, what it costs
