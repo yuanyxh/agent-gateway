@@ -174,6 +174,12 @@ class GraphStore:
             "symbols": symbols,
             "unresolved": unresolved,
             "unresolved_external": external,
+            "unresolved_no_binding": count(
+                "SELECT COUNT(*) FROM unresolved WHERE reason = 'no_binding'"
+            ),
+            "unresolved_ambiguous": count(
+                "SELECT COUNT(*) FROM unresolved WHERE reason = 'ambiguous'"
+            ),
         }
 
     def is_up_to_date(self, root: str, engine: str, schema: str) -> bool:

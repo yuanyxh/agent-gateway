@@ -116,6 +116,8 @@ class StoreWriteTest(unittest.TestCase):
                 "symbols": 1,
                 "unresolved": 1,
                 "unresolved_external": 0,
+                "unresolved_no_binding": 1,
+                "unresolved_ambiguous": 0,
             },
         )
 

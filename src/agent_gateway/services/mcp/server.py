@@ -26,6 +26,8 @@ import asyncio
 import concurrent.futures
 import functools
 import logging
+import resource
+import sys
 from datetime import datetime, timedelta
 
 from qdrant_client import QdrantClient
@@ -689,6 +691,25 @@ def build_asgi(rest_app: Starlette) -> Starlette:
     return app
 
 
+def rss_peak_mb() -> float:
+    """Peak RSS in MiB; ru_maxrss is bytes on macOS and KiB on Linux."""
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return peak / (1024 * 1024) if sys.platform == "darwin" else peak / 1024
+
+
+async def rss_sampler() -> None:
+    """Log peak RSS so a curve exists before any unload threshold is chosen."""
+    interval = int(os.environ.get("MCP_RSS_SAMPLE_SECONDS") or 600)
+    if interval <= 0:
+        return
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            logger.info(f"rss_peak_mb={rss_peak_mb():.0f}")
+        except Exception as exc:  # noqa: BLE001 - sampling must never break serving
+            logger.warning(f"rss sample failed: {exc}")
+
+
 def main() -> None:
     """Sync entry: hosts bootstrap by module name (`-c "from <module> import main; main()"`)."""
     asyncio.run(serve())
@@ -699,6 +720,7 @@ async def serve():
         archive_scheduler(lambda: (get_hot_memory(), get_qdrant()), ensure_hot_memory)
     )
     asyncio.create_task(consolidation_scheduler(ensure_hot_memory))
+    asyncio.create_task(rss_sampler())
 
     async def auto_calibrate_on_start():
         """Calibrate an unfamiliar embedder before callers judge its results."""
