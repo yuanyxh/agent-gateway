@@ -699,7 +699,12 @@ def rss_peak_mb() -> float:
 
 async def rss_sampler() -> None:
     """Log peak RSS so a curve exists before any unload threshold is chosen."""
-    interval = int(os.environ.get("MCP_RSS_SAMPLE_SECONDS") or 600)
+    raw_interval = os.environ.get("MCP_RSS_SAMPLE_SECONDS") or "600"
+    try:
+        interval = int(raw_interval)
+    except ValueError:
+        logger.warning(f"invalid MCP_RSS_SAMPLE_SECONDS={raw_interval!r}, using 600")
+        interval = 600
     if interval <= 0:
         return
     while True:
