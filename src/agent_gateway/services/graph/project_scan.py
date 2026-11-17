@@ -254,6 +254,14 @@ def _git_head(root: str) -> str:
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
+def stamp_freshness(db: store.GraphStore, root: str) -> None:
+    """Record incremental writes: git_head plus updated_at, leaving built_at as full-build time."""
+    head = _git_head(root)
+    if head:
+        db.set_meta("git_head", head)
+    db.set_meta("updated_at", datetime.now(timezone.utc).isoformat())
+
+
 def sync(root: str, engine: str, schema: str) -> dict:
     """Reconcile the project graph; a changed project is rebuilt atomically."""
     root = os.path.realpath(root)

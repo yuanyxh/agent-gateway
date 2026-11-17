@@ -216,7 +216,9 @@ def _index_file(req: dict) -> dict:
     analysis, digest = _analyze(index, rel_path, lang, data)
     index.apply(analysis, digest)
     result = _result(index, analysis)
-    _write_file(index, rel_path, lang, data, analysis, result)
+    with store.GraphStore(_store_path(index)) as db:
+        _write_file(index, rel_path, lang, data, analysis, result, db=db)
+        project_scan.stamp_freshness(db, index.root)
     return result
 
 
@@ -263,6 +265,8 @@ def _index_batch(req: dict) -> dict:
             result = _result(index, analysis)
             _write_file(index, analysis.path, lang, data, analysis, result, db=db)
             results[position] = result
+        if parsed:
+            project_scan.stamp_freshness(db, index.root)
     return {"ok": True, "op": "index_batch", "results": results}
 
 

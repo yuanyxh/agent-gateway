@@ -102,6 +102,19 @@ class ProjectScanTest(unittest.TestCase):
         self.assertEqual(status["stats"]["files"], 1)
         self.assertEqual(status["stats"]["edges"], 0)
 
+    def test_index_file_refreshes_freshness_meta(self):
+        with mock.patch.object(project_scan, "_git_head", return_value="aaa"):
+            project_scan.sync(str(self.root), "2", "1")
+        built_at = self._meta("built_at")
+        with mock.patch.object(project_scan, "_git_head", return_value="bbb"):
+            response = indexer.handle_line(
+                json.dumps({"op": "index_file", "root": str(self.root), "path": "b.py"})
+            )
+        self.assertTrue(response["ok"])
+        self.assertEqual(self._meta("git_head"), "bbb")
+        self.assertEqual(self._meta("built_at"), built_at)
+        self.assertTrue(self._meta("updated_at"))
+
     def test_status_reports_missing_db(self):
         status = indexer.handle_line(
             json.dumps({"op": "status", "root": str(self.root)})
