@@ -218,24 +218,50 @@ class Pipeline:
         latency["fuse"] = round((time.perf_counter() - fuse_started) * 1000, 2)
 
         items = self._narrow(query, items)
-        if self.reranker is not None and items:
+        strict = items[:limit]
+        strict_ids = {item.id for item in strict}
+        merged = list(strict)
+        if len(strict) < limit:
+            # A short strict result is padded from excluded rows, and the padded
+            # rows must pass through the same rerank as the strict ones.
+            merged.extend(
+                self._fallback_candidates(
+                    query, fallback, limit - len(strict), strict_ids
+                )
+            )
+        if self.reranker is not None and merged:
             rerank_started = time.perf_counter()
             try:
-                items = self.reranker(query, items)
+                ranked = self.reranker(query, merged)
             except Exception as e:  # noqa: BLE001 - reranking must not kill the call
                 logger.warning(f"[pipeline:{self.name}] rerank failed: {e!r}")
+            else:
+                # Rerank may lift a padded row; the caller asked for strict rows,
+                # so keep that group ahead and preserve rerank order inside both.
+                merged = [
+                    *[item for item in ranked if item.id in strict_ids],
+                    *[item for item in ranked if item.id not in strict_ids],
+                ]
             latency["rerank"] = round((time.perf_counter() - rerank_started) * 1000, 2)
 
-        items = self._prefer(query, items)
+        items = [
+            *self._prefer(query, [item for item in merged if item.id in strict_ids]),
+            *self._prefer(
+                query, [item for item in merged if item.id not in strict_ids]
+            ),
+        ]
         related = self.expander(query, items[:limit], filters) if self.expander else []
         # Expansion reaches other groups through edges; a constraint must still
         # hold for what the caller sees as related context.
         related = self._narrow(query, related)
 
-        # Strict matches stay first; a shortfall is padded from rows the filter
-        # excluded, each marked with the dimensions it failed.
-        top, fallback_count = self._fill_filtered(query, items[:limit], fallback, limit)
+        top = items[:limit]
+        fallback_count = sum(1 for item in top if item.extra.get("filter_fallback"))
         verdict = self.gate.judge(query, top, related)
+        if top and fallback_count == len(top) and verdict.status == "ok":
+            verdict = replace(
+                verdict, status="weak_match", reason="filter_fallback_only"
+            )
 
         related = related[:limit]
         errors = [
@@ -292,21 +318,19 @@ class Pipeline:
             [item for item in result.items if item.id not in kept_ids],
         )
 
-    def _fill_filtered(
+    def _fallback_candidates(
         self,
         query: Query,
-        top: list[RetrievedItem],
         fallback: list[RetrievedItem],
-        limit: int,
-    ) -> tuple[list[RetrievedItem], int]:
-        """Pad a short result with floor-passing rows the filters excluded."""
-        remaining = limit - len(top)
+        remaining: int,
+        exclude: set[str],
+    ) -> list[RetrievedItem]:
+        """Rows a constraint excluded, offered to fill a short strict result."""
         if remaining <= 0 or not fallback:
-            return top, 0
-        seen = {item.id for item in top}
+            return []
         pool: dict[str, RetrievedItem] = {}
         for item in fallback:
-            if item.id in seen:
+            if item.id in exclude:
                 continue
             current = pool.get(item.id)
             if current is None or item.score > current.score:
@@ -316,15 +340,15 @@ class Pipeline:
             ordered = sorted(pool.values(), key=lambda i: float(i.score), reverse=True)
         else:
             ordered = sorted(pool.values(), key=rank_key, reverse=True)
-        added: list[RetrievedItem] = []
+        out: list[RetrievedItem] = []
         for item in ordered[:remaining]:
             misses = [
                 key
                 for key, values in query.filters.items()
                 if str(item.extra.get(key) or "") not in self._allowed(values)
             ]
-            added.append(replace(item, extra={**item.extra, "filter_fallback": misses}))
-        return [*top, *added], len(added)
+            out.append(replace(item, extra={**item.extra, "filter_fallback": misses}))
+        return out
 
     def _narrow(self, query: Query, items: list[RetrievedItem]) -> list[RetrievedItem]:
         """Drop rows a caller's exact-value constraint rules out."""

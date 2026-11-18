@@ -139,13 +139,14 @@ class StageTest(unittest.TestCase):
 
 
 class QueryConstraintTest(unittest.TestCase):
-    def _run(self, items, limit=5, fusion=None, expander=None, **kwargs):
+    def _run(self, items, limit=5, fusion=None, expander=None, reranker=None, **kwargs):
         pipeline = Pipeline(
             name="test",
             arms=[FakeArm("a", items)],
             fusion=fusion or MaxScoreFusion(),
             gate=PassThroughGate(),
             expander=expander,
+            reranker=reranker,
         )
         return pipeline.run_query(Query(text="q", **kwargs), limit=limit)
 
@@ -256,6 +257,44 @@ class QueryConstraintTest(unittest.TestCase):
         out = self._run(rows)
 
         self.assertEqual([row["id"] for row in out["results"]], ["b", "a"])
+
+    def test_padded_rows_go_through_the_reranker(self):
+        rows = [
+            item("a", 0.9, extra={"project": "o"}),
+            item("b", 0.8, extra={"project": "o"}),
+            item("c", 0.7, extra={"project": "o"}),
+        ]
+        seen: list[str] = []
+
+        def rerank(query, items):
+            seen.extend(row.id for row in items)
+            return list(reversed(items))
+
+        out = self._run(rows, filters={"project": "p"}, reranker=rerank)
+
+        self.assertEqual(seen, ["a", "b", "c"])
+        self.assertEqual([row["id"] for row in out["results"]], ["c", "b", "a"])
+        self.assertEqual(out["fallback_count"], 3)
+        self.assertTrue(
+            all(row["filter_fallback"] == ["project"] for row in out["results"])
+        )
+        self.assertEqual(out["status"], "weak_match")
+
+    def test_strict_rows_stay_ahead_of_reranked_padding(self):
+        rows = [
+            item("s", 0.9, extra={"project": "p"}),
+            item("x", 0.8, extra={"project": "o"}),
+            item("y", 0.7, extra={"project": "o"}),
+        ]
+
+        def rerank(query, items):
+            return list(reversed(items))
+
+        out = self._run(rows, limit=3, filters={"project": "p"}, reranker=rerank)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["s", "y", "x"])
+        self.assertNotIn("filter_fallback", out["results"][0])
+        self.assertEqual(out["status"], "ok")
 
 
 class AutoCalibrateTest(unittest.TestCase):
