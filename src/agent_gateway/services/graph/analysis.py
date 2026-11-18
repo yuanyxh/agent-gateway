@@ -6,11 +6,11 @@ import hashlib
 import json
 import os
 
-from agent_gateway.core.log_utils import setup_logging
+from agent_gateway.services.graph.logging_setup import graph_logger
 from agent_gateway.services.graph.model import FileAnalysis, ParseError
 from agent_gateway.services.graph.parsers import EXTENSIONS, PARSERS
 
-logger = setup_logging("graph", json_format=True)
+logger = graph_logger()
 
 SKIP_DIRS = frozenset(
     {

@@ -17,15 +17,14 @@ from agent_gateway.core.paths import gateway_cache
 _CACHE_BASE = str(gateway_cache())
 
 
-def setup_logging(name: str, level=logging.INFO, json_format=False):
-    os.makedirs(_CACHE_BASE, exist_ok=True)
-
+def setup_logging(name: str, level=logging.INFO, json_format=False, path=None):
     root = logging.getLogger(name)
     root.setLevel(level)
     if root.handlers:
         return root
 
-    log_path = os.path.join(_CACHE_BASE, f"{name}.log")
+    log_path = path or os.path.join(_CACHE_BASE, f"{name}.log")
+    os.makedirs(os.path.dirname(log_path) or _CACHE_BASE, exist_ok=True)
     # Size rotation, matching Swift debug.log: <name>.log -> .1 -> .2, keeps at most N backups.
     fh = logging.handlers.RotatingFileHandler(
         filename=log_path,

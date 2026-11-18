@@ -14,9 +14,9 @@ import sys
 import time
 import traceback
 import uuid
+from datetime import datetime, timezone
 
 from agent_gateway.core import project_paths
-from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.services.graph import (
     indexer_marker,
     project_scan,
@@ -24,6 +24,7 @@ from agent_gateway.services.graph import (
     store,
 )
 from agent_gateway.services.graph.analysis import SKIP_DIRS, ProjectIndex, sha1
+from agent_gateway.services.graph.logging_setup import graph_logger, registered_root
 from agent_gateway.services.graph.constants import (
     ENGINE_VERSION as ENGINE_VERSION,
     SCHEMA_VERSION as SCHEMA_VERSION,
@@ -31,7 +32,7 @@ from agent_gateway.services.graph.constants import (
 from agent_gateway.services.graph.model import FileAnalysis, ParseError
 from agent_gateway.services.graph.parsers import EXTENSIONS, PARSERS
 
-logger = setup_logging("graph", json_format=True)
+logger = graph_logger()
 _INDEXES: dict[str, "ProjectIndex"] = {}
 
 
@@ -374,6 +375,7 @@ def _log(trace_id: str, req: dict, response: dict, elapsed_ms: float) -> None:
     logger.info(
         json.dumps(
             {
+                "ts": datetime.now(timezone.utc).isoformat(),
                 "trace_id": trace_id,
                 "op": req.get("op"),
                 "project": req.get("root"),
@@ -424,16 +426,6 @@ def handle_line(raw: str) -> dict:
     return response
 
 
-def _registered_root() -> str:
-    if len(sys.argv) < 2:
-        return ""
-    candidate = sys.argv[1].strip()
-    if not candidate:
-        return ""
-    root = os.path.realpath(candidate)
-    return root if os.path.isdir(root) else ""
-
-
 def _install_stop_handlers() -> None:
     def _stop(_signum, _frame) -> None:
         raise SystemExit(0)
@@ -444,7 +436,7 @@ def _install_stop_handlers() -> None:
 
 def main() -> int:
     """Read requests until stdin closes; stdout carries protocol lines only."""
-    root = _registered_root()
+    root = registered_root()
     registered = False
     if root:
         try:
