@@ -374,7 +374,9 @@ def _edge(
     }
 
 
-def _external_reason(reference: Reference) -> str | None:
+def _external_reason(
+    reference: Reference, index: SymbolIndex | None = None
+) -> str | None:
     """Receiver or builtin name that no project file can define."""
     if reference.receiver and reference.receiver not in (
         "self",
@@ -382,7 +384,8 @@ def _external_reason(reference: Reference) -> str | None:
         "this",
         "cls",
     ):
-        return "external"
+        if index is None or reference.receiver not in index.by_name:
+            return "external"
     if reference.raw_name in EXTERNAL_TYPE_NAMES:
         return "external"
     if reference.kind == "call" and reference.raw_name in EXTERNAL_CALL_NAMES:
@@ -511,7 +514,9 @@ def resolve_file(
                     edges.append(_edge(reference, exported, "re_export"))
                     continue
             unresolved.append(
-                _unresolved(reference, _external_reason(reference) or "no_binding")
+                _unresolved(
+                    reference, _external_reason(reference, index) or "no_binding"
+                )
             )
             continue
 
@@ -585,13 +590,15 @@ def resolve_file(
                 edges.append(_edge(reference, candidate, "global_unique"))
                 continue
             unresolved.append(
-                _unresolved(reference, _external_reason(reference) or "no_binding")
+                _unresolved(
+                    reference, _external_reason(reference, index) or "no_binding"
+                )
             )
             continue
 
         reason = "ambiguous" if candidates else "no_binding"
         if reason == "no_binding":
-            reason = _external_reason(reference) or reason
+            reason = _external_reason(reference, index) or reason
         unresolved.append(_unresolved(reference, reason))
 
     edges.sort(

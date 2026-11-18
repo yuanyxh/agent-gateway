@@ -239,8 +239,33 @@ def _file_rows(
     return rows
 
 
+_HEAD_CACHE: dict[str, tuple[tuple[float, float], str]] = {}
+
+
+def _head_stamp(root: str) -> tuple[float, float]:
+    """mtime of .git/HEAD and the ref it points at; zeros when unavailable."""
+    git_dir = os.path.join(root, ".git")
+    try:
+        head_mtime = os.stat(os.path.join(git_dir, "HEAD")).st_mtime
+        with open(os.path.join(git_dir, "HEAD"), encoding="utf-8") as handle:
+            content = handle.read().strip()
+    except OSError:
+        return (0.0, 0.0)
+    ref_mtime = 0.0
+    if content.startswith("ref: "):
+        try:
+            ref_mtime = os.stat(os.path.join(git_dir, content[5:])).st_mtime
+        except OSError:
+            ref_mtime = 0.0
+    return (head_mtime, ref_mtime)
+
+
 def _git_head(root: str) -> str:
     """Current HEAD when the project is a git worktree, otherwise an empty string."""
+    stamp = _head_stamp(root)
+    cached = _HEAD_CACHE.get(root)
+    if stamp != (0.0, 0.0) and cached and cached[0] == stamp:
+        return cached[1]
     try:
         out = subprocess.run(
             ["git", "-C", root, "rev-parse", "HEAD"],
@@ -251,7 +276,10 @@ def _git_head(root: str) -> str:
         )
     except (OSError, subprocess.SubprocessError):
         return ""
-    return out.stdout.strip() if out.returncode == 0 else ""
+    head = out.stdout.strip() if out.returncode == 0 else ""
+    if stamp != (0.0, 0.0):
+        _HEAD_CACHE[root] = (stamp, head)
+    return head
 
 
 def stamp_freshness(db: store.GraphStore, root: str) -> None:

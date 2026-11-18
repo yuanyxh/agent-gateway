@@ -161,6 +161,7 @@ def record_cold_memory(
     episode_id: str = "",
     dimensions: dict[str, str] | None = None,
     created_at: str = "",
+    importance: int = 5,
     db_path: str | None = None,
 ) -> str:
     """Register a cold point and link it back to the hot memories it came from."""
@@ -196,6 +197,7 @@ def record_cold_memory(
                 "fact": str(content or ""),
                 **dict(dimensions or {}),
                 "source_memory_ids": list(source_memory_ids or []),
+                "importance": int(importance),
             },
             db_path=db_path,
         )
