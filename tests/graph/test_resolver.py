@@ -245,3 +245,12 @@ class ExternalReasonTest(unittest.TestCase):
             _, unresolved = resolver.resolve_file(analyses["a.py"], index)
 
         self.assertEqual([row["reason"] for row in unresolved], ["no_binding"])
+
+    def test_project_type_receiver_stays_no_binding(self):
+        files = {"src/a.swift": b"class Helper {}\nfunc go() {\n    Helper.run()\n}\n"}
+        with tempfile.TemporaryDirectory() as root:
+            index, analyses = _index(root, files)
+            _, unresolved = resolver.resolve_file(analyses["src/a.swift"], index)
+
+        reasons = {(row["raw_name"], row["reason"]) for row in unresolved}
+        self.assertIn(("run", "no_binding"), reasons)

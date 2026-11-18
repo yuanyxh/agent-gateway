@@ -374,8 +374,29 @@ def _edge(
     }
 
 
+def _receiver_is_project(
+    receiver: str,
+    index: SymbolIndex | None,
+    analysis: FileAnalysis | None,
+    paths: PathIndex | None,
+) -> bool:
+    """A receiver the project can define: a type, imported namespace, or module."""
+    if index is not None and any(
+        item.kind in TYPE_KINDS for item in index.by_name.get(receiver, ())
+    ):
+        return True
+    if analysis is None or paths is None:
+        return False
+    if _receiver_module_paths(analysis, receiver, paths):
+        return True
+    return _module_path(receiver, paths, analysis.path) is not None
+
+
 def _external_reason(
-    reference: Reference, index: SymbolIndex | None = None
+    reference: Reference,
+    index: SymbolIndex | None = None,
+    analysis: FileAnalysis | None = None,
+    paths: PathIndex | None = None,
 ) -> str | None:
     """Receiver or builtin name that no project file can define."""
     if reference.receiver and reference.receiver not in (
@@ -384,7 +405,7 @@ def _external_reason(
         "this",
         "cls",
     ):
-        if index is None or reference.receiver not in index.by_name:
+        if not _receiver_is_project(reference.receiver, index, analysis, paths):
             return "external"
     if reference.raw_name in EXTERNAL_TYPE_NAMES:
         return "external"
@@ -515,7 +536,8 @@ def resolve_file(
                     continue
             unresolved.append(
                 _unresolved(
-                    reference, _external_reason(reference, index) or "no_binding"
+                    reference,
+                    _external_reason(reference, index, analysis, paths) or "no_binding",
                 )
             )
             continue
@@ -591,14 +613,15 @@ def resolve_file(
                 continue
             unresolved.append(
                 _unresolved(
-                    reference, _external_reason(reference, index) or "no_binding"
+                    reference,
+                    _external_reason(reference, index, analysis, paths) or "no_binding",
                 )
             )
             continue
 
         reason = "ambiguous" if candidates else "no_binding"
         if reason == "no_binding":
-            reason = _external_reason(reference, index) or reason
+            reason = _external_reason(reference, index, analysis, paths) or reason
         unresolved.append(_unresolved(reference, reason))
 
     edges.sort(
