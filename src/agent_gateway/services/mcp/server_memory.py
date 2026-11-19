@@ -107,6 +107,7 @@ from agent_gateway.services.mcp.server_tool_schema import (
 from agent_gateway.services.mcp.server_utils import dumps, int_arg
 from agent_gateway.services.memory import entities as memory_entities
 from agent_gateway.services.memory import link as memory_link
+from agent_gateway.services.memory import project_infer
 from agent_gateway.services.memory import store as memory_store
 from agent_gateway.services.memory import strength as memory_strength
 from agent_gateway.services.retrieval.arms.recall import (
@@ -387,8 +388,11 @@ def _level(value) -> int:
 
 def _dimensions_of(src: dict) -> dict[str, str]:
     """Normalized dimension values; the single place a write is validated."""
+    project = dimension_text(src.get("project")) or project_infer.infer_project(
+        src.get("source_files") or []
+    )
     return {
-        "project": dimension_text(src.get("project")),
+        "project": project,
         "subsystem": dimension_text(src.get("subsystem")),
         "task": dimension_text(src.get("task")),
         "task_type": enum_value(src.get("task_type"), MEMORY_TASK_TYPES),
