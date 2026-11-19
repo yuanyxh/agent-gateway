@@ -5,7 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -36,12 +36,20 @@ class ForgettingMathTests(unittest.TestCase):
             forgetting.retrievability(10, 10), forgetting.retrievability(100, 10)
         )
 
+    def test_days_between_mixes_naive_and_aware(self):
+        aware = datetime(2026, 11, 1, tzinfo=timezone.utc)
+        naive = datetime(2026, 11, 11)
+        self.assertAlmostEqual(forgetting.days_between(aware.isoformat(), naive), 10.0)
+        self.assertAlmostEqual(forgetting.days_between(naive, aware), 0.0)
+
 
 class DecayTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.db = os.path.join(self._tmp.name, "graph.sqlite")
         self.now = datetime(2026, 11, 11, 12, 0, 0)
+        for node_id in ("short", "long"):
+            store.upsert_node(node_id, layer="hot", status="active", db_path=self.db)
         with store.connect(self.db) as connection:
             connection.executemany(
                 "INSERT INTO memory_activation (node_id, strength, tier, stability, "
@@ -86,6 +94,18 @@ class DecayTests(unittest.TestCase):
         before = self._stability("short")
         strength.reinforce_memory("short", now=self.now, db_path=self.db)
         self.assertGreater(self._stability("short"), before)
+
+    def test_recall_with_aware_last_activation(self):
+        aware = self.now.replace(tzinfo=timezone.utc) - timedelta(days=10)
+        store.upsert_node("aware", layer="hot", status="active", db_path=self.db)
+        with store.connect(self.db) as connection:
+            connection.execute(
+                "INSERT INTO memory_activation (node_id, strength, tier, stability, "
+                "last_activated_at) VALUES ('aware', 0.5, 'active', 10.0, ?)",
+                (aware.isoformat(),),
+            )
+        strength.reinforce_memory("aware", db_path=self.db)
+        self.assertGreater(self._stability("aware"), 10.0)
 
     def _stability(self, node_id):
         with store.connect(self.db) as connection:

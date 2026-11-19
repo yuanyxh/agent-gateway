@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 
 from agent_gateway.services.memory import network, store
 
@@ -39,17 +39,25 @@ def initial_stability(importance: int) -> float:
 
 
 def _parse(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
     try:
         return datetime.fromisoformat(str(value))
     except (TypeError, ValueError):
         return None
 
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def days_between(start, now: datetime) -> float:
     parsed = _parse(start)
     if parsed is None:
         return 0.0
-    return max(0.0, (now - parsed).total_seconds() / 86400)
+    return max(0.0, (_as_utc(now) - _as_utc(parsed)).total_seconds() / 86400)
 
 
 def apply_decay_v3(*, now: datetime | None = None, db_path: str | None = None) -> dict:

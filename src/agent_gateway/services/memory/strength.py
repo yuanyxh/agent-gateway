@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from agent_gateway.core import config
 from agent_gateway.core.log_utils import setup_logging
@@ -96,8 +96,16 @@ def reinforce_memory(
     now: datetime | None = None,
     db_path: str | None = None,
 ) -> float:
-    now = now or datetime.now()
+    now = now or datetime.now(timezone.utc)
     with store.connect(db_path) as connection:
+        # Reinforcing a node the graph never mirrored used to insert an orphan row.
+        if (
+            connection.execute(
+                "SELECT 1 FROM memory_nodes WHERE node_id=? LIMIT 1", (node_id,)
+            ).fetchone()
+            is None
+        ):
+            return 0.0
         previous = connection.execute(
             "SELECT stability, difficulty, last_activated_at FROM memory_activation "
             "WHERE node_id=?",

@@ -392,6 +392,7 @@ class StrengthTest(_NetworkCase):
         )
 
     def test_reinforce_memory_and_synapse(self):
+        self.node("m1")
         network.upsert_activation("m1", {"strength": 0.2}, db_path=self.db)
         self.assertAlmostEqual(
             strength.reinforce_memory("m1", db_path=self.db), 0.32, places=5
@@ -407,6 +408,32 @@ class StrengthTest(_NetworkCase):
         self.assertAlmostEqual(
             strength.reinforce_synapse(synapse_id, db_path=self.db), 0.28, places=5
         )
+
+    def test_reinforce_skips_unknown_node(self):
+        self.assertEqual(strength.reinforce_memory("ghost", db_path=self.db), 0.0)
+        self.assertIsNone(network.get_activation("ghost", db_path=self.db))
+
+    def test_reinforce_after_node_delete_leaves_no_orphan(self):
+        self.node("m1")
+        network.upsert_activation("m1", {"strength": 0.5}, db_path=self.db)
+        with store.connect(self.db) as connection:
+            connection.execute("DELETE FROM memory_nodes WHERE node_id='m1'")
+            orphans = connection.execute(
+                "SELECT COUNT(*) FROM memory_activation a LEFT JOIN memory_nodes n "
+                "ON n.node_id=a.node_id WHERE n.node_id IS NULL"
+            ).fetchone()[0]
+        self.assertEqual(orphans, 1)
+        self.assertEqual(strength.reinforce_memory("m1", db_path=self.db), 0.0)
+        with store.connect(self.db) as connection:
+            remaining = connection.execute(
+                "SELECT COUNT(*) FROM memory_activation a LEFT JOIN memory_nodes n "
+                "ON n.node_id=a.node_id WHERE n.node_id IS NULL"
+            ).fetchone()[0]
+            strength_value = connection.execute(
+                "SELECT strength FROM memory_activation WHERE node_id='m1'"
+            ).fetchone()[0]
+        self.assertEqual(remaining, 1)
+        self.assertAlmostEqual(strength_value, 0.5, places=5)
 
     def test_coactivate_creates_then_strengthens(self):
         self.assertTrue(strength.coactivate("a", "b", db_path=self.db))
@@ -657,6 +684,15 @@ class ReconcileTest(_NetworkCase):
         self.assertEqual(result["ghost_members"], 1)
         self.assertEqual(network.neuron_of("m1", db_path=self.db), "")
         self.assertEqual(network.stats(db_path=self.db)["orphan_members"], 0)
+
+    def test_removes_orphan_activation_but_keeps_live_rows(self):
+        self.node("m1")
+        network.upsert_activation("m1", {"strength": 0.5}, db_path=self.db)
+        network.upsert_activation("ghost", {"strength": 0.5}, db_path=self.db)
+        result = network_build.reconcile_network(db_path=self.db)
+        self.assertEqual(result["orphan_activation"], 1)
+        self.assertIsNotNone(network.get_activation("m1", db_path=self.db))
+        self.assertIsNone(network.get_activation("ghost", db_path=self.db))
 
 
 class MergeSplitTest(_NetworkCase):

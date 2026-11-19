@@ -510,6 +510,11 @@ async def run_daily(
             network_build.migrate_network, db_path=db_path, apply=True, now=now
         )
         if memory_neuron_maintenance_enabled():
+            # Orphans are created between maintenance runs by reinforcement of
+            # recalled ids the graph never mirrored; cleanup must not wait a week.
+            migrated["reconciled"] = await asyncio.to_thread(
+                network_build.reconcile_network, db_path=db_path
+            )
             migrated["decay"] = await asyncio.to_thread(
                 strength.apply_decay, now=now, db_path=db_path
             )
