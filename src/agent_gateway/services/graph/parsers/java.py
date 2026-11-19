@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import logging
-
 from tree_sitter import Language, Node, Parser
 
 import tree_sitter_java
 
+from agent_gateway.services.graph.logging_setup import log_partial_parse
 from agent_gateway.services.graph.model import (
     FileAnalysis,
     ImportRef,
@@ -396,8 +395,6 @@ def parse(source: bytes, path: str) -> FileAnalysis:
     analysis = FileAnalysis(path=path, lang="java")
     if tree.root_node.has_error:
         analysis.partial_parse = True
-        logging.getLogger("graph").warning(
-            "partial parse: %s (tree-sitter error nodes)", path
-        )
+        log_partial_parse(path)
     _visit(tree.root_node, source, analysis, None)
     return analysis

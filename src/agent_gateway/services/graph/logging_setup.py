@@ -7,8 +7,11 @@ lands on the same file instead of the first one falling back to the cache.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import sys
+from datetime import datetime, timezone
 
 from agent_gateway.core import project_paths
 from agent_gateway.core.log_utils import setup_logging
@@ -51,3 +54,18 @@ def log_file() -> str | None:
 def graph_logger():
     """Return the shared graph logger, creating the per-project handler once."""
     return setup_logging("graph", json_format=True, path=log_file())
+
+
+def log_partial_parse(path: str) -> None:
+    """Emit a JSONL warning so every graph.log line carries a timestamp."""
+    logging.getLogger("graph").warning(
+        json.dumps(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "op": "partial_parse",
+                "file": path,
+                "error": "tree-sitter error nodes",
+            },
+            ensure_ascii=False,
+        )
+    )

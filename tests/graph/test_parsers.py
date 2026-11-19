@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 
 from agent_gateway.services.graph.parsers import python as python_parser
@@ -46,8 +47,14 @@ def helper(x):
         self.assertEqual(analysis.imports[0].names, ("sibling",))
 
     def test_error_nodes_are_tolerated(self):
-        analysis = python_parser.parse(b"def broken(:\n", "pkg/a.py")
+        with self.assertLogs("graph", level="WARNING") as logs:
+            analysis = python_parser.parse(b"def broken(:\n", "pkg/a.py")
         self.assertEqual(analysis.path, "pkg/a.py")
+        row = json.loads(logs.records[0].getMessage())
+        self.assertEqual(row["op"], "partial_parse")
+        self.assertEqual(row["file"], "pkg/a.py")
+        self.assertTrue(row["error"])
+        self.assertTrue(row["ts"])
 
 
 class SwiftParserTest(unittest.TestCase):
