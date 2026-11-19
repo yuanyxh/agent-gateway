@@ -49,7 +49,8 @@ HTTP endpoints and JSON contracts instead of importing internals.
 - Relevance floors are calibrated per embedding model and can be re-calibrated when
   the model changes.
 - Responses carry a status (`ok` / `weak_match` / `no_match`) and trace metadata, so
-  callers can tell an empty result from a weak one.
+  callers can tell an empty result from a weak one. Failed web reads also record
+  `error_code` as trace `error`.
 
 ### Project intelligence
 

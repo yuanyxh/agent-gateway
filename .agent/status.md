@@ -2,10 +2,12 @@
 
 ## 当前目标
 
-2026-11-16 审查后续：图索引 external 分类、`memory_edges` schema v4、热层退避与进度 future 已提交，待端到端验证。
+2026-11-19 审查修复：9 项 P2/P3 已实现并部署验证（wheel 重装 + MCP 重启）；全量 865 例与 ruff 通过。
 
-- 计划：utility 仓 `.agent/plans/2026-11-16-review-followups/`
-- 未验证：VM 内 v4 迁移、锁占用下的退避日志、external 占比复核
+- 计划：utility 仓 `.agent/plans/2026-11-19-review-fixes/`
+- 已验证：read_url trace error、强化时区、孤儿拦截、测试日志隔离、Qdrant 清理
+- 数据结果：project 缺失 86.6%→76.3%，孤儿 activation 7→0
+- 未验证：冷层历史 importance 仍为默认 5；graph.log 待下一次索引
 
 ## 进行中
 

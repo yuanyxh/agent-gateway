@@ -69,3 +69,7 @@
 | 2026-11-11 | D1 | 网络维护的全部同步重活移出事件循环：daily/weekly 外层、`govern_daily` 内部的 `build_candidates` / `_load_active_nodes` / `_apply_decisions`，以及 `score_relevance` / `forget_expired` / `VACUUM` 统一走 `asyncio.to_thread` | Agent | VM 实测 daily 期间 health 出现 8.712 秒停顿；移出后 max 204 ms | 保留同步调用版本即回到旧行为 |
 | 2026-11-11 | D2 | 共激活接入召回：每次 recall 对 top 结果中前 5 个不同神经元两两调用 `coactivate`，无突触时建 0.06 弱边，跳过 notes 行 | 用户 | 用户要求把已实现未接线的 `coactivate` 加上；弱边低于扩散 floor 0.15，不污染检索，反复共召回才逐步加权 | 删除 `server_memory.py` 中的调用即可 |
 | 2026-11-11 | D3 | `--drop-network` 删除网络表后把 `user_version` 置 0，下次连接自动重建 | 用户 | 用户要求「应能重建」；原实现写入当前版本号导致表永远不会重建 | 改回写 `SCHEMA_VERSION` 即恢复旧语义 |
+| 2026-11-19 | D1 | recall 的 `filter_fallback` 补齐是用户定下的设计：project 硬过滤无内容时允许被过滤行回填，按维度标注；禁止把补齐机制本身当缺陷 | 用户 | 用户明确纠正审查报告的 P2 定性；`e2a2c2c` 已写明回填语义 | 保留 `_fallback_candidates` 与补齐标注 |
+| 2026-11-19 | D2 | 记忆 project 归属由写入侧按 `source_files` 兜底推断，历史回填只补空值，无路径不写占位 | Agent | 6660/7674 active 节点缺 project，硬过滤命中不到内容；推断依据必须可追溯到路径 | 删除 `project_infer` 调用并停止回填脚本 |
+| 2026-11-19 | D3 | 冷层 `record_cold_memory` 的 importance 由 REST 调用方透传；测试日志隔离必须在 import 前设置 `GATEWAY_CACHE` | Agent | 冷层 1277 条全为默认 5；`core/log_utils` 在 import 时固化缓存根 | 恢复固定 5；删除 conftest 的 env 设置 |
+| 2026-11-19 | D3 | 部署 wheel 必须 `pip install --force-reinstall`，重启 Utility.app 不会更新 venv；旧 wheel 先备份 | Agent | 实测 app 重启后 venv 仍加载 00:55 旧 wheel，`project_infer` 不存在 | 从 `/tmp/gateway-wheel-<日期>/` 恢复旧 wheel 并重启子进程 |

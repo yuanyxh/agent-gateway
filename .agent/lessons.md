@@ -161,3 +161,26 @@
 - **决策**：质心是派生物，必须与其生成时的嵌入模型绑定；换 `EMBEDDER_MODEL` 必须重算 `neurons.centroid`（`scripts/memory_centroids.py`）；建边前校验质心维度集合，混维只告警并要求重算，不做静默降级。
 - **范围**：通用（任何存储嵌入派生物的系统）。
 - **晋升**：未评估。
+### 2026-11-19 记忆强化失败 23 次却被容错吞掉：naive/aware 时间相减
+
+- **场景**：`[memory] reinforce after recall failed: can't subtract offset-naive and offset-aware datetimes` 从 11-12 持续到 11-19，共 23 次；每次 recall 都触发，但异常被宽泛 `except` 降级为 warning。
+- **事实**：`strength.reinforce_memory` 用 `datetime.now()`，库里 `last_activated_at` 是 aware ISO；`forgetting.days_between` 直接相减。
+- **决策**：所有持久化时间统一 UTC aware；`days_between` 对 naive 按 UTC 解释后再算；容错仍保留，但新增回归测试覆盖 aware 输入。
+- **范围**：通用（任何存 ISO 时间戳再相减的系统）。
+- **晋升**：未评估。
+
+### 2026-11-19 孤儿 activation 由强化写入产生，清理任务只能收尸
+
+- **场景**：`memory_activation` 出现 5→7 条 node_id 在 `memory_nodes` 中不存在的行，且十分钟内增长。
+- **事实**：`reinforce_memory` 对 recall 返回的 id 直接 UPSERT，不校验节点是否仍在；`reconcile_network` 只在 weekly/daily 治理尾部运行。
+- **决策**：写入端先校验节点存在，不存在返回 0.0；每日维护保留孤儿清理作为兜底。
+- **范围**：通用（派生表写入必须先校验主表）。
+- **晋升**：未评估。
+
+### 2026-11-19 测试运行仍写生产日志：缓存根在 import 时固化
+
+- **场景**：`tests/test_mcp_server_wiring.py` 注册 `__boom__` 工具，生产 `~/.cache/agent-gateway/server.log` 累积 368 条测试样例。
+- **事实**：`core/log_utils._CACHE_BASE` 在 import 时读取 `GATEWAY_CACHE`；测试只隔离了 `QDRANT_PATH`，未在 import 前设置缓存根。
+- **决策**：`tests/conftest.py` 在任何被测模块 import 前设置临时 `GATEWAY_CACHE`；采集器增加 `__boom__`/`Mock`/`test_` 指纹兜底。
+- **范围**：通用（Python 测试隔离 logger）。
+- **晋升**：未评估。
