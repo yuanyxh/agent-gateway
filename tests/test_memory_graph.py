@@ -243,6 +243,20 @@ class LinkTest(_GraphCase):
             {(edge["from_id"], edge["to_id"], edge["type"]) for edge in edges},
         )
 
+    def test_cold_write_honours_importance(self):
+        passed = link.record_cold_memory(
+            "p1", "body", source_file="a.md", importance=8, db_path=self.db
+        )
+        defaulted = link.record_cold_memory(
+            "p2", "body2", source_file="b.md", db_path=self.db
+        )
+        self.assertEqual(
+            store.get_node(passed, db_path=self.db)["metadata"]["importance"], 8
+        )
+        self.assertEqual(
+            store.get_node(defaulted, db_path=self.db)["metadata"]["importance"], 5
+        )
+
     def test_cold_rewrite_keeps_the_previous_point_id(self):
         first = link.record_cold_memory(
             "p1", "body", source_file="a.md", db_path=self.db

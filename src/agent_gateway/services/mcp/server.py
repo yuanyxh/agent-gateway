@@ -586,17 +586,19 @@ def _record_web_trace(
                     "title": str(row.get("title") or ""),
                 }
             )
-    retrieval_trace.record(
-        {
-            "trace_id": trace_id,
-            "tool": tool,
-            "query": query,
-            "status": status,
-            "returned": items,
-            "lead": items[0] if items else None,
-            "latency_ms": {"total": round((time.perf_counter() - started) * 1000, 2)},
-        }
-    )
+    row = {
+        "trace_id": trace_id,
+        "tool": tool,
+        "query": query,
+        "status": status,
+        "returned": items,
+        "lead": items[0] if items else None,
+        "latency_ms": {"total": round((time.perf_counter() - started) * 1000, 2)},
+    }
+    error_code = payload.get("error_code")
+    if error_code:
+        row["error"] = str(error_code)
+    retrieval_trace.record(row)
     return trace_id
 
 
@@ -755,6 +757,7 @@ async def serve():
                 )
             vec = list(emb.embed(content))[0].tolist()
         source_file = str(body.get("source_file", ""))
+        importance = max(1, min(10, int_arg(body, "importance", 5)))
         now_iso = datetime.now().isoformat()
         # Deterministic id: the same source and body overwrite the same point instead
         # of appending a new uuid4 copy on every sync.
@@ -801,6 +804,7 @@ async def serve():
             episode_id=episode_id,
             dimensions=dimensions,
             created_at=str(body.get("created_at") or "") or now_iso,
+            importance=importance,
         )
         spawn_contradiction_check(contradiction_check_cold(content, point_id))
         return JSONResponse({"success": True, "layer": "cold"})
