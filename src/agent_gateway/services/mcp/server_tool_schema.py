@@ -84,28 +84,26 @@ DIMENSION_PROPERTIES: dict = {
     },
 }
 
-#: recall dimensions. Filters rank matching rows first; excluded rows return only
-#: to fill a short result, and boosts never change a score.
-RECALL_FILTER_NOTE = (
-    " Excluded rows fill a short result and carry filter_fallback; "
-    "they never outrank a match."
+#: Scoping is opt-in; omit these unless the user asks for a narrower result set.
+RECALL_PROJECT_DESCRIPTION = (
+    "Optional. Pass only when the user explicitly asks to scope results to "
+    "this project; omit otherwise, since memory is shared across projects."
+)
+RECALL_TICKET_DESCRIPTION = (
+    "Optional. Pass only when the user explicitly asks to scope results to "
+    "this work item; omit otherwise."
+)
+RECALL_LANGUAGE_DESCRIPTION = (
+    "Optional. Pass only when the user explicitly asks to filter memories by "
+    "language; omit otherwise."
 )
 RECALL_FILTER_PROPERTIES: dict = {
-    "project": {
-        "type": "string",
-        "description": "Filter: this project's memories come first."
-        + RECALL_FILTER_NOTE,
-    },
-    "ticket": {
-        "type": "string",
-        "description": "Filter: this work item's memories come first."
-        + RECALL_FILTER_NOTE,
-    },
+    "project": {"type": "string", "description": RECALL_PROJECT_DESCRIPTION},
+    "ticket": {"type": "string", "description": RECALL_TICKET_DESCRIPTION},
     "language": {
         "type": "string",
         "enum": list(LANGUAGE_TYPES),
-        "description": "Filter: memories in this language come first."
-        + RECALL_FILTER_NOTE,
+        "description": RECALL_LANGUAGE_DESCRIPTION,
     },
 }
 

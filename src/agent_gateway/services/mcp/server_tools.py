@@ -25,7 +25,9 @@ from agent_gateway.services.mcp.server_tool_schema import (
     DEFAULT_WEBSEARCH_LIMIT,
     DEFAULT_WEBSEARCH_MAX_CHARS,
     MEMORY_ITEM_SCHEMA,
-    RECALL_FILTER_NOTE,
+    RECALL_LANGUAGE_DESCRIPTION,
+    RECALL_PROJECT_DESCRIPTION,
+    RECALL_TICKET_DESCRIPTION,
     TOOL_DESCRIPTIONS,
 )
 from agent_gateway.services.mcp.graph_tools import (
@@ -345,24 +347,15 @@ def register_tools(mcp, handlers: dict[str, Callable]) -> None:
         ] = "unknown",
         project: Annotated[
             str | None,
-            Field(
-                description="Filter: this project's memories come first."
-                + RECALL_FILTER_NOTE
-            ),
+            Field(description=RECALL_PROJECT_DESCRIPTION),
         ] = None,
         ticket: Annotated[
             str | None,
-            Field(
-                description="Filter: this work item's memories come first."
-                + RECALL_FILTER_NOTE
-            ),
+            Field(description=RECALL_TICKET_DESCRIPTION),
         ] = None,
         language: Annotated[
             Literal["zh", "en", "mixed"] | None,
-            Field(
-                description="Filter: memories in this language come first."
-                + RECALL_FILTER_NOTE
-            ),
+            Field(description=RECALL_LANGUAGE_DESCRIPTION),
         ] = None,
         subsystem: Annotated[
             str | None,
