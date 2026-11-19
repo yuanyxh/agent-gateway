@@ -3,6 +3,9 @@ import os
 import tempfile
 
 os.environ.setdefault("QDRANT_PATH", tempfile.mkdtemp(prefix="agent-gateway-test-"))
+os.environ.setdefault(
+    "GATEWAY_CACHE", tempfile.mkdtemp(prefix="agent-gateway-test-cache-")
+)
 
 import unittest
 
