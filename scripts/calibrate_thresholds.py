@@ -37,7 +37,10 @@ def call_tool(endpoint: str, query: str, limit: int) -> dict:
         "jsonrpc": "2.0",
         "id": next(COUNTER),
         "method": "tools/call",
-        "params": {"name": "recall", "arguments": {"query": query, "limit": limit}},
+        "params": {
+            "name": "recall",
+            "arguments": {"keywords": [], "query": query, "limit": limit},
+        },
     }
     request = urllib.request.Request(
         endpoint,
@@ -47,16 +50,75 @@ def call_tool(endpoint: str, query: str, limit: int) -> dict:
             "Accept": "application/json, text/event-stream",
         },
     )
-    with urllib.request.urlopen(request, timeout=40) as response:
-        payload = json.loads(response.read().decode())
+    with urllib.request.urlopen(request, timeout=60) as response:
+        raw = response.read().decode()
+    payload = _jsonrpc_payload(raw)
     text = ((payload.get("result") or {}).get("content") or [{}])[0].get("text", "")
     return json.loads(text)
 
 
+def _jsonrpc_payload(raw: str) -> dict:
+    """The JSON-RPC response, from a plain body or from an SSE event stream."""
+    if not raw.lstrip().startswith("event:") and "\ndata:" not in raw:
+        return json.loads(raw)
+    for event in reversed(raw.split("\n\n")):
+        lines = [line[5:] for line in event.splitlines() if line.startswith("data:")]
+        if not lines:
+            continue
+        try:
+            candidate = json.loads("\n".join(lines))
+        except ValueError:
+            continue
+        if isinstance(candidate, dict) and (
+            "result" in candidate or "error" in candidate
+        ):
+            return candidate
+    raise ValueError(f"No JSON-RPC response in: {raw[:200]!r}")
+
+
+def _trace_row(trace_id: str, trace_dir: Path) -> dict | None:
+    if not trace_id:
+        return None
+    for path in sorted(trace_dir.glob("*.jsonl"), reverse=True):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if trace_id not in line:
+                continue
+            row = json.loads(line)
+            if row.get("trace_id") == trace_id:
+                return row
+    return None
+
+
+def _dense_scores(entry: dict | None) -> dict[str, dict[str, float]]:
+    """layer -> id -> best dense score across passes."""
+    out: dict[str, dict[str, float]] = {"hot": {}, "cold": {}}
+    for step in (entry or {}).get("passes") or []:
+        for arm in step.get("arms") or []:
+            name = str(arm.get("name") or "")
+            if name not in ("dense_hot", "dense_cold"):
+                continue
+            layer = name.rsplit("_", 1)[1]
+            for hit in arm.get("hits") or []:
+                if hit.get("score_kind") != "dense":
+                    continue
+                try:
+                    score = float(hit.get("score"))
+                except (TypeError, ValueError):
+                    continue
+                rid = str(hit.get("id"))
+                out[layer][rid] = max(out[layer].get(rid, -1.0), score)
+    return out
+
+
 def collect(
-    gold: list[dict], endpoint: str, limit: int
+    gold: list[dict], endpoint: str, limit: int, trace_dir: Path
 ) -> dict[str, list[tuple[float, bool]]]:
-    """layer -> [(score, is_relevant)] using the probes' own labels."""
+    """layer -> [(dense score, is_relevant)] from each query's trace row.
+
+    The result list carries fused scores, which are not on the same scale as the
+    floors (those gate the dense arm). The trace row preserves the raw dense
+    score of every candidate, so the sweep sees what the floor actually rejects.
+    """
     samples: dict[str, list[tuple[float, bool]]] = defaultdict(list)
     for entry in gold:
         data = call_tool(endpoint, entry["query"], limit)
@@ -65,15 +127,10 @@ def collect(
             for key in ("relevant", "partial")
             for item in entry.get(key) or []
         }
-        for item in data.get("results") or []:
-            layer = str(item.get("layer") or "")
-            if layer not in ("hot", "cold"):
-                continue
-            try:
-                score = float(item.get("score"))
-            except (TypeError, ValueError):
-                continue
-            samples[layer].append((score, item.get("id") in good))
+        scores = _dense_scores(_trace_row(str(data.get("trace_id") or ""), trace_dir))
+        for layer, hits in scores.items():
+            for rid, score in hits.items():
+                samples[layer].append((score, rid in good))
     return samples
 
 
@@ -142,6 +199,7 @@ def main() -> int:
     parser.add_argument("--tag", default="")
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--out", default="")
+    parser.add_argument("--trace-dir", default="")
     args = parser.parse_args()
 
     gold = [
@@ -151,7 +209,14 @@ def main() -> int:
         print("empty gold set")
         return 1
 
-    samples = collect(gold, args.endpoint, args.limit)
+    if args.trace_dir:
+        trace_dir = Path(args.trace_dir)
+    else:
+        from agent_gateway.core.paths import gateway_cache
+
+        trace_dir = gateway_cache() / "retrieval"
+
+    samples = collect(gold, args.endpoint, args.limit, trace_dir)
     report: dict = {"tag": args.tag, "layers": {}}
     chosen: dict[str, float] = {}
     for layer, pairs in sorted(samples.items()):

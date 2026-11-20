@@ -125,6 +125,7 @@ def migrate_network(
                         db_path=db_path,
                     )
         network.refresh_neuron_counts(db_path=db_path)
+        network.refresh_importance(db_path=db_path)
         network.set_meta("migrated_at", now.isoformat(), db_path=db_path)
     return {
         "nodes": len(nodes),

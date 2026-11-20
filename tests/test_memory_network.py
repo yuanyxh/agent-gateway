@@ -167,6 +167,19 @@ class MemberTest(_NetworkCase):
         self.assertEqual(network.refresh_neuron_counts("ep_1", db_path=self.db), 1)
         self.assertEqual(network.get_neuron("ep_1", db_path=self.db)["member_count"], 2)
 
+    def test_refresh_importance_averages_member_scores(self):
+        self.node("m1", importance=8)
+        self.node("m2", importance=2)
+        network.upsert_neuron({"neuron_id": "ep_1"}, db_path=self.db)
+        network.upsert_member("ep_1", "m1", db_path=self.db)
+        network.upsert_member("ep_1", "m2", db_path=self.db)
+
+        network.refresh_importance(db_path=self.db)
+
+        self.assertAlmostEqual(
+            network.get_neuron("ep_1", db_path=self.db)["importance"], 0.5
+        )
+
     def test_remove_member_and_unknown_neuron(self):
         self.node("m1")
         network.upsert_member("ep_1", "m1", db_path=self.db)

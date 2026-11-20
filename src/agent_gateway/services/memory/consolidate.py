@@ -42,6 +42,9 @@ from agent_gateway.services.memory import (
     strength,
     store,
 )
+from agent_gateway.services.memory.group_governance import (
+    MAX_CALLS as GOVERNANCE_MAX_CALLS,
+)
 from agent_gateway.services.memory.group_governance import govern_daily
 from agent_gateway.services.retrieval.gate.thresholds import floors_for
 
@@ -794,11 +797,17 @@ async def run_weekly(
             "capped": capped,
         }
     if not dry_run:
+        governance = await govern_daily(
+            db_path=db_path, scope_all=True, max_calls=GOVERNANCE_MAX_CALLS
+        )
         await asyncio.to_thread(store.vacuum, db_path=db_path)
+    else:
+        governance = {}
     return {
         "disputes": disputes,
         "archived": archived,
         "network": network_result,
+        "governance": governance,
     }
 
 

@@ -52,6 +52,11 @@ logger = setup_logging("server")
 _HOT_RESULT_KEYS = ("id", "layer", "content", "score")
 _HOT_META_KEYS = ("tags", "confidence", STATUS_FIELD)
 
+#: A floor miss this close to the floor is kept as a marked weak candidate
+#: instead of disappearing; the pipeline only uses it to fill a short result.
+FLOOR_FALLBACK_ENABLED = os.environ.get("RECALL_FLOOR_FALLBACK", "1") != "0"
+FLOOR_FALLBACK_RATIO = float(os.environ.get("RECALL_FLOOR_FALLBACK_RATIO", "0.9"))
+
 
 def memory_status(meta: dict | None) -> str:
     """Lifecycle status; legacy entries without the field count as active."""
@@ -157,8 +162,10 @@ class HotMemoryArm:
     ) -> ArmResult:
         hot_memory = server_state.get_hot_memory()
         if hot_memory is None:
-            return ArmResult(name=self.name)
+            return ArmResult(name=self.name, stats={"unavailable": 1})
         items: list[RetrievedItem] = []
+        weak: list[RetrievedItem] = []
+        stats = {"raw": 0, "hidden": 0, "floor_rejected": 0, "literal": 0}
         reader_agent = str((filters or {}).get("reader_agent_id") or "unknown")
         needles = split_terms(query.root_text or query.text)
         try:
@@ -179,30 +186,37 @@ class HotMemoryArm:
                 explain=True,
             )
             rows = raw if isinstance(raw, list) else raw.get("results", [])
+            stats["raw"] = len(rows)
             for row in rows:
                 if isinstance(row, str):
                     continue
                 meta = row.get("metadata") or {}
                 if not visible_to(meta, reader_agent):
+                    stats["hidden"] += 1
                     continue
                 # Archive writes land on the top-level payload as well as metadata,
                 # so both scopes are honoured here.
                 if not self._include_archived and (
                     meta.get("archived") or row.get("archived")
                 ):
+                    stats["hidden"] += 1
                     continue
                 status = str(
                     meta.get(STATUS_FIELD) or row.get("status") or STATUS_ACTIVE
                 )
                 if status == STATUS_DELETED:
+                    stats["hidden"] += 1
                     continue
                 if status == STATUS_ARCHIVED and not self._include_archived:
+                    stats["hidden"] += 1
                     continue
                 if status == STATUS_SUPERSEDED and not self._include_superseded:
+                    stats["hidden"] += 1
                     continue
                 try:
                     score = float(row.get("score"))
                 except (TypeError, ValueError):
+                    stats["hidden"] += 1
                     continue
                 # mem0's final score is a hybrid (semantic + BM25) / 2, so it is not
                 # comparable to a cosine floor: when only one candidate survives the
@@ -219,12 +233,19 @@ class HotMemoryArm:
                         not needles
                         or notes_coverage(text, needles) < self._literal_coverage
                     ):
+                        stats["floor_rejected"] += 1
+                        if (
+                            FLOOR_FALLBACK_ENABLED
+                            and score >= self._min_score * FLOOR_FALLBACK_RATIO
+                        ):
+                            weak.append(self._project(row, meta, score, "weak"))
                         continue
+                    stats["literal"] += 1
                     match_kind = "literal"
                 items.append(self._project(row, meta, score, match_kind))
         except Exception as e:  # noqa: BLE001 - degrade to the cold layer
             logger.warning(f"Hot search failed: {e}")
-            return ArmResult(name=self.name, error=str(e))
+            return ArmResult(name=self.name, error=str(e), stats=stats)
         if items:
             # Quality scores live on the graph node, not in the mem0 payload. A graph
             # failure must not discard results this arm already has: the pipeline
@@ -240,7 +261,12 @@ class HotMemoryArm:
                     item.extra["relevance"] = (node.get("metadata") or {}).get(
                         "relevance"
                     )
-        return ArmResult(name=self.name, items=items)
+        return ArmResult(
+            name=self.name,
+            items=items,
+            stats={**stats, "kept": len(items), "weak": len(weak)},
+            weak_items=weak[: limit * 2],
+        )
 
     def _project(
         self, row: dict, meta: dict, score: float, match_kind: str = "direct"
@@ -288,11 +314,13 @@ class ColdMemoryArm:
     ) -> ArmResult:
         client = server_state.get_qdrant()
         if client is None:
-            return ArmResult(name=self.name)
+            return ArmResult(name=self.name, stats={"unavailable": 1})
         query_vec = server_embed.embed_query(query.text)
         if query_vec is None:
-            return ArmResult(name=self.name)
+            return ArmResult(name=self.name, stats={"unavailable": 1})
         items: list[RetrievedItem] = []
+        weak: list[RetrievedItem] = []
+        stats = {"raw": 0, "floor_rejected": 0}
         try:
             must_not = [
                 FieldCondition(key=COLD_STALE_FIELD, match=MatchValue(value=True))
@@ -304,42 +332,53 @@ class ColdMemoryArm:
             resp = client.query_points(
                 collection_name=COLD_COLLECTION,
                 query=query_vec.tolist(),
-                limit=limit,
+                limit=max(limit * 4, limit + 10),
                 query_filter=Filter(must_not=must_not),
-                score_threshold=self._min_score,
+                score_threshold=None,
             )
+            stats["raw"] = len(resp.points)
             for hit in resp.points:
-                if hit.score is None or hit.score < self._min_score:
+                if hit.score is None:
                     continue
                 payload = hit.payload or {}
-                items.append(
-                    RetrievedItem(
-                        id=str(hit.id),
-                        kind="memory",
-                        score=float(hit.score),
-                        score_kind="dense",
-                        content=payload.get("content", ""),
-                        layer="cold",
-                        extra={
-                            **row_dimensions(
-                                payload, str(payload.get("content") or "")
-                            ),
-                            "source_file": payload.get("source_file", ""),
-                            "created_at": payload.get("created_at", ""),
-                            "type": payload.get("type", ""),
-                            "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
-                            "access_count": payload.get("access_count", 0),
-                            "last_accessed_at": payload.get("last_accessed_at", ""),
-                            "relevance": payload.get("relevance"),
-                            "episode_id": payload.get(EPISODE_FIELD, ""),
-                        },
-                    )
+                item = RetrievedItem(
+                    id=str(hit.id),
+                    kind="memory",
+                    score=float(hit.score),
+                    score_kind="dense",
+                    content=payload.get("content", ""),
+                    layer="cold",
+                    extra={
+                        **row_dimensions(payload, str(payload.get("content") or "")),
+                        "source_file": payload.get("source_file", ""),
+                        "created_at": payload.get("created_at", ""),
+                        "type": payload.get("type", ""),
+                        "heat_score": payload.get("heat_score", DEFAULT_HEAT_SCORE),
+                        "access_count": payload.get("access_count", 0),
+                        "last_accessed_at": payload.get("last_accessed_at", ""),
+                        "relevance": payload.get("relevance"),
+                        "episode_id": payload.get(EPISODE_FIELD, ""),
+                    },
                 )
+                if hit.score < self._min_score:
+                    stats["floor_rejected"] += 1
+                    if (
+                        FLOOR_FALLBACK_ENABLED
+                        and hit.score >= self._min_score * FLOOR_FALLBACK_RATIO
+                    ):
+                        weak.append(item)
+                    continue
+                items.append(item)
                 update_cold_heat(hit.id)
         except Exception as e:  # noqa: BLE001 - keep notes results usable
             logger.warning(f"Qdrant cold search failed: {e}")
-            return ArmResult(name=self.name, items=items, error=str(e))
-        return ArmResult(name=self.name, items=items)
+            return ArmResult(name=self.name, items=items, error=str(e), stats=stats)
+        return ArmResult(
+            name=self.name,
+            items=items,
+            stats={**stats, "kept": len(items), "weak": len(weak)},
+            weak_items=weak[: limit * 2],
+        )
 
 
 class NotesArm:
@@ -388,9 +427,10 @@ class NotesArm:
     ) -> ArmResult:
         needles = split_terms(query.root_text or query.text)
         if not needles:
-            return ArmResult(name=self.name)
+            return ArmResult(name=self.name, stats={"no_terms": 1})
         head = needles[0]
         items: list[RetrievedItem] = []
+        stats = {"scanned": 0, "coverage_rejected": 0}
         try:
             for root, dirs, files in os.walk(NOTES_DIR):
                 dirs[:] = [
@@ -406,8 +446,10 @@ class NotesArm:
                             text = fh.read()
                     except OSError:
                         continue
+                    stats["scanned"] += 1
                     coverage = notes_coverage(text, needles)
                     if coverage < self._min_coverage:
+                        stats["coverage_rejected"] += 1
                         continue
                     items.append(
                         RetrievedItem(
@@ -427,12 +469,16 @@ class NotesArm:
                     )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Notes search failed: {e}")
-            return ArmResult(name=self.name, items=items, error=str(e))
+            return ArmResult(name=self.name, items=items, error=str(e), stats=stats)
         if self._min_semantic > 0 and items:
             items.sort(key=lambda item: -item.score)
             items = items[: self._semantic_candidates]
-            items = self._semantic_filter(query.root_text or query.text, items)
-        return ArmResult(name=self.name, items=items)
+            kept = self._semantic_filter(query.root_text or query.text, items)
+            stats["semantic_rejected"] = len(items) - len(kept)
+            items = kept
+        return ArmResult(
+            name=self.name, items=items, stats={**stats, "kept": len(items)}
+        )
 
 
 def update_cold_heat(point_id: str) -> None:

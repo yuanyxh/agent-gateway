@@ -304,3 +304,18 @@ def embed_query(text: str) -> np.ndarray | None:
             while len(_query_cache) > _QUERY_CACHE_SIZE:
                 _query_cache.popitem(last=False)
     return vec
+
+
+def count_tokens(text: str) -> int | None:
+    """Token count before truncation, or None when the tokenizer is unavailable."""
+    with embedder_session() as emb:
+        if emb is None:
+            return None
+        counter = getattr(getattr(emb, "model", emb), "token_count", None)
+        if not callable(counter):
+            return None
+        try:
+            return int(counter(text))
+        except Exception as e:  # noqa: BLE001 - a missing count must not stop calibration
+            logger.warning(f"Token count failed: {e}")
+            return None

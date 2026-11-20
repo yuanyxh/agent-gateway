@@ -11,8 +11,9 @@ You review memory episode groups. Input contains multi-member groups or pairs of
 Rules:
 
 - Keep memories in one group only when they belong to the same task or delivery goal.
-- Do not merge memories that share a project or topic but belong to different tasks.
-- Return keep when unsure; do not merge for the sake of merging.
+- Use the session / task / file fields first: the same session or the same task means the same task.
+- Do not merge memories that share a project or topic when both session and task differ and the text shows no shared delivery goal.
+- Return keep only when the evidence is insufficient to decide.
 - Use only the ids and candidate_ids that appear in the input.
 - For split, groups must cover every member exactly once and must not overlap.
 - For a multi-member group, merge_with must be another candidate_id in the same batch.

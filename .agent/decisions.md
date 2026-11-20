@@ -73,3 +73,15 @@
 | 2026-11-19 | D2 | 记忆 project 归属由写入侧按 `source_files` 兜底推断，历史回填只补空值，无路径不写占位 | Agent | 6660/7674 active 节点缺 project，硬过滤命中不到内容；推断依据必须可追溯到路径 | 删除 `project_infer` 调用并停止回填脚本 |
 | 2026-11-19 | D3 | 冷层 `record_cold_memory` 的 importance 由 REST 调用方透传；测试日志隔离必须在 import 前设置 `GATEWAY_CACHE` | Agent | 冷层 1277 条全为默认 5；`core/log_utils` 在 import 时固化缓存根 | 恢复固定 5；删除 conftest 的 env 设置 |
 | 2026-11-19 | D3 | 部署 wheel 必须 `pip install --force-reinstall`，重启 Utility.app 不会更新 venv；旧 wheel 先备份 | Agent | 实测 app 重启后 venv 仍加载 00:55 旧 wheel，`project_infer` 不存在 | 从 `/tmp/gateway-wheel-<日期>/` 恢复旧 wheel 并重启子进程 |
+| 2026-11-19 | D2 | recall 的单关键词变体按需触发：base 两路去重后不足 limit 才跑，最多 3 路 | Agent | 常驻 3 路使 p50 3057ms；按需后 2899ms 且命中率不变 | 删除 `_term_variants` 调用 |
+| 2026-11-19 | D2 | rerank 负分丢弃只从 strict 行回填，不复活 floor 补充分 | Agent | 全量回填时无内容查询命中从 18.8% 升到 50%；仅 strict 回填后误报不增 | 删除 `strict_dropped` 回填块 |
+| 2026-11-19 | D2 | 实体臂 ASCII 名按词边界匹配，纯符号排除；CJK 仍子串匹配 | Agent | 随机串 `zzz-nonexistent-abc` 因实体 `en`、`-` 召回 10 条 | 恢复 `instr` 子串匹配 |
+| 2026-11-19 | D3 | hot floor 暂维持 0.616；0.55 在矩阵上提升命中但会与 rerank 兜底叠加放大弱结果 | Agent | 评估数据见 `.agent/plans/2026-11-19-recall-recallability/plan.md` | 把 `retrieval_thresholds.json` 的 hot 改为 0.55 |
+| 2026-11-19 | D2 | 候选：floor 改由 gold 249 条完整查询的 dense 分数离线校准，自校准只做向量一致性体检；生产阈值暂不动 | Agent | 全量正文自检索恒等 1.0（冷层 1297 条 self p50=1.0）；gold 数据见计划 P0 实证 | 恢复 20 字探针会重新引入截断，禁用 |
+| 2026-11-19 | D2 | cold/expanded floor 0.569→0.50，hot 0.616 与 notes_semantic 0.37 不变 | 用户批准写入生产 | 生产 trace 冷层最终出现率 3.2%→21.1%；形态矩阵命中 100%、误报 0、p50 2.8s | 恢复 `retrieval_thresholds.json.bak-cold050-20261119T175105` 即回退 |
+| 2026-11-19 | D2 | 候选：部署 filter_fallback 修复与冷层 project 推断，并回填生产冷层 573 条 | Agent | source_file 可推断 44% 冷层 project；无来源/冲突的 724 条保持空 | 回填备份 JSON 可逐条恢复项目字段 |
+| 2026-11-20 | D2 | 写入侧分组继承改为近邻多数投票，阈值 0.80→0.65 | 用户批准 | 4200/4784 组为单例，今日新增 243 条中 112 条仍单例；原逻辑只看 top-1 | 恢复 `EPISODE_INHERIT_SIMILARITY=0.80` 并改回单条继承 |
+| 2026-11-20 | D2 | 周任务新增全量分组治理回扫（`scope_all`），日任务保持 24h 增量 | 用户批准 | 日任务只覆盖近 24h 触及的组，历史碎片永不重扫 | 去掉 `run_weekly` 中的 `govern_daily(scope_all=True)` |
+| 2026-11-20 | D3 | 治理候选注入 session/task/file，提示词改为同 session 或同 task 即同一次任务 | 用户批准 | 候选原无任务信号，LLM 无法判断「同一次任务」，只能保守 keep | 恢复旧 `render_candidates` 与提示词 |
+| 2026-11-20 | D2 | `neurons.importance` 由成员节点 importance 均值/10 聚合（0-1），随每日网络维护刷新 | 用户批准 | 5635 个神经元全为 0，重放排序退化 | 删除 `network.refresh_importance` 调用 |
+| 2026-11-20 | D2 | 重放种子只取有活跃突触的神经元 | 用户批准 | 仅修 importance 仍会抽到孤立节点；副本验证 80 个种子全部有边 | 删除 `sample_seeds` 的 `EXISTS` 条件 |

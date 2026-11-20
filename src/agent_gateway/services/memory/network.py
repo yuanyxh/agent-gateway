@@ -433,6 +433,19 @@ def refresh_neuron_counts(neuron_id: str = "", db_path: str | None = None) -> in
         return cursor.rowcount
 
 
+def refresh_importance(db_path: str | None = None) -> int:
+    """Aggregate member importance (1-10) into a 0-1 neuron score."""
+    with store.connect(db_path) as connection:
+        cursor = connection.execute(
+            "UPDATE neurons SET importance=COALESCE(("
+            "SELECT MIN(1.0, AVG(CAST(COALESCE("
+            "json_extract(n.metadata, '$.importance'), 5) AS REAL)) / 10.0) "
+            "FROM neuron_members m JOIN memory_nodes n ON n.node_id=m.memory_id "
+            "WHERE m.neuron_id=neurons.neuron_id), 0.0)"
+        )
+        return cursor.rowcount
+
+
 def _float(value, default: float) -> float:
     try:
         return float(value)

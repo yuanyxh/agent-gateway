@@ -45,6 +45,19 @@ class SamplingTests(_ReplayCase):
         seeds = replay.sample_seeds(limit=5, db_path=self.db)
         self.assertEqual({seed["neuron_id"] for seed in seeds}, {"a", "b", "c"})
 
+    def test_seeds_skip_neurons_without_synapses(self):
+        with store.connect(self.db) as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO neurons (neuron_id, title, member_count, "
+                "tier, status, importance, created_at, updated_at) "
+                "VALUES ('isolated', 'alone', 1, 'active', 'active', 9, ?, ?)",
+                (self.now, self.now),
+            )
+
+        seeds = replay.sample_seeds(limit=10, db_path=self.db)
+
+        self.assertNotIn("isolated", {seed["neuron_id"] for seed in seeds})
+
     def test_walk_produces_paths(self):
         index = graph_index.GraphIndex.load(self.db)
         sequences = replay.walk_sequences(index, "a")

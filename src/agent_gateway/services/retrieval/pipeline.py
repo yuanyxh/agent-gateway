@@ -26,6 +26,10 @@ Reranker = Callable[[Query, list[RetrievedItem]], list[RetrievedItem]]
 #: Candidates fetched per arm; fusion truncates to the caller's limit afterwards.
 PER_ARM_LIMIT = 10
 
+#: Extra single-term passes. Three covers the most specific keywords without
+#: multiplying arm latency by the whole list.
+MAX_TERM_VARIANTS = 3
+
 #: Each matching boost field lifts a row's rank by 10%; three fields cap the lift
 #: at 1.30. Only order changes, never the score the gate reads.
 BOOST_STEP = 0.10
@@ -106,6 +110,8 @@ class Pipeline:
             items=sorted(partial.items, key=lambda i: i.score, reverse=True),
             elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
             error=partial.error,
+            stats=partial.stats,
+            weak_items=partial.weak_items,
         )
 
     def _retrieve(
@@ -133,7 +139,7 @@ class Pipeline:
         return collected
 
     def _query_variants(self, query: Query) -> list[tuple[str, Query]]:
-        """The keyword pass plus, when supplied, a separate semantic pass."""
+        """Keyword pass, semantic pass, then one pass per specific term."""
         variants = [("primary", query)]
         semantic = query.semantic_text.strip()
         if semantic and semantic != query.text.strip():
@@ -150,6 +156,35 @@ class Pipeline:
                     ),
                 )
             )
+        return variants
+
+    def _term_variants(self, query: Query) -> list[tuple[str, Query]]:
+        """One pass per specific term, added only when the base passes are short."""
+        seen = {q.text.strip() for _, q in self._query_variants(query)}
+        terms = sorted(
+            {t.strip() for t in query.terms if len(t.strip()) >= 2},
+            key=lambda t: (-len(t), t),
+        )
+        variants: list[tuple[str, Query]] = []
+        for term in terms:
+            if term in seen:
+                continue
+            seen.add(term)
+            variants.append(
+                (
+                    f"term{len(variants) + 1}",
+                    Query(
+                        text=term,
+                        language=detect_language(term),
+                        root_text=query.root_text or query.text,
+                        filters=query.filters,
+                        boost=query.boost,
+                        expose=query.expose,
+                    ),
+                )
+            )
+            if len(variants) >= MAX_TERM_VARIANTS:
+                break
         return variants
 
     def run(
@@ -187,6 +222,12 @@ class Pipeline:
         passes: list[tuple[str, list[ArmResult]]] = []
         for label, variant in self._query_variants(query):
             passes.append((label, self._retrieve(variant, limit, filters)))
+        # Each extra pass costs an embedding round trip, so terms only run when
+        # the base passes leave the result short.
+        seen_ids = {item.id for _, arms in passes for arm in arms for item in arm.items}
+        if len(seen_ids) < limit:
+            for label, variant in self._term_variants(query):
+                passes.append((label, self._retrieve(variant, limit, filters)))
         latency["retrieve"] = round((time.perf_counter() - retrieve_started) * 1000, 2)
 
         # Narrowing runs before fusion truncates, or a matching row ranked below
@@ -194,12 +235,14 @@ class Pipeline:
         retrieved = sum(len(arm.items) for _, arms in passes for arm in arms)
         narrowed: list[tuple[str, list[ArmResult]]] = []
         fallback: list[RetrievedItem] = []
+        weak_pool: list[RetrievedItem] = []
         for label, arms in passes:
             kept: list[ArmResult] = []
             for arm in arms:
                 result, rejected = self._filtered_arm(arm, query)
                 kept.append(result)
                 fallback.extend(rejected)
+                weak_pool.extend(self._narrow(query, arm.weak_items))
             narrowed.append((label, kept))
         passes = narrowed
         filtered = retrieved - sum(len(arm.items) for _, arms in passes for arm in arms)
@@ -222,11 +265,17 @@ class Pipeline:
         strict_ids = {item.id for item in strict}
         merged = list(strict)
         if len(strict) < limit:
+            # Near-miss rows below the floor come first: they passed every other
+            # filter and were only rejected on score.
+            merged.extend(
+                self._weak_candidates(weak_pool, limit - len(merged), strict_ids)
+            )
+        if len(merged) < limit:
             # A short strict result is padded from excluded rows, and the padded
             # rows must pass through the same rerank as the strict ones.
             merged.extend(
                 self._fallback_candidates(
-                    query, fallback, limit - len(strict), strict_ids
+                    query, fallback, limit - len(merged), strict_ids
                 )
             )
         if self.reranker is not None and merged:
@@ -238,10 +287,23 @@ class Pipeline:
             else:
                 # Rerank may lift a padded row; the caller asked for strict rows,
                 # so keep that group ahead and preserve rerank order inside both.
+                reranked_ids = {item.id for item in ranked}
+                dropped = [item for item in merged if item.id not in reranked_ids]
                 merged = [
                     *[item for item in ranked if item.id in strict_ids],
                     *[item for item in ranked if item.id not in strict_ids],
                 ]
+                # Revive strict and filter-excluded rows; never floor padding.
+                trusted_dropped = [
+                    item
+                    for item in dropped
+                    if item.id in strict_ids or item.extra.get("filter_fallback")
+                ]
+                if len(merged) < limit and trusted_dropped:
+                    merged.extend(
+                        replace(item, extra={**item.extra, "rerank_fallback": True})
+                        for item in trusted_dropped[: limit - len(merged)]
+                    )
             latency["rerank"] = round((time.perf_counter() - rerank_started) * 1000, 2)
 
         items = [
@@ -257,11 +319,22 @@ class Pipeline:
 
         top = items[:limit]
         fallback_count = sum(1 for item in top if item.extra.get("filter_fallback"))
+        floor_fallback_count = sum(
+            1 for item in top if item.extra.get("floor_fallback")
+        )
+        rerank_fallback_count = sum(
+            1 for item in top if item.extra.get("rerank_fallback")
+        )
         verdict = self.gate.judge(query, top, related)
-        if top and fallback_count == len(top) and verdict.status == "ok":
-            verdict = replace(
-                verdict, status="weak_match", reason="filter_fallback_only"
-            )
+        padded = fallback_count + floor_fallback_count + rerank_fallback_count
+        if top and padded >= len(top) and verdict.status == "ok":
+            if rerank_fallback_count:
+                reason = "rerank_fallback_only"
+            elif floor_fallback_count:
+                reason = "floor_fallback_only"
+            else:
+                reason = "filter_fallback_only"
+            verdict = replace(verdict, status="weak_match", reason=reason)
 
         related = related[:limit]
         errors = [
@@ -273,7 +346,17 @@ class Pipeline:
         latency["total"] = round((time.perf_counter() - started) * 1000, 2)
 
         trace_payload = self._trace_payload(
-            query, passes, verdict, top, related, latency, tool
+            query,
+            passes,
+            verdict,
+            top,
+            related,
+            latency,
+            tool,
+            filtered,
+            fallback_count,
+            floor_fallback_count,
+            rerank_fallback_count,
         )
         trace_mod.record(trace_payload)
 
@@ -288,6 +371,10 @@ class Pipeline:
             "filtered": filtered,
             # How many of those rows came back to fill a short result.
             "fallback_count": fallback_count,
+            # Floor misses kept only because the strict result was short.
+            "floor_fallback_count": floor_fallback_count,
+            # Rows the cross-encoder rejected that the short result still needs.
+            "rerank_fallback_count": rerank_fallback_count,
             # Arm failures are otherwise indistinguishable from a real miss.
             "errors": errors,
             "trace_id": trace_payload["trace_id"],
@@ -314,9 +401,31 @@ class Pipeline:
                 items=items,
                 elapsed_ms=result.elapsed_ms,
                 error=result.error,
+                stats=result.stats,
+                weak_items=result.weak_items,
             ),
             [item for item in result.items if item.id not in kept_ids],
         )
+
+    @staticmethod
+    def _weak_candidates(
+        pool: list[RetrievedItem], remaining: int, exclude: set[str]
+    ) -> list[RetrievedItem]:
+        """Floor misses that passed every other filter, offered to fill a gap."""
+        if remaining <= 0 or not pool:
+            return []
+        best: dict[str, RetrievedItem] = {}
+        for item in pool:
+            if item.id in exclude:
+                continue
+            current = best.get(item.id)
+            if current is None or item.score > current.score:
+                best[item.id] = item
+        ordered = sorted(best.values(), key=lambda i: float(i.score), reverse=True)
+        return [
+            replace(item, extra={**item.extra, "floor_fallback": True})
+            for item in ordered[:remaining]
+        ]
 
     def _fallback_candidates(
         self,
@@ -393,6 +502,10 @@ class Pipeline:
         related: list[RetrievedItem],
         latency: dict[str, float],
         tool: str,
+        filtered: int = 0,
+        fallback_count: int = 0,
+        floor_fallback_count: int = 0,
+        rerank_fallback_count: int = 0,
     ) -> dict[str, Any]:
         lead = top[0] if top else None
         return {
@@ -410,6 +523,7 @@ class Pipeline:
                             "name": arm.name,
                             "elapsed_ms": arm.elapsed_ms,
                             "error": arm.error,
+                            "stats": arm.stats,
                             "hits": [
                                 {
                                     "id": i.id,
@@ -460,5 +574,10 @@ class Pipeline:
             "status": verdict.status,
             "count": len(top),
             "related_count": len(related),
+            # Rows a caller's constraint removed and how many came back.
+            "filtered": filtered,
+            "fallback_count": fallback_count,
+            "floor_fallback_count": floor_fallback_count,
+            "rerank_fallback_count": rerank_fallback_count,
             "latency_ms": latency,
         }

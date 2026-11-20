@@ -58,12 +58,16 @@ def _body(node: dict) -> tuple[str, str]:
 
 def _member(node: dict, episode: str = "") -> dict:
     text, source = _body(node)
+    meta = _meta(node)
     return {
         "id": str(node.get("node_id") or ""),
         "episode_id": episode or _episode(node),
         "text": text,
         "text_source": source,
         "created_at": str(node.get("created_at") or ""),
+        "session_id": str(meta.get("session_id") or ""),
+        "task": str(meta.get("task") or ""),
+        "source_file": str(node.get("source_file") or ""),
     }
 
 
@@ -437,7 +441,14 @@ def render_candidates(items: list[dict]) -> str:
             "candidate_id": item["candidate_id"],
             "kind": item["kind"],
             "members": [
-                {"id": member["id"], "text": member["text"]}
+                {
+                    "id": member["id"],
+                    "text": member["text"],
+                    "at": member.get("created_at") or "",
+                    "session": member.get("session_id") or "",
+                    "task": member.get("task") or "",
+                    "file": member.get("source_file") or "",
+                }
                 for member in item["members"]
             ],
         }
@@ -847,8 +858,9 @@ async def govern_daily(
     since: str = "",
     max_calls: int = DAILY_MAX_CALLS,
     batch_size: int = DAILY_BATCH_SIZE,
+    scope_all: bool = False,
 ) -> dict:
-    """Daily pass: judge new groups, then apply split/merge to episode ids."""
+    """Judge groups, then apply split/merge; scope_all rescans every group."""
     empty = {
         "status": "skipped",
         "candidates": 0,
@@ -869,7 +881,7 @@ async def govern_daily(
             node["node_id"]: node
             for node in await asyncio.to_thread(_load_active_nodes, db_path)
         }
-        scoped = _recent_candidates(candidates, since)
+        scoped = candidates if scope_all else _recent_candidates(candidates, since)
         if not scoped["groups"] and not scoped["pairs"] and not scoped["group_pairs"]:
             return {**empty, "status": "no_candidates"}
         result = await decide(

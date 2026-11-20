@@ -77,6 +77,27 @@ class SemanticArmTests(unittest.TestCase):
         arm = SemanticArm(db_path=self.db)
         self.assertEqual(arm.retrieve(Query(text=""), 5).items, [])
 
+    def test_ascii_fragments_and_symbols_do_not_match(self):
+        # A substring test let "en" match "nonexistent" and "-" match any dash.
+        now = "2026-06-01T00:00:00"
+        with store.connect(self.db) as connection:
+            entities.upsert_entities(
+                connection,
+                "m1",
+                {
+                    "entities": [
+                        {"name": "en", "type": "term", "aliases": []},
+                        {"name": "-", "type": "symbol", "aliases": []},
+                    ]
+                },
+                now=now,
+            )
+        arm = SemanticArm(db_path=self.db)
+        result = arm.retrieve(Query(text="zzz-nonexistent-abc"), 5)
+
+        self.assertEqual(result.items, [])
+        self.assertGreater(result.stats["fragment_rejected"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

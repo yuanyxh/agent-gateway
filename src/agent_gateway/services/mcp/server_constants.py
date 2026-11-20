@@ -91,7 +91,7 @@ DEDUPE_NOTICE_SIMILARITY = 0.90
 # Group key shared by related memories. The inherit threshold sits below dedupe so
 # related facts join one group without being merged into a single memory.
 EPISODE_FIELD = "episode_id"
-EPISODE_INHERIT_SIMILARITY = 0.80
+EPISODE_INHERIT_SIMILARITY = 0.65
 
 # Recall-time expansion: only the top hits seed a group, and expanded rows rank
 # behind the row that pulled them in.

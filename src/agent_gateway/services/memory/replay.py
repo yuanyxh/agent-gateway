@@ -35,7 +35,10 @@ def sample_seeds(
             "FROM neurons n "
             "LEFT JOIN neuron_members m ON m.neuron_id = n.neuron_id "
             "LEFT JOIN memory_activation a ON a.node_id = m.memory_id "
-            "WHERE n.status='active' GROUP BY n.neuron_id "
+            "WHERE n.status='active' AND EXISTS ("
+            "SELECT 1 FROM synapses s WHERE s.status='active' "
+            "AND (s.from_neuron = n.neuron_id OR s.to_neuron = n.neuron_id)) "
+            "GROUP BY n.neuron_id "
             "ORDER BY n.importance DESC LIMIT 500"
         ).fetchall()
     scored = []

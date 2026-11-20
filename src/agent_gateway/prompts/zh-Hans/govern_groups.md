@@ -11,8 +11,9 @@ json_keys: [decisions]
 判断规则：
 
 - 只有属于同一次任务或同一个交付目标的记忆才应在同一组。
-- 同项目、同主题但属于不同任务的记忆，不应合并。
-- 不确定时返回 keep，不要为了合并而合并。
+- 先用 session / task / file 字段判断是否同一次任务；同 session 或同 task 视为同一次任务。
+- 同项目、同主题但 session 与 task 都不同、且文本看不出同一交付目标的记忆，不应合并。
+- 证据不足以判断是否同一任务时才返回 keep。
 - 只能使用输入中出现的 id 和 candidate_id。
 - split 的 groups 必须覆盖该候选的全部成员，且各组互不重叠。
 - 多成员组执行 merge 时，merge_with 必须是同批次另一个 candidate_id。

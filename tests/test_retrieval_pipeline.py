@@ -67,15 +67,24 @@ class FakeArm:
         items: list[RetrievedItem],
         seen: list[str] | None = None,
         fallback_only: bool = False,
+        weak: list[RetrievedItem] | None = None,
+        stats: dict[str, int] | None = None,
     ):
         self.name = name
         self._items = items
+        self._weak = weak or []
+        self._stats = stats or {}
         self.seen = seen if seen is not None else []
         self.fallback_only = fallback_only
 
     def retrieve(self, query: Query, limit: int, filters=None) -> ArmResult:
         self.seen.append(query.text)
-        return ArmResult(name=self.name, items=list(self._items))
+        return ArmResult(
+            name=self.name,
+            items=list(self._items),
+            weak_items=list(self._weak),
+            stats=dict(self._stats),
+        )
 
 
 class StageTest(unittest.TestCase):
@@ -275,6 +284,21 @@ class QueryConstraintTest(unittest.TestCase):
         self.assertEqual(seen, ["a", "b", "c"])
         self.assertEqual([row["id"] for row in out["results"]], ["c", "b", "a"])
         self.assertEqual(out["fallback_count"], 3)
+        self.assertTrue(
+            all(row["filter_fallback"] == ["project"] for row in out["results"])
+        )
+        self.assertEqual(out["status"], "weak_match")
+
+    def test_filter_fallback_survives_a_reranker_that_drops_every_row(self):
+        rows = [
+            item("a", 0.9, extra={"project": "o"}),
+            item("b", 0.8, extra={"project": "o"}),
+        ]
+
+        out = self._run(rows, filters={"project": "p"}, reranker=lambda q, items: [])
+
+        self.assertEqual([row["id"] for row in out["results"]], ["a", "b"])
+        self.assertEqual(out["fallback_count"], 2)
         self.assertTrue(
             all(row["filter_fallback"] == ["project"] for row in out["results"])
         )
@@ -609,6 +633,126 @@ class PipelineTest(unittest.TestCase):
         self.assertNotIn("match_kind", row)
         self.assertEqual(row["id"], "x")
         self.assertIn("content", row)
+
+
+class QueryVariantTest(unittest.TestCase):
+    def _run(self, query: Query, limit: int = 3) -> list[str]:
+        arm = FakeArm("a", [])
+        pipeline = Pipeline(
+            name="t", arms=[arm], fusion=RRFFusion(), gate=LayerPresenceGate()
+        )
+        pipeline.run_query(query, limit=limit)
+        return arm.seen
+
+    def test_each_specific_term_gets_its_own_pass(self):
+        seen = self._run(
+            Query(
+                text="A B C",
+                language="en",
+                root_text="A B C",
+                terms=("aa", "bbbb", "cccccc", "dd"),
+            )
+        )
+
+        self.assertEqual(seen, ["A B C", "cccccc", "bbbb", "aa"])
+
+    def test_terms_are_skipped_when_the_base_passes_fill_the_limit(self):
+        arm = FakeArm("a", [item("x", 0.9), item("y", 0.8)])
+        pipeline = Pipeline(
+            name="t", arms=[arm], fusion=RRFFusion(), gate=LayerPresenceGate()
+        )
+        pipeline.run_query(
+            Query(text="A B", language="en", terms=("alpha", "beta")), limit=2
+        )
+
+        self.assertEqual(arm.seen, ["A B"])
+
+    def test_term_passes_are_capped_and_skip_duplicates(self):
+        seen = self._run(
+            Query(
+                text="alpha",
+                language="en",
+                root_text="alpha",
+                terms=("alpha", "beta", "gamma", "delta", "epsilon"),
+            )
+        )
+
+        self.assertEqual(seen[0], "alpha")
+        self.assertEqual(len(seen), 4)
+
+
+class FloorFallbackTest(unittest.TestCase):
+    def _run(self, items, weak, limit=3):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", items, weak=weak)],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+        )
+        return pipeline.run_query(Query(text="q", language="en"), limit=limit)
+
+    def test_weak_rows_fill_a_short_result_and_are_marked(self):
+        out = self._run([item("s", 0.9)], [item("w", 0.5)])
+
+        self.assertEqual([row["id"] for row in out["results"]], ["s", "w"])
+        self.assertEqual(out["floor_fallback_count"], 1)
+        self.assertTrue(out["results"][1]["floor_fallback"])
+
+    def test_weak_rows_are_unused_when_strict_fills_the_limit(self):
+        out = self._run([item("s", 0.9), item("t", 0.8)], [item("w", 0.5)], limit=2)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["s", "t"])
+        self.assertEqual(out["floor_fallback_count"], 0)
+
+    def test_weak_only_result_is_weak_match(self):
+        out = self._run([], [item("w", 0.5)], limit=2)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["w"])
+        self.assertEqual(out["status"], "weak_match")
+        self.assertEqual(out["floor_fallback_count"], 1)
+
+
+class RerankFallbackTest(unittest.TestCase):
+    def _run(self, reranker, items, limit=2):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", items)],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=reranker,
+        )
+        return pipeline.run_query(Query(text="q", language="en"), limit=limit)
+
+    def test_rejecting_everything_refills_and_marks_weak(self):
+        out = self._run(lambda q, rows: [], [item("s", 0.9), item("u", 0.8)])
+
+        self.assertEqual([row["id"] for row in out["results"]], ["s", "u"])
+        self.assertEqual(out["rerank_fallback_count"], 2)
+        self.assertEqual(out["status"], "weak_match")
+
+    def test_partial_drop_refills_only_the_shortfall(self):
+        out = self._run(lambda q, rows: rows[:1], [item("s", 0.9), item("u", 0.8)])
+
+        self.assertEqual([row["id"] for row in out["results"]], ["s", "u"])
+        self.assertEqual(out["rerank_fallback_count"], 1)
+        self.assertEqual(out["status"], "ok")
+
+
+class TraceStatsTest(unittest.TestCase):
+    def test_trace_carries_arm_stats_and_fallback_counts(self):
+        captured: list[dict] = []
+        arm = FakeArm(
+            "a", [item("s", 0.9)], weak=[item("w", 0.5)], stats={"raw": 2, "kept": 1}
+        )
+        pipeline = Pipeline(
+            name="t", arms=[arm], fusion=RRFFusion(), gate=LayerPresenceGate()
+        )
+        with mock.patch.object(trace, "record", side_effect=captured.append):
+            pipeline.run_query(Query(text="q", language="en"), limit=3)
+
+        payload = captured[0]
+        self.assertEqual(payload["floor_fallback_count"], 1)
+        self.assertEqual(payload["passes"][0]["arms"][0]["stats"]["raw"], 2)
 
 
 class ConfigTest(unittest.TestCase):

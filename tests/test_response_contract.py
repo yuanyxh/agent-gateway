@@ -22,6 +22,8 @@ RECALL_TOP_KEYS = {
     "count",
     "filtered",
     "fallback_count",
+    "floor_fallback_count",
+    "rerank_fallback_count",
     "errors",
     "trace_id",
 }
@@ -37,6 +39,8 @@ RECALL_ITEM_KEYS = {
     "edge",
     "metadata",
     "filter_fallback",
+    "floor_fallback",
+    "rerank_fallback",
 }
 RECALL_META_KEYS = {"tags", "status", "confidence"}
 

@@ -77,7 +77,8 @@ class FakeColdQdrant:
 
 
 class ColdThresholdTest(unittest.TestCase):
-    def test_query_points_receives_score_threshold(self):
+    def test_query_points_defers_floor_to_local_filter(self):
+        # The floor stays local so rejected rows can be counted and refilled.
         qdrant = FakeColdQdrant()
         query_vec = mock.Mock()
         query_vec.tolist.return_value = [1.0, 0.0]
@@ -88,7 +89,29 @@ class ColdThresholdTest(unittest.TestCase):
             arm = recall_arms.ColdMemoryArm(min_score=FLOORS["cold"])
             arm.retrieve(Query(text="q"), limit=3)
 
-        self.assertEqual(qdrant.kwargs["score_threshold"], FLOORS["cold"])
+        self.assertIsNone(qdrant.kwargs["score_threshold"])
+        self.assertGreaterEqual(qdrant.kwargs["limit"], 3)
+
+    def test_below_floor_points_are_counted_not_kept(self):
+        low = mock.Mock()
+        low.id = "cold-low"
+        low.score = 0.1
+        low.payload = {}
+        high = FakeColdPoint()
+        qdrant = FakeColdQdrant(points=[high, low])
+        query_vec = mock.Mock()
+        query_vec.tolist.return_value = [1.0, 0.0]
+        with (
+            mock.patch.object(server_state, "get_qdrant", return_value=qdrant),
+            mock.patch.object(server_embed, "embed_query", return_value=query_vec),
+        ):
+            result = recall_arms.ColdMemoryArm(min_score=FLOORS["cold"]).retrieve(
+                Query(text="q"), limit=3
+            )
+
+        self.assertEqual([item.id for item in result.items], ["cold-1"])
+        self.assertEqual(result.stats["raw"], 2)
+        self.assertEqual(result.stats["floor_rejected"], 1)
 
 
 class FakeColdPoint:
@@ -318,9 +341,14 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        self.assertEqual([row["id"] for row in data["results"]], ["high"])
+        # mid (0.66) is a near miss of the 0.68 floor and is refilled and marked;
+        # low (0.5) stays out.
+        self.assertEqual([row["id"] for row in data["results"]], ["high", "mid"])
+        # A strict hit above the floor keeps the status; the padded row is marked.
         self.assertEqual(data["status"], "ok")
-        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["count"], 2)
+        self.assertTrue(data["results"][1]["floor_fallback"])
+        self.assertEqual(data["floor_fallback_count"], 1)
         self.assertNotIn("match_kind", data["results"][0])
         # The floor moved into the arm: mem0 filters on the semantic score before
         # hybrid scoring, which silently drops verbatim hits that need rescuing.

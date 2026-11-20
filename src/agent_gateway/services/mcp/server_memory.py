@@ -310,7 +310,7 @@ def _episode_size(episode_id: str) -> int:
 
 
 def _inherit_episode_id(supersedes: list[str], similar: list[dict]) -> str:
-    """Reuse the target's group, then the closest memory above the inherit threshold."""
+    """Reuse the target's group, then the majority group among close memories."""
     for sid in supersedes:
         try:
             meta = (get_hot_memory().get(sid) or {}).get("metadata") or {}
@@ -319,10 +319,20 @@ def _inherit_episode_id(supersedes: list[str], similar: list[dict]) -> str:
         inherited = str(meta.get(EPISODE_FIELD) or "").strip()
         if inherited and _episode_size(inherited) < EPISODE_MAX_GROUP_SIZE:
             return inherited
-    if similar and similar[0].get("score", 0) >= EPISODE_INHERIT_SIMILARITY:
-        inherited = str(similar[0].get("episode_id") or "").strip()
-        if inherited and _episode_size(inherited) < EPISODE_MAX_GROUP_SIZE:
-            return inherited
+    votes: dict[str, int] = {}
+    best: dict[str, float] = {}
+    for row in similar:
+        score = float(row.get("score") or 0.0)
+        if score < EPISODE_INHERIT_SIMILARITY:
+            continue
+        episode = str(row.get("episode_id") or "").strip()
+        if not episode:
+            continue
+        votes[episode] = votes.get(episode, 0) + 1
+        best[episode] = max(best.get(episode, 0.0), score)
+    for episode in sorted(votes, key=lambda key: (-votes[key], -best[key])):
+        if _episode_size(episode) < EPISODE_MAX_GROUP_SIZE:
+            return episode
     return _new_episode_id()
 
 
@@ -1340,6 +1350,7 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         language=detect_language(text),
         root_text=text,
         semantic_text=semantic,
+        terms=tuple(keywords),
         filters=dimension_filters,
         boost=dimension_boost,
         expose=GROUPING_DIMENSIONS,
@@ -1389,6 +1400,8 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     status = out["status"]
     filtered = int(out.get("filtered") or 0)
     fallback_count = int(out.get("fallback_count") or 0)
+    floor_fallback_count = int(out.get("floor_fallback_count") or 0)
+    rerank_fallback_count = int(out.get("rerank_fallback_count") or 0)
     payload = {
         "status": status,
         "results": top,
@@ -1398,12 +1411,26 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
         "filtered": filtered,
         # Excluded rows that returned only because the strict result was short.
         "fallback_count": fallback_count,
+        # Near-miss rows kept because the strict result was short.
+        "floor_fallback_count": floor_fallback_count,
+        # Rows the reranker rejected that a short result still needed.
+        "rerank_fallback_count": rerank_fallback_count,
         "errors": out.get("errors") or [],
         # The pipeline already writes this trace; returning it lets callers and
         # adoption analysis join a result back to its arms.
         "trace_id": out.get("trace_id") or "",
     }
-    if fallback_count:
+    if rerank_fallback_count:
+        payload["hint"] = (
+            f"{rerank_fallback_count} result(s) were rejected by the reranker but "
+            "kept to fill a short result; each carries rerank_fallback."
+        )
+    elif floor_fallback_count:
+        payload["hint"] = (
+            f"{floor_fallback_count} result(s) are below the relevance floor; "
+            "each carries floor_fallback and the status is weak_match."
+        )
+    elif fallback_count:
         payload["hint"] = (
             f"{fallback_count} result(s) miss the dimension filter; each carries "
             "filter_fallback with the failed dimensions."

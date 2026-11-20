@@ -2,12 +2,12 @@
 
 ## 当前目标
 
-2026-11-19 审查修复：9 项 P2/P3 已实现并部署验证（wheel 重装 + MCP 重启）；全量 865 例与 ruff 通过。
+2026-11-19 召回可命中性治理：trace 口径、按需多路变体、floor/rerank 兜底、实体词边界、启动预热已实现；876 例与 ruff 通过；隔离环境端到端矩阵验证完成。
 
-- 计划：utility 仓 `.agent/plans/2026-11-19-review-fixes/`
-- 已验证：read_url trace error、强化时区、孤儿拦截、测试日志隔离、Qdrant 清理
-- 数据结果：project 缺失 86.6%→76.3%，孤儿 activation 7→0
-- 未验证：冷层历史 importance 仍为默认 5；graph.log 待下一次索引
+- 计划：`.agent/plans/2026-11-19-recall-recallability/plan.md`
+- 已验证：预期命中率 82.8%→94.8%，零回归；误报 0（修正标注后）；p50 2492→2899ms
+- 上一步：2026-11-19 审查修复 9 项已部署（wheel 重装 + MCP 重启）
+- 未验证：线上真实流量回归；冷层 0.569 / 热层 0.616 是否需下调；短标识符 keywords 形态仍空
 
 ## 进行中
 
@@ -21,7 +21,7 @@
 | notes 层降噪 | 语义复核（minilm 0.40 / jina 0.35）+ **仅作兜底**：hot/cold 有命中时 notes 不进主结果；抽样 100 条 notes 占比 26.2%→8.5%，空返回不增 | — |
 | 记忆体第二轮改进 | 近邻矛盾候选、打分批量写、受保护记忆、dry-run、检索层归档过滤、多信号排序（默认关）、摘要预算折叠已实现并通过 379 例；等打包部署 | — |
 | gateway 与 utility 完全解耦 | 配置/路径/项目数据/图库写权已落地；legacy 适配保留一个发布周期；522 例与 ruff 通过；待用户验证与提交 | — |
-| 记忆分组治理 | 已接入日任务：增量候选、默认应用 split/merge、写 `episode_prev`/`episode_source`、12 次调用预算；628 例通过 | 待重启 MCP 生效；离线报告仍全量运行 |
+| 记忆分组治理 | 已接入日任务：增量候选、默认应用 split/merge、写 `episode_prev`/`episode_source`、12 次调用预算；628 例通过。2026-11-20 修复：写入继承改近邻多数投票 + 阈值 0.65、周任务全量回扫、候选注入 session/task/file、神经元 importance 聚合、重放种子限有边神经元；883 例与 ruff 通过 | 待打包部署；下一次日/周任务的治理与重放效果待观察 |
 | 记忆神经网 v2 | T1-T18 完成；2026-11-11 两仓 review 修复 11 项与三观察项（事件循环阻塞、readonly、时区锚点、治理断边、配置嵌套），724 例与 ruff 通过；Lume VM 复验 daily/weekly 心跳 max 204/326 ms、`llm_skipped=false`、共激活建边 13（证据 `tests/eval/memory_network/2026-11-11/vm-fixes/`） | 待重新打包 utility；关联臂召回质量尚无前后对比；治理 split/merge 的 seed 重建未端到端 |
 
 ## 已完成
@@ -211,3 +211,6 @@
 - 2026-11-03 重启后尚无 4xx/5xx 请求，`gateway_log` 的 `error_type`/`upstream` 线上样本待补；历史 502 行仍为空属预期
 - 2026-11-08 基座升级 1.4.0 → 1.5.0：新增 `steward`/`sandbox` 技能、`.agent/agent-health.md` 基线、`.agent/sandbox.md`、`.agent/.maintenance-state`、维护钩子与 SessionStart 注册；profile 补 `maintenance_*` 与 `isolation_*`。`verify-instantiation.sh` 0 errors / 1 warning（既有 `stack.lockfile: none`）。首次 `steward` 体检未执行
 - 2026-11-08 `pip-audit 2.10.1` 装入 `.venv` 并加入 `dev` extras；全环境审计 0 已知漏洞，本地包 `agent-gateway` 不在 PyPI 故跳过
+- 2026-11-19 P0 校准：全量分页扫描、只读检索、token 预算统计已实现；但全量正文自检索恒等 1.0，floor 不能由自检索得出，改由 gold 249 条完整查询的 dense 分数离线扫描（hot 0.616 时正例召回约 0.81，cold 0.569 约 0.62）。生产阈值未改，待决策。
+- 2026-11-19 cold floor 已由 0.569 降到 0.50（hot 0.616、notes_semantic 0.37 不变）并线上验证：冷层最终出现率 3.2%→21.1%，74 次矩阵预期命中 100%、无内容误报 0、p50 2.8s；max 20.5s 仅无内容样本。备份 `retrieval_thresholds.json.bak-cold050-20261119T175105`。
+- 2026-11-19 维度过滤空召回已定位并修复：filter_fallback 行在 rerank 全负时被丢弃；冷层 project 缺失（source_file 可推断 573/1297）。修复已随 wheel 部署（14:18，MCP 同刻重启）；历史回填经用户决定不做，仅新写入按 source_file 推断。

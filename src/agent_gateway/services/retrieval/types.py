@@ -41,6 +41,10 @@ class Query:
     language: str = "unknown"
     root_text: str = ""
     semantic_text: str = ""
+    #: Caller keywords, searched one at a time in extra passes. A joined
+    #: multi-topic string dilutes the embedding and misses records a single
+    #: specific term still reaches.
+    terms: tuple[str, ...] = ()
     #: Result constraints keyed by row field; a row whose value is absent or not
     #: allowed is dropped. Values may be a single value or a collection.
     filters: dict[str, Any] = field(default_factory=dict)
@@ -78,6 +82,8 @@ class RetrievedItem:
         "top_callers",
         "resolver",
         "filter_fallback",
+        "floor_fallback",
+        "rerank_fallback",
         "path",
         "hops",
         "neuron_id",
@@ -119,6 +125,12 @@ class ArmResult:
     items: list[RetrievedItem] = field(default_factory=list)
     elapsed_ms: float = 0.0
     error: str | None = None
+    #: Candidates seen before this arm's filters, keyed by reject reason.
+    #: Without it an empty result cannot be told apart from a floor miss.
+    stats: dict[str, int] = field(default_factory=dict)
+    #: Near-miss rows the floor rejected. Kept out of fusion; the pipeline
+    #: refills a short strict result from them and marks each one.
+    weak_items: list[RetrievedItem] = field(default_factory=list)
 
 
 @dataclass

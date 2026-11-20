@@ -162,6 +162,20 @@ class CandidatesTest(_Base):
         self.assertEqual(len(candidates["pairs"]), 1)
         self.assertTrue(candidates["truncated"])
 
+    def test_members_carry_task_signals(self):
+        self.add("s1", "ep_s", "同一任务 一条", session_id="sess-1", task="修复登录")
+        self.add("s2", "ep_s", "同一任务 另一条", session_id="sess-1", task="修复登录")
+
+        with mock.patch.object(group_governance, "_try_hot", return_value=None):
+            candidates = group_governance.build_candidates(db_path=self.db)
+
+        group = next(g for g in candidates["groups"] if g["candidate_id"] == "ep_s")
+        self.assertEqual(group["members"][0]["session_id"], "sess-1")
+        self.assertEqual(group["members"][0]["task"], "修复登录")
+        rendered = group_governance.render_candidates([group])
+        self.assertIn('"session": "sess-1"', rendered)
+        self.assertIn('"task": "修复登录"', rendered)
+
     def test_readonly_never_creates_or_writes(self):
         missing = os.path.join(self._tmp.name, "missing.sqlite")
         with self.assertRaises(FileNotFoundError):
@@ -344,7 +358,7 @@ class GovernDailyTest(_Base):
             "created_at": "2026-11-09",
         }
 
-    def _run(self, candidates, fake_llm, *, sync_ok=True):
+    def _run(self, candidates, fake_llm, *, sync_ok=True, since="", scope_all=False):
         with (
             mock.patch.object(
                 group_governance.config, "memory_governance_apply", return_value=True
@@ -358,7 +372,11 @@ class GovernDailyTest(_Base):
             ),
             mock.patch.object(group_governance, "_sync_mem0", return_value=sync_ok),
         ):
-            return asyncio.run(group_governance.govern_daily(db_path=self.db, since=""))
+            return asyncio.run(
+                group_governance.govern_daily(
+                    db_path=self.db, since=since, scope_all=scope_all
+                )
+            )
 
     def test_split_moves_the_smaller_group_and_keeps_previous(self):
         self.add("a1", "ep_a", "实现", fact="实现细节")
@@ -543,6 +561,42 @@ class GovernDailyTest(_Base):
 
         self.assertEqual(result["status"], "disabled")
         self.assertEqual(result["applied"], 0)
+
+    def test_scope_all_rescans_untouched_groups(self):
+        self.add("o1", "ep_old", "旧实现", fact="旧实现")
+        self.add("o2", "ep_old", "旧测试", fact="旧测试")
+        candidates = {
+            "groups": [
+                {
+                    "candidate_id": "ep_old",
+                    "kind": "group",
+                    "members": [
+                        {
+                            **self._member("o1", "ep_old", "旧实现"),
+                            "created_at": "2026-01-01",
+                        },
+                        {
+                            **self._member("o2", "ep_old", "旧测试"),
+                            "created_at": "2026-01-01",
+                        },
+                    ],
+                }
+            ],
+            "pairs": [],
+            "group_pairs": [],
+            "singles": [],
+        }
+
+        async def fake_llm(*args, **kwargs):
+            return '{"decisions":[]}'
+
+        scoped = self._run(candidates, fake_llm, since="2026-11-01")
+        full = self._run(candidates, fake_llm, since="2026-11-01", scope_all=True)
+
+        self.assertEqual(scoped["status"], "no_candidates")
+        self.assertEqual(scoped["calls"], 0)
+        self.assertEqual(full["status"], "ok")
+        self.assertEqual(full["calls"], 1)
 
 
 class ReportTest(unittest.TestCase):

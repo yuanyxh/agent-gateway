@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 from agent_gateway.core import config
 from agent_gateway.services.memory import store
 from agent_gateway.services.retrieval.types import ArmResult, Query, RetrievedItem
+
+#: ASCII entity names must stand alone: a bare substring test lets short names
+#: like `en` match `nonexistent`. CJK has no word boundaries, so it stays on
+#: substring matching.
+_ASCII_WORD = re.compile(r"[A-Za-z0-9]")
+
+
+def entity_hit(name: str, text: str) -> bool:
+    """Whether `name` occurs in `text` as an entity, not as a fragment."""
+    if not name or not name.strip():
+        return False
+    if name.isascii():
+        if not _ASCII_WORD.search(name):
+            return False
+        pattern = rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])"
+        return re.search(pattern, text, re.IGNORECASE) is not None
+    return name in text
 
 
 class SemanticArm:
@@ -44,8 +62,12 @@ class SemanticArm:
                     nodes[str(row[0])] = (row[1], row[2])
         items: list[RetrievedItem] = []
         seen: set[str] = set()
+        stats = {"raw": len(rows), "fragment_rejected": 0}
         for name, memory_id, confidence in rows:
             memory_id = str(memory_id)
+            if not entity_hit(str(name), text):
+                stats["fragment_rejected"] += 1
+                continue
             if memory_id in seen or memory_id not in nodes:
                 continue
             seen.add(memory_id)
@@ -67,4 +89,5 @@ class SemanticArm:
             name=self.name,
             items=items[:limit],
             elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+            stats={**stats, "kept": len(items[:limit])},
         )

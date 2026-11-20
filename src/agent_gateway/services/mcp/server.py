@@ -729,6 +729,16 @@ async def serve():
     asyncio.create_task(consolidation_scheduler(ensure_hot_memory))
     asyncio.create_task(rss_sampler())
 
+    async def warm_hot_layer():
+        """Load the hot layer before the first recall triggers a lazy init.
+
+        A first recall racing a concurrent notes prewarm used to get an empty
+        hot layer while the embedder was busy.
+        """
+        await ensure_hot_memory()
+
+    asyncio.create_task(warm_hot_layer())
+
     async def auto_calibrate_on_start():
         """Calibrate an unfamiliar embedder before callers judge its results."""
         from agent_gateway.services.mcp.server_embed import EMBEDDER_SPEC
@@ -766,6 +776,12 @@ async def serve():
         # A summary inherits whatever its sources agree on, so a recall filter
         # keeps working on the cold layer instead of only on freshly written rows.
         dimensions = memory_link.inherit_source_dimensions(source_ids)
+        if not dimensions.get("project"):
+            from agent_gateway.services.memory.project_infer import infer_project
+
+            inferred = infer_project([source_file])
+            if inferred:
+                dimensions["project"] = inferred
         language = language_of(None, content)
         if language and not dimensions.get("language"):
             dimensions["language"] = language

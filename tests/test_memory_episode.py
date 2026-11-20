@@ -149,6 +149,39 @@ class EpisodeIdTest(unittest.TestCase):
 
         self.assertEqual(result, "ep_similar")
 
+    def test_inherit_uses_majority_group(self):
+        similar = [
+            {"score": 0.9, "episode_id": "ep_one"},
+            {"score": 0.7, "episode_id": "ep_two"},
+            {"score": 0.66, "episode_id": "ep_two"},
+        ]
+
+        with mock.patch.object(server_memory, "get_hot_memory", return_value=None):
+            result = server_memory._inherit_episode_id([], similar)
+
+        self.assertEqual(result, "ep_two")
+
+    def test_inherit_skips_full_majority_group(self):
+        similar = [
+            {"score": 0.9, "episode_id": "ep_full"},
+            {"score": 0.8, "episode_id": "ep_full"},
+            {"score": 0.7, "episode_id": "ep_open"},
+        ]
+
+        with (
+            mock.patch.object(server_memory, "get_hot_memory", return_value=None),
+            mock.patch.object(
+                server_memory,
+                "_episode_size",
+                side_effect=lambda episode: (
+                    server_memory.EPISODE_MAX_GROUP_SIZE if episode == "ep_full" else 0
+                ),
+            ),
+        ):
+            result = server_memory._inherit_episode_id([], similar)
+
+        self.assertEqual(result, "ep_open")
+
     def test_inherit_below_threshold_creates_new(self):
         similar = [{"score": 0.5, "episode_id": "ep_similar"}]
 

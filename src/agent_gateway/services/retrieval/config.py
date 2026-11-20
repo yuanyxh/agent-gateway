@@ -16,6 +16,15 @@ _MODEL_TAGS = {
     "jinaai/jina-embeddings-v2-base-zh": "jinazh768",
 }
 
+#: Model input limits, from fastembed's model metadata. Input past these is
+#: truncated by the tokenizer, so calibration reports how often it happens.
+_MODEL_MAX_TOKENS = {
+    "sentence-transformers/all-MiniLM-L6-v2": 256,
+    "jinaai/jina-embeddings-v2-base-zh": 8192,
+}
+#: Conservative limit for a model absent from the table above.
+DEFAULT_MAX_TOKENS = 512
+
 
 #: Tag of the model whose index names predate versioning; it keeps the bare names.
 LEGACY_TAG = "minilm384"
@@ -41,4 +50,5 @@ def model_spec(model_id: str, dims: int) -> ModelSpec:
         dims=dims,
         query_prefix=os.environ.get("EMBEDDER_QUERY_PREFIX", ""),
         doc_prefix=os.environ.get("EMBEDDER_DOC_PREFIX", ""),
+        max_tokens=_MODEL_MAX_TOKENS.get(model_id, DEFAULT_MAX_TOKENS),
     )
