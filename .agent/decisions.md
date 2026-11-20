@@ -85,3 +85,4 @@
 | 2026-11-20 | D3 | 治理候选注入 session/task/file，提示词改为同 session 或同 task 即同一次任务 | 用户批准 | 候选原无任务信号，LLM 无法判断「同一次任务」，只能保守 keep | 恢复旧 `render_candidates` 与提示词 |
 | 2026-11-20 | D2 | `neurons.importance` 由成员节点 importance 均值/10 聚合（0-1），随每日网络维护刷新 | 用户批准 | 5635 个神经元全为 0，重放排序退化 | 删除 `network.refresh_importance` 调用 |
 | 2026-11-20 | D2 | 重放种子只取有活跃突触的神经元 | 用户批准 | 仅修 importance 仍会抽到孤立节点；副本验证 80 个种子全部有边 | 删除 `sample_seeds` 的 `EXISTS` 条件 |
+| 2026-11-20 | D3 | notes 预热线程在 macOS 降为 Background QoS；宿主不再在 `-a` 启动时调用 prewarm | Agent | 启动预热让每次会话单核满载 5~10 分钟并与 IDE 抢 P 核；后台 QoS 由系统调度到能效核，查询路径原本就不阻塞（`NOTE_QUERY_EMBED_BUDGET=0`） | 删除 `_apply_background_qos` 调用；宿主恢复启动预热请求 |

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import nullcontext
@@ -172,6 +173,26 @@ class PrewarmThrottleTest(unittest.TestCase):
                     return
             time.sleep(0.01)
         self.fail("prewarm thread did not finish")
+
+    def test_prewarm_thread_applies_background_qos(self):
+        qos_applied = threading.Event()
+        with tempfile.TemporaryDirectory() as root:
+            root = os.path.normpath(root)
+            with (
+                mock.patch.object(
+                    search_notes_cache,
+                    "prewarm_project_notes",
+                    return_value={"ok": True},
+                ),
+                mock.patch.object(
+                    search_notes_cache,
+                    "_apply_background_qos",
+                    side_effect=lambda: qos_applied.set(),
+                ),
+            ):
+                self.assertTrue(search_notes_cache.schedule_project_notes_prewarm(root))
+                self.assertTrue(qos_applied.wait(2.0))
+                self._wait_idle(root)
 
     def test_second_schedule_within_window_is_skipped(self):
         with tempfile.TemporaryDirectory() as root:

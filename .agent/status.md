@@ -214,3 +214,4 @@
 - 2026-11-19 P0 校准：全量分页扫描、只读检索、token 预算统计已实现；但全量正文自检索恒等 1.0，floor 不能由自检索得出，改由 gold 249 条完整查询的 dense 分数离线扫描（hot 0.616 时正例召回约 0.81，cold 0.569 约 0.62）。生产阈值未改，待决策。
 - 2026-11-19 cold floor 已由 0.569 降到 0.50（hot 0.616、notes_semantic 0.37 不变）并线上验证：冷层最终出现率 3.2%→21.1%，74 次矩阵预期命中 100%、无内容误报 0、p50 2.8s；max 20.5s 仅无内容样本。备份 `retrieval_thresholds.json.bak-cold050-20261119T175105`。
 - 2026-11-19 维度过滤空召回已定位并修复：filter_fallback 行在 rerank 全负时被丢弃；冷层 project 缺失（source_file 可推断 573/1297）。修复已随 wheel 部署（14:18，MCP 同刻重启）；历史回填经用户决定不做，仅新写入按 source_file 推断。
+- 2026-11-20 notes 预热改为按需触发：宿主 `-a` 启动不再调用 `/api/project/notes/prewarm`；prewarm 线程在 macOS 降为 Background QoS（ctypes `pthread_set_qos_class_self_np`，非 darwin 跳过）；新增 QoS 调用路径测试。`test_project_notes_cache.py` + `test_embedder_lifecycle.py` 23 例通过；宿主侧 A/B 对照与首次查询触发均已实测。

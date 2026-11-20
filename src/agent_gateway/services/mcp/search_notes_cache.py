@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import sqlite3
+import sys
 import threading
 import time
 
@@ -52,6 +54,24 @@ _prewarm_inflight: set[str] = set()
 _PREWARM_MIN_INTERVAL_SECONDS = 600
 _PREWARM_MAX_FILES_PER_RUN = 200
 _last_prewarm: dict[str, float] = {}
+
+#: pthread QoS class from sys/qos.h. Background work is scheduled on efficiency
+#: cores by macOS instead of competing with the IDE for performance cores.
+_QOS_CLASS_BACKGROUND = 0x09
+
+
+def _apply_background_qos() -> None:
+    """Drop the calling thread to background QoS on macOS; no-op elsewhere."""
+    if sys.platform != "darwin":
+        return
+    try:
+        setter = ctypes.CDLL(None).pthread_set_qos_class_self_np
+        setter.argtypes = [ctypes.c_uint32, ctypes.c_int]
+        setter.restype = ctypes.c_int
+        if setter(_QOS_CLASS_BACKGROUND, 0) != 0:
+            logger.debug("[project_notes] background QoS rejected")
+    except (AttributeError, OSError) as e:
+        logger.debug(f"[project_notes] background QoS unavailable: {e}")
 
 
 def _get_note_db(db_path: str) -> sqlite3.Connection:
@@ -180,6 +200,7 @@ def schedule_project_notes_prewarm(project_path: str) -> bool:
         _last_prewarm[project_path] = now
 
     def _run() -> None:
+        _apply_background_qos()
         try:
             result = prewarm_project_notes(project_path)
             logger.info(f"[project_notes] prewarm {project_path}: {result}")
