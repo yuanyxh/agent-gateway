@@ -6,6 +6,7 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from agent_gateway.core import trace_context
 from agent_gateway.core.db import conn as dbconn
 
 
@@ -51,7 +52,8 @@ def init_db():
             error_message TEXT,
             route_tier TEXT,
             route_reason TEXT,
-            profile_hash TEXT
+            profile_hash TEXT,
+            trace_id TEXT
         );
         CREATE TABLE IF NOT EXISTS usage_field_cache (
             provider TEXT NOT NULL,
@@ -78,7 +80,8 @@ def init_db():
             error_type TEXT,
             error_message TEXT,
             upstream TEXT,
-            latency_ms INTEGER
+            latency_ms INTEGER,
+            trace_id TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_gateway_log_timestamp ON gateway_log(timestamp);
         CREATE INDEX IF NOT EXISTS idx_api_usage_timestamp ON api_usage(timestamp);
@@ -129,6 +132,10 @@ def init_db():
     if "route_detail" not in columns:
         conn.execute("ALTER TABLE api_usage ADD COLUMN route_detail TEXT")
         conn.commit()
+    # Request id shared by the proxy log, api_usage and the response header.
+    if "trace_id" not in columns:
+        conn.execute("ALTER TABLE api_usage ADD COLUMN trace_id TEXT")
+        conn.commit()
 
     # 上游地址：失败时定位是哪个 provider，不把 query 与凭据写进日志。
     gateway_columns = [
@@ -136,6 +143,9 @@ def init_db():
     ]
     if "upstream" not in gateway_columns:
         conn.execute("ALTER TABLE gateway_log ADD COLUMN upstream TEXT")
+        conn.commit()
+    if "trace_id" not in gateway_columns:
+        conn.execute("ALTER TABLE gateway_log ADD COLUMN trace_id TEXT")
         conn.commit()
 
     # Migration: remove three deprecated fields (session_id/project_path/estimated_cost_usd)
@@ -263,8 +273,8 @@ def record_gateway_log(
         with dbconn(DB_PATH) as c:
             c.execute(
                 "INSERT INTO gateway_log (timestamp, method, path, content_length, status_code, "
-                "error_type, error_message, upstream, latency_ms) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "error_type, error_message, upstream, latency_ms, trace_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     datetime.now(timezone.utc).isoformat(),
                     method,
@@ -275,6 +285,7 @@ def record_gateway_log(
                     error_message,
                     upstream,
                     latency_ms,
+                    trace_context.current() or None,
                 ),
             )
             _gateway_log_write_count += 1

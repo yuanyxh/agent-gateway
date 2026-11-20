@@ -184,3 +184,19 @@
 - **决策**：`tests/conftest.py` 在任何被测模块 import 前设置临时 `GATEWAY_CACHE`；采集器增加 `__boom__`/`Mock`/`test_` 指纹兜底。
 - **范围**：通用（Python 测试隔离 logger）。
 - **晋升**：未评估。
+
+### 2026-11-20 转发响应头在 prepare() 之后设置会被静默丢弃
+
+- **场景**：代理中间件给 `handle_proxy` 返回的响应加 `X-Trace-Id`，客户端始终收不到，单测全绿。
+- **事实**：`_forward` 内部已 `await response.prepare(state.request)` 并流式写出；aiohttp 只在 prepare 时序列化头，之后再赋值不报错也不生效。
+- **决策**：头写在 `StreamResponse` 创建后、`prepare()` 之前；`HTTPException` 是未 prepare 的 Response，可在 `raise` 前设置。
+- **范围**：通用（aiohttp 流式响应）。
+- **晋升**：未评估。
+
+### 2026-11-20 每层各自生成 trace_id，日志与检索记录无法关联
+
+- **场景**：trace_id 接入后，`tool_call` 日志是 A，retrieval JSONL 却是 B；单元测试只验证「有 id」，全绿。
+- **事实**：`pipeline._trace_payload` 无条件 `new_trace_id()`，`record()` 见 payload 已有 id 就不覆盖；检索主路径（project_lookup/project_notes）因此永远拿不到 dispatch 绑定的 id。
+- **决策**：id 只允许在请求入口（中间件 / `_dispatch_tool`）生成；下游一律 `current_or_new()`。测试必须断言「同一次调用的两处记录 id 相等」，而非「id 非空」。
+- **范围**：通用（请求追踪标识的单一生成点）。
+- **晋升**：未评估。

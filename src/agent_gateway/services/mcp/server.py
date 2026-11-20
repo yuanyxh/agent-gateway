@@ -98,6 +98,7 @@ from agent_gateway.services.memory.consolidate import (
     run_daily,
     run_weekly,
 )
+from agent_gateway.core import trace_context
 from agent_gateway.services.retrieval import rebuild
 from agent_gateway.services.retrieval import trace as retrieval_trace
 from agent_gateway.services.retrieval.arms.project_lookup import ProjectLookupArm
@@ -264,6 +265,8 @@ async def _dispatch_tool(name: str, arguments: dict) -> list[TextContent]:
     """Single dispatch point so every tool call keeps its timing log."""
     started = time.perf_counter()
     ok = True
+    trace_id = trace_context.new_id()
+    token = trace_context.bind(trace_id)
     try:
         return await HANDLERS[name](arguments)
     except Exception as e:
@@ -273,8 +276,10 @@ async def _dispatch_tool(name: str, arguments: dict) -> list[TextContent]:
     finally:
         logger.info(
             f"tool_call name={name} ok={ok} "
-            f"elapsed_ms={int((time.perf_counter() - started) * 1000)}"
+            f"elapsed_ms={int((time.perf_counter() - started) * 1000)} "
+            f"trace_id={trace_id}"
         )
+        trace_context.reset(token)
 
 
 def _register(name: str):
@@ -566,7 +571,7 @@ def _record_web_trace(
     tool: str, query: str, payload: dict, started: float, *, status: str
 ) -> str:
     """Trace a web call; returned ids match the ids in the tool payload."""
-    trace_id = retrieval_trace.new_trace_id()
+    trace_id = retrieval_trace.current_or_new()
     rows = []
     for key in ("results", "pages"):
         value = payload.get(key)

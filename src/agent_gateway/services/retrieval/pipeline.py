@@ -509,7 +509,7 @@ class Pipeline:
     ) -> dict[str, Any]:
         lead = top[0] if top else None
         return {
-            "trace_id": trace_mod.new_trace_id(),
+            "trace_id": trace_mod.current_or_new(),
             "tool": tool or self.name,
             "profile": self.name,
             "query": query.text,

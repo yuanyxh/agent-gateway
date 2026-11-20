@@ -5,6 +5,7 @@ import sys
 import time
 
 from aiohttp import web
+from agent_gateway.core import trace_context
 from agent_gateway.llm import client as llm_client  # noqa: F401 - 测试注入点
 from agent_gateway.services.proxy.proxy_usage import (
     DB_PATH,
@@ -46,6 +47,8 @@ SLOW_REQUEST_MS = 60_000
 async def gateway_log_middleware(request, handler):
     """Wrap all routes: catch exceptions (including aiohttp 413 over-limit) and record the gateway log, without changing the original behavior."""
     start = time.monotonic()
+    trace_id = trace_context.new_id()
+    token = trace_context.bind(trace_id)
     method = request.method
     path = request.path
     content_length = request.content_length or 0
@@ -54,10 +57,14 @@ async def gateway_log_middleware(request, handler):
     try:
         resp = await handler(request)
         status_code = resp.status
+        if not resp.prepared:
+            resp.headers["X-Trace-Id"] = trace_id
     except web.HTTPException as e:
         status_code = e.status
         error_type = type(e).__name__
         error_message = e.text
+        # HTTPException is an unprepared Response; aiohttp adds this header later.
+        e.headers["X-Trace-Id"] = trace_id
         raise
     except Exception as e:
         status_code = 500
@@ -94,6 +101,7 @@ async def gateway_log_middleware(request, handler):
                     }
                 )
             )
+        trace_context.reset(token)
     return resp
 
 

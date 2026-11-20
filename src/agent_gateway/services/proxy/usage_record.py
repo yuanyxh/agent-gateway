@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from agent_gateway.core import trace_context
 from agent_gateway.core.db import conn as dbconn
 
 
@@ -158,8 +159,8 @@ async def record_usage(
                 "output_type, stop_reason, response_valid, model, input_tokens, "
                 "output_tokens, cache_read_tokens, cache_write_tokens, "
                 "latency_ms, api_format, request_level, tool_name, tool_names, parent_id, "
-                "route_tier, route_reason, route_detail, error_message) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "route_tier, route_reason, route_detail, error_message, trace_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     record["timestamp"],
                     record["request_type"],
@@ -187,6 +188,7 @@ async def record_usage(
                     record["route_reason"],
                     record["route_detail"],
                     record["error_message"],
+                    trace_context.current() or None,
                 ),
             )
             record_id = cursor.lastrowid

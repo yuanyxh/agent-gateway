@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 import os
 import threading
-import uuid
 from collections import deque
 from datetime import datetime
 from typing import Any
 
+from agent_gateway.core import trace_context
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.core.paths import gateway_cache
 
@@ -32,7 +32,12 @@ def enabled() -> bool:
 
 
 def new_trace_id() -> str:
-    return f"rt_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
+    return trace_context.new_id()
+
+
+def current_or_new() -> str:
+    """Reuse the bound request id so call logs and traces stay joinable."""
+    return trace_context.current() or new_trace_id()
 
 
 def trace_dir() -> str:
@@ -55,6 +60,10 @@ def _prune(directory: str) -> None:
 def record(payload: dict[str, Any]) -> None:
     """Append a trace line; never raises."""
     global _write_errors
+    if "trace_id" not in payload:
+        current = trace_context.current()
+        if current:
+            payload["trace_id"] = current
     with _lock:
         _ring.append(payload)
     if not _ENABLED:

@@ -82,6 +82,8 @@ HTTP endpoints and JSON contracts instead of importing internals.
   de-duplication and a per-request annotation of what was rewritten.
 - Usage is stored in SQLite and exposed through `/usage/summary`, `/usage/tools` and
   `/usage/layers`.
+- Every request gets a trace id: the response carries `X-Trace-Id`, and the same id
+  lands in the usage and gateway-log tables, so a client report maps to one row.
 
 ### Local-first operation
 

@@ -693,5 +693,59 @@ class ReverseConversionTests(ProxyTestBase):
         self.assertTrue(text.rstrip().endswith("data: [DONE]"))
 
 
+class TraceHeaderTests(ProxyTestBase):
+    """The response header must match the api_usage row of the same request."""
+
+    provider_format = "anthropic"
+
+    async def _latest_trace_row(self) -> str | None:
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while asyncio.get_running_loop().time() < deadline:
+            with sqlite3.connect(proxy_usage.DB_PATH) as conn:
+                row = conn.execute(
+                    "SELECT trace_id FROM api_usage ORDER BY rowid DESC LIMIT 1"
+                ).fetchone()
+            if row and row[0]:
+                return row[0]
+            await asyncio.sleep(0.05)
+        return None
+
+    async def test_json_response_header_matches_usage_row(self) -> None:
+        self.upstream.enqueue_json(
+            {
+                "id": "msg_trace",
+                "type": "message",
+                "role": "assistant",
+                "model": "test-model",
+                "content": [{"type": "text", "text": "ok"}],
+                "usage": {"input_tokens": 2, "output_tokens": 1},
+            }
+        )
+        resp = await self.proxy.post(
+            "/v1/messages",
+            json={
+                "model": "test-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "trace"}],
+            },
+        )
+        trace_id = resp.headers.get("X-Trace-Id", "")
+        self.assertTrue(trace_id.startswith("rt_"))
+        self.assertEqual(await self._latest_trace_row(), trace_id)
+
+    async def test_stream_response_carries_trace_id(self) -> None:
+        self.upstream.enqueue_sse(NoteTests.SSE)
+        resp = await self.proxy.post(
+            "/v1/messages",
+            json={
+                "model": "test-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        await resp.text()
+        self.assertTrue(resp.headers.get("X-Trace-Id", "").startswith("rt_"))
+
+
 if __name__ == "__main__":
     unittest.main()

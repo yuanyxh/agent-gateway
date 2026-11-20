@@ -8,6 +8,7 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
+from agent_gateway.core import trace_context
 from agent_gateway.llm import client as llm_client
 from aiohttp import web
 from agent_gateway.core.config import ui_language
@@ -280,6 +281,10 @@ async def _forward(state: _ProxyState) -> web.StreamResponse:
                     response = web.StreamResponse(
                         status=upstream_resp.status, headers=forward_headers
                     )
+                    # Headers freeze at prepare(), so the trace id must land here.
+                    trace_id = trace_context.current()
+                    if trace_id:
+                        response.headers["X-Trace-Id"] = trace_id
                     diag_stage = "prepare"
                     await response.prepare(state.request)
                     diag_stage = "stream"
