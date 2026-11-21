@@ -3,7 +3,6 @@
   "engine_version": "2",
   "schema_version": "1",
   "state_dir": ".agent-gateway",
-  "log": "graph.log",
   "languages": [
     "java",
     "javascript",
