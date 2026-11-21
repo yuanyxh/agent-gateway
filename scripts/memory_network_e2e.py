@@ -355,7 +355,8 @@ def run(args) -> dict:
                 args.port, "recall", {"keywords": ["记忆", "分组"], "limit": 5}
             )
             result["checks"]["recall"] = {
-                "ok": recalled.get("status") in ("ok", "weak_match", "no_match")
+                "ok": recalled.get("status")
+                in ("ok", "weak_match", "candidates_only", "empty")
                 and "results" in recalled,
                 "status": recalled.get("status"),
                 "count": recalled.get("count"),

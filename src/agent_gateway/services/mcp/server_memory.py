@@ -1377,14 +1377,21 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     out = await asyncio.to_thread(_run)
     top = out["results"]
     related = out["related"]
-    # The budget is spent on the primary results first. Once they are cut, related
-    # context is dropped rather than crowding out a better-scored memory; when they
-    # fit, related rows may use whatever is left.
+    candidates = out.get("candidates") or []
+    # The budget is spent on the primary results first, then candidates and
+    # related context, so entry points never crowd out confirmed hits.
     top, top_truncated, used = _bound_catch_up_results(top, max_chars)
     if top_truncated:
         related = []
+        candidates = []
     elif max_chars > 0:
         remaining = max_chars - used
+        candidates, _, candidate_used = (
+            _bound_catch_up_results(candidates, remaining)
+            if remaining > 0
+            else ([], False, 0)
+        )
+        remaining -= candidate_used
         related, _, _ = (
             _bound_catch_up_results(related, remaining)
             if remaining > 0
@@ -1405,46 +1412,34 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
     payload = {
         "status": status,
         "results": top,
+        "candidates": candidates,
         "related": related,
         "count": len(top),
         # Rows a dimension filter removed, so an empty result is explainable.
         "filtered": filtered,
-        # Excluded rows that returned only because the strict result was short.
         "fallback_count": fallback_count,
-        # Near-miss rows kept because the strict result was short.
         "floor_fallback_count": floor_fallback_count,
-        # Rows the reranker rejected that a short result still needed.
         "rerank_fallback_count": rerank_fallback_count,
         "errors": out.get("errors") or [],
         # The pipeline already writes this trace; returning it lets callers and
         # adoption analysis join a result back to its arms.
         "trace_id": out.get("trace_id") or "",
     }
-    if rerank_fallback_count:
-        payload["hint"] = (
-            f"{rerank_fallback_count} result(s) were rejected by the reranker but "
-            "kept to fill a short result; each carries rerank_fallback."
-        )
-    elif floor_fallback_count:
-        payload["hint"] = (
-            f"{floor_fallback_count} result(s) are below the relevance floor; "
-            "each carries floor_fallback and the status is weak_match."
-        )
-    elif fallback_count:
-        payload["hint"] = (
-            f"{fallback_count} result(s) miss the dimension filter; each carries "
-            "filter_fallback with the failed dimensions."
-        )
-    elif filtered and status in ("weak_match", "no_match"):
-        payload["hint"] = (
-            f"{filtered} row(s) failed the dimension filter; rows without that "
-            "field, including legacy and notes results, never match."
-        )
+    if status == "candidates_only":
+        reasons = {str(row.get("reason") or "") for row in candidates}
+        if reasons == {"filter_miss"}:
+            payload["hint"] = (
+                "Every match failed the dimension filter; candidates are excluded "
+                "rows, not answers."
+            )
+        else:
+            payload["hint"] = (
+                "No result cleared both the floor and the reranker; candidates are "
+                "unconfirmed entry points, not answers."
+            )
     elif status == "weak_match":
-        payload["hint"] = (
-            "No semantic memory cleared the relevance floor; results are lexical or related context."
-        )
-    elif status == "no_match":
+        payload["hint"] = "Results are lexical or related context, not semantic hits."
+    elif status == "empty":
         payload["hint"] = (
             "No memory cleared the relevance floor; try a more specific topic."
         )
@@ -1516,6 +1511,7 @@ def _build_recall_pipeline(
         reranker=get_reranker() if _recall_rerank_enabled() else None,
         expander=expand_episodes,
         stages=stages,
+        layered=True,
     )
 
 

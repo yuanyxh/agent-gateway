@@ -18,6 +18,7 @@ from agent_gateway.services.retrieval.types import RetrievedItem  # noqa: E402
 RECALL_TOP_KEYS = {
     "status",
     "results",
+    "candidates",
     "related",
     "count",
     "filtered",
@@ -41,6 +42,8 @@ RECALL_ITEM_KEYS = {
     "filter_fallback",
     "floor_fallback",
     "rerank_fallback",
+    "rerank_rescued",
+    "reason",
 }
 RECALL_META_KEYS = {"tags", "status", "confidence"}
 
@@ -88,6 +91,12 @@ class RecallResponseTest(unittest.TestCase):
         self.assertNotIn("match_kind", out)
         self.assertNotIn("heat_score", out)
 
+    def test_rescued_flag_is_returned(self):
+        item = _item()
+        item.extra["rerank_rescued"] = True
+
+        self.assertTrue(item.to_result()["rerank_rescued"])
+
     def test_metadata_keeps_only_tags_status_confidence(self):
         out = _item().to_result()
 
@@ -122,8 +131,9 @@ class RecallResponseTest(unittest.TestCase):
     def test_hint_is_added_only_when_the_status_needs_it(self):
         pipeline = mock.Mock()
         pipeline.run_query.return_value = {
-            "status": "no_match",
+            "status": "empty",
             "results": [],
+            "candidates": [],
             "related": [],
             "count": 0,
             "related_count": 0,

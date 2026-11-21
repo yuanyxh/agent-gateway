@@ -48,9 +48,14 @@ HTTP endpoints and JSON contracts instead of importing internals.
   notes — are fused and gated by a single pipeline.
 - Relevance floors are calibrated per embedding model and can be re-calibrated when
   the model changes.
-- Responses carry a status (`ok` / `weak_match` / `no_match`) and trace metadata, so
-  callers can tell an empty result from a weak one. Failed web reads also record
-  `error_code` as trace `error`.
+- Recall responses are layered: `results` holds confirmed hits only (may be empty),
+  `candidates` holds unconfirmed entry points with a `reason` (`below_floor` /
+  `rerank_rejected` / `filter_miss`), and `status` is `ok` / `weak_match` /
+  `candidates_only` / `empty`. `weak_match` means the hits are lexical or related
+  context rather than semantic matches. Short queries (≤3 terms), where the
+  cross-encoder is unreliable, rescue term-matched rejects into `results` with
+  `rerank_rescued`; they never outrank rerank-passed rows. Trace metadata joins a
+  result back to its arms. Failed web reads also record `error_code` as trace `error`.
 
 ### Project intelligence
 

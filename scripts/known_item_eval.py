@@ -63,7 +63,9 @@ def open_session(url: str) -> str:
     return session
 
 
-def recall(url: str, session: str, query: str, limit: int) -> list[str]:
+def recall(
+    url: str, session: str, query: str, limit: int
+) -> tuple[list[str], list[str]]:
     _, out = post(
         url,
         {
@@ -79,7 +81,9 @@ def recall(url: str, session: str, query: str, limit: int) -> list[str]:
     )
     payload = json.loads(out)["result"]["content"][0]["text"]
     data = json.loads(payload)
-    return [item["id"] for item in data.get("results") or []]
+    results = [item["id"] for item in data.get("results") or []]
+    entry = results + [item["id"] for item in data.get("candidates") or []]
+    return results, entry
 
 
 def score(ranks: list[int | None]) -> dict[str, float]:
@@ -125,10 +129,11 @@ def main() -> int:
         return 2
 
     ranks: list[int | None] = []
+    entry_ranks: list[int | None] = []
     missing = 0
     for item in items:
         try:
-            ids = recall(args.url, session, item["query"], args.limit)
+            ids, entry = recall(args.url, session, item["query"], args.limit)
         except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as e:
             print(f"recall failed for {item['id'][:8]}: {e}", file=sys.stderr)
             return 2
@@ -137,15 +142,23 @@ def main() -> int:
         else:
             ranks.append(None)
             missing += 1
+        if item["id"] in entry:
+            entry_ranks.append(entry.index(item["id"]) + 1)
+        else:
+            entry_ranks.append(None)
 
     if len(ranks) < args.min_samples:
         print(f"only {len(ranks)} samples, need {args.min_samples}", file=sys.stderr)
         return 2
 
     current = score(ranks)
+    entry_current = score(entry_ranks)
     print(f"samples={len(ranks)} misses={missing} (remembered memory may have changed)")
     for key in METRICS:
         print(f"  {key:8s} {current[key]:.3f}")
+    print("entry coverage (results + candidates):")
+    for key in METRICS:
+        print(f"  entry_{key:6s} {entry_current[key]:.3f}")
 
     if args.update_baseline:
         args.baseline.write_text(

@@ -17,10 +17,11 @@ from agent_gateway.services.retrieval.arms import recall as recall_arm  # noqa: 
 from agent_gateway.services.retrieval.types import RetrievedItem  # noqa: E402
 
 
-def _out(results, related):
+def _out(results, related, candidates=None):
     return {
         "status": "ok",
         "results": results,
+        "candidates": candidates or [],
         "related": related,
         "count": len(results),
         "related_count": len(related),
@@ -47,6 +48,7 @@ class RecallBudgetTest(unittest.TestCase):
         out = _out(
             [{"id": "a", "content": "x" * 2000}, {"id": "b", "content": "short"}],
             [{"id": "r", "content": "related"}],
+            [{"id": "c", "content": "candidate"}],
         )
 
         data = self._run(out, {"keywords": ["q"], "max_chars": 600})
@@ -54,6 +56,18 @@ class RecallBudgetTest(unittest.TestCase):
         self.assertEqual(len(data["results"]), 1)
         self.assertTrue(data["results"][0]["content_truncated"])
         self.assertEqual(data["related"], [])
+        self.assertEqual(data["candidates"], [])
+
+    def test_candidates_share_the_remaining_budget(self):
+        out = _out(
+            [{"id": "a", "content": "short"}],
+            [],
+            [{"id": "c1", "content": "c" * 400}, {"id": "c2", "content": "d" * 400}],
+        )
+
+        data = self._run(out, {"keywords": ["q"], "max_chars": 700})
+
+        self.assertEqual([row["id"] for row in data["candidates"]], ["c1"])
 
     def test_related_rows_use_the_remaining_budget(self):
         out = _out(

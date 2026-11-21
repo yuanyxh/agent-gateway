@@ -65,6 +65,9 @@ def dcg(gains: list[float]) -> float:
 def score_entry(entry: dict, data: dict, limit: int) -> dict:
     """Recall@5 / MRR / nDCG for one query, using the run's own ordering."""
     hits = data.get("results") or []
+    # Entry coverage counts candidates too: they are the unconfirmed starting
+    # points a vague query is expected to browse.
+    entry_hits = hits + (data.get("candidates") or [])
     positions = {item.get("id"): index for index, item in enumerate(hits, 1)}
     grades: dict[str, float] = {}
     for label in ("relevant", "partial"):
@@ -84,6 +87,10 @@ def score_entry(entry: dict, data: dict, limit: int) -> dict:
     )
     denominator = dcg(ideal[:limit]) or 1.0
     missing = [item_id for item_id in grades if item_id not in positions]
+    entry_first = next(
+        (rank for rank, item in enumerate(entry_hits, 1) if grades.get(item.get("id"))),
+        None,
+    )
     # Precision matters as much as recall here: five hits where one is relevant
     # still forces the caller to read four useless results.
     returned = len(hits[:5]) or 1
@@ -98,6 +105,10 @@ def score_entry(entry: dict, data: dict, limit: int) -> dict:
         "mrr": (1.0 / first) if first else 0.0,
         "ndcg": dcg(gains) / denominator,
         "missing_gold_ids": len(missing),
+        "entry_recall_at_5": bool(
+            any(grades.get(item.get("id")) for item in entry_hits[:5])
+        ),
+        "entry_first_relevant": entry_first,
     }
 
 
@@ -124,6 +135,8 @@ def main() -> int:
             {
                 "n": 0,
                 "recall5": 0.0,
+                "entry_recall5": 0.0,
+                "entry_top1": 0.0,
                 "mrr": 0.0,
                 "ndcg": 0.0,
                 "stale": 0,
@@ -137,6 +150,8 @@ def main() -> int:
         scored = score_entry(entry, data, args.limit)
         bucket["n"] += 1
         bucket["recall5"] += 1.0 if scored["recall_at_5"] else 0.0
+        bucket["entry_recall5"] += 1.0 if scored["entry_recall_at_5"] else 0.0
+        bucket["entry_top1"] += 1.0 if scored["entry_first_relevant"] == 1 else 0.0
         bucket["mrr"] += scored["mrr"]
         bucket["ndcg"] += scored["ndcg"]
         bucket["stale"] += 1 if scored["missing_gold_ids"] else 0
@@ -152,6 +167,12 @@ def main() -> int:
         "queries": len(gold),
         "counted": counted,
         "recall_at_5": round(main_bucket["recall5"] / counted, 4) if counted else None,
+        "entry_recall_at_5": round(main_bucket["entry_recall5"] / counted, 4)
+        if counted
+        else None,
+        "entry_first_relevant_rate": round(main_bucket["entry_top1"] / counted, 4)
+        if counted
+        else None,
         "mrr_at_10": round(main_bucket["mrr"] / counted, 4) if counted else None,
         "ndcg_at_10": round(main_bucket["ndcg"] / counted, 4) if counted else None,
         "precision_at_5": round(main_bucket["precision"] / counted, 4)
@@ -168,6 +189,9 @@ def main() -> int:
             label: {
                 "queries": data["n"],
                 "recall_at_5": round(data["recall5"] / data["n"], 4)
+                if data["n"]
+                else None,
+                "entry_recall_at_5": round(data["entry_recall5"] / data["n"], 4)
                 if data["n"]
                 else None,
                 "status": dict(data["status"]),

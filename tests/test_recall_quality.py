@@ -341,14 +341,14 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        # mid (0.66) is a near miss of the 0.68 floor and is refilled and marked;
-        # low (0.5) stays out.
-        self.assertEqual([row["id"] for row in data["results"]], ["high", "mid"])
-        # A strict hit above the floor keeps the status; the padded row is marked.
+        # mid (0.66) is a near miss of the 0.68 floor: it stays out of results
+        # and becomes a below_floor candidate; low (0.5) is too far.
+        self.assertEqual([row["id"] for row in data["results"]], ["high"])
         self.assertEqual(data["status"], "ok")
-        self.assertEqual(data["count"], 2)
-        self.assertTrue(data["results"][1]["floor_fallback"])
-        self.assertEqual(data["floor_fallback_count"], 1)
+        self.assertEqual(data["count"], 1)
+        self.assertEqual([row["id"] for row in data["candidates"]], ["mid"])
+        self.assertEqual(data["candidates"][0]["reason"], "below_floor")
+        self.assertEqual(data["floor_fallback_count"], 0)
         self.assertNotIn("match_kind", data["results"][0])
         # The floor moved into the arm: mem0 filters on the semantic score before
         # hybrid scoring, which silently drops verbatim hits that need rescuing.
@@ -440,10 +440,10 @@ class RecallHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(data["related"]), 1)
         self.assertNotIn("match_kind", data["related"][0])
 
-    async def test_empty_result_is_no_match(self):
+    async def test_empty_result_is_empty(self):
         data, _ = await self._call([])
 
-        self.assertEqual(data["status"], "no_match")
+        self.assertEqual(data["status"], "empty")
         self.assertEqual(data["count"], 0)
         self.assertEqual(data["related"], [])
         self.assertIn("relevance floor", data["hint"])

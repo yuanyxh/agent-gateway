@@ -36,8 +36,12 @@
 
 - 稠密热层、稠密冷层与词法项目笔记三路检索，由同一条管线融合与门控。
 - 相关性下限按嵌入模型标定，更换模型后可以重新标定。
-- 返回值带有状态（`ok` / `weak_match` / `no_match`）与追踪信息，调用方可以区分
-  “没有结果”与“只有弱相关结果”。
+- 返回值分层：`results` 只含已证实命中（可为空），`candidates` 是带 `reason`
+  （`below_floor` / `rerank_rejected` / `filter_miss`）的未证实入口；状态为
+  `ok` / `weak_match` / `candidates_only` / `empty`。`weak_match` 表示命中是词法
+  或关联上下文，而非语义命中。短查询（≤3 词）上交叉编码器不可靠，词面覆盖达标的
+  判负行会带 `rerank_rescued` 回到 `results`，但绝不越过 rerank 通过行。追踪信息
+  可把结果关联回各检索臂。
 
 ### 项目理解
 

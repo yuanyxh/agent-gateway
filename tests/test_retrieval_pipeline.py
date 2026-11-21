@@ -156,6 +156,7 @@ class QueryConstraintTest(unittest.TestCase):
             gate=PassThroughGate(),
             expander=expander,
             reranker=reranker,
+            layered=True,
         )
         return pipeline.run_query(Query(text="q", **kwargs), limit=limit)
 
@@ -168,11 +169,13 @@ class QueryConstraintTest(unittest.TestCase):
 
         out = self._run(rows, filters={"project": "p"})
 
-        self.assertEqual([row["id"] for row in out["results"]], ["a", "b", "c"])
-        self.assertNotIn("filter_fallback", out["results"][0])
-        self.assertEqual(out["results"][1]["filter_fallback"], ["project"])
-        self.assertEqual(out["results"][2]["filter_fallback"], ["project"])
-        self.assertEqual(out["fallback_count"], 2)
+        self.assertEqual([row["id"] for row in out["results"]], ["a"])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["b", "c"])
+        self.assertTrue(
+            all(row["reason"] == "filter_miss" for row in out["candidates"])
+        )
+        self.assertEqual(out["fallback_count"], 0)
+        self.assertEqual(out["status"], "ok")
 
     def test_filter_does_not_pad_when_the_limit_is_full(self):
         rows = [
@@ -219,10 +222,13 @@ class QueryConstraintTest(unittest.TestCase):
 
         out = self._run(rows, limit=2, filters={"project": "p"})
 
-        self.assertEqual([row["id"] for row in out["results"]], ["target", "n0"])
+        self.assertEqual([row["id"] for row in out["results"]], ["target"])
         self.assertEqual(out["filtered"], 8)
-        self.assertEqual(out["fallback_count"], 1)
-        self.assertEqual(out["results"][1]["filter_fallback"], ["project"])
+        self.assertEqual(out["fallback_count"], 0)
+        self.assertEqual(
+            [row["id"] for row in out["candidates"]], ["n0", "n1", "n2", "n3"]
+        )
+        self.assertEqual(out["status"], "ok")
 
     def test_related_rows_obey_the_constraint(self):
         def expander(query, items, filters):
@@ -267,7 +273,7 @@ class QueryConstraintTest(unittest.TestCase):
 
         self.assertEqual([row["id"] for row in out["results"]], ["b", "a"])
 
-    def test_padded_rows_go_through_the_reranker(self):
+    def test_padded_rows_become_candidates_without_rerank(self):
         rows = [
             item("a", 0.9, extra={"project": "o"}),
             item("b", 0.8, extra={"project": "o"}),
@@ -281,13 +287,14 @@ class QueryConstraintTest(unittest.TestCase):
 
         out = self._run(rows, filters={"project": "p"}, reranker=rerank)
 
-        self.assertEqual(seen, ["a", "b", "c"])
-        self.assertEqual([row["id"] for row in out["results"]], ["c", "b", "a"])
-        self.assertEqual(out["fallback_count"], 3)
+        self.assertEqual(seen, [])
+        self.assertEqual(out["results"], [])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["a", "b", "c"])
         self.assertTrue(
-            all(row["filter_fallback"] == ["project"] for row in out["results"])
+            all(row["reason"] == "filter_miss" for row in out["candidates"])
         )
-        self.assertEqual(out["status"], "weak_match")
+        self.assertEqual(out["fallback_count"], 0)
+        self.assertEqual(out["status"], "candidates_only")
 
     def test_filter_fallback_survives_a_reranker_that_drops_every_row(self):
         rows = [
@@ -297,14 +304,12 @@ class QueryConstraintTest(unittest.TestCase):
 
         out = self._run(rows, filters={"project": "p"}, reranker=lambda q, items: [])
 
-        self.assertEqual([row["id"] for row in out["results"]], ["a", "b"])
-        self.assertEqual(out["fallback_count"], 2)
-        self.assertTrue(
-            all(row["filter_fallback"] == ["project"] for row in out["results"])
-        )
-        self.assertEqual(out["status"], "weak_match")
+        self.assertEqual(out["results"], [])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["a", "b"])
+        self.assertEqual(out["fallback_count"], 0)
+        self.assertEqual(out["status"], "candidates_only")
 
-    def test_strict_rows_stay_ahead_of_reranked_padding(self):
+    def test_strict_rows_stay_ahead_of_padding(self):
         rows = [
             item("s", 0.9, extra={"project": "p"}),
             item("x", 0.8, extra={"project": "o"}),
@@ -316,8 +321,8 @@ class QueryConstraintTest(unittest.TestCase):
 
         out = self._run(rows, limit=3, filters={"project": "p"}, reranker=rerank)
 
-        self.assertEqual([row["id"] for row in out["results"]], ["s", "y", "x"])
-        self.assertNotIn("filter_fallback", out["results"][0])
+        self.assertEqual([row["id"] for row in out["results"]], ["s"])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["x", "y"])
         self.assertEqual(out["status"], "ok")
 
 
@@ -688,28 +693,45 @@ class FloorFallbackTest(unittest.TestCase):
             arms=[FakeArm("a", items, weak=weak)],
             fusion=RRFFusion(),
             gate=LayerPresenceGate(),
+            layered=True,
         )
         return pipeline.run_query(Query(text="q", language="en"), limit=limit)
 
-    def test_weak_rows_fill_a_short_result_and_are_marked(self):
-        out = self._run([item("s", 0.9)], [item("w", 0.5)])
+    def test_legacy_profile_still_pads(self):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [item("s", 0.9)], weak=[item("w", 0.5)])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+        )
+
+        out = pipeline.run_query(Query(text="q", language="en"), limit=3)
 
         self.assertEqual([row["id"] for row in out["results"]], ["s", "w"])
-        self.assertEqual(out["floor_fallback_count"], 1)
-        self.assertTrue(out["results"][1]["floor_fallback"])
+        self.assertNotIn("candidates", out)
 
-    def test_weak_rows_are_unused_when_strict_fills_the_limit(self):
+    def test_weak_rows_become_candidates_and_are_marked(self):
+        out = self._run([item("s", 0.9)], [item("w", 0.5)])
+
+        self.assertEqual([row["id"] for row in out["results"]], ["s"])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["w"])
+        self.assertEqual(out["candidates"][0]["reason"], "below_floor")
+        self.assertEqual(out["floor_fallback_count"], 0)
+
+    def test_weak_rows_are_candidates_even_when_strict_fills_the_limit(self):
         out = self._run([item("s", 0.9), item("t", 0.8)], [item("w", 0.5)], limit=2)
 
         self.assertEqual([row["id"] for row in out["results"]], ["s", "t"])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["w"])
         self.assertEqual(out["floor_fallback_count"], 0)
 
-    def test_weak_only_result_is_weak_match(self):
+    def test_weak_only_result_is_candidates_only(self):
         out = self._run([], [item("w", 0.5)], limit=2)
 
-        self.assertEqual([row["id"] for row in out["results"]], ["w"])
-        self.assertEqual(out["status"], "weak_match")
-        self.assertEqual(out["floor_fallback_count"], 1)
+        self.assertEqual(out["results"], [])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["w"])
+        self.assertEqual(out["status"], "candidates_only")
+        self.assertEqual(out["floor_fallback_count"], 0)
 
 
 class RerankFallbackTest(unittest.TestCase):
@@ -720,21 +742,189 @@ class RerankFallbackTest(unittest.TestCase):
             fusion=RRFFusion(),
             gate=LayerPresenceGate(),
             reranker=reranker,
+            layered=True,
         )
         return pipeline.run_query(Query(text="q", language="en"), limit=limit)
 
-    def test_rejecting_everything_refills_and_marks_weak(self):
+    def test_rejecting_everything_yields_candidates_only(self):
         out = self._run(lambda q, rows: [], [item("s", 0.9), item("u", 0.8)])
 
-        self.assertEqual([row["id"] for row in out["results"]], ["s", "u"])
-        self.assertEqual(out["rerank_fallback_count"], 2)
-        self.assertEqual(out["status"], "weak_match")
+        self.assertEqual(out["results"], [])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["s", "u"])
+        self.assertTrue(
+            all(row["reason"] == "rerank_rejected" for row in out["candidates"])
+        )
+        self.assertEqual(out["rerank_fallback_count"], 0)
+        self.assertEqual(out["status"], "candidates_only")
 
-    def test_partial_drop_refills_only_the_shortfall(self):
+    def test_term_match_rescues_a_rejected_row(self):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [item("s", 0.9, content="memory detail")])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+            layered=True,
+        )
+
+        out = pipeline.run_query(Query(text="memory", language="en"), limit=2)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["s"])
+        self.assertTrue(out["results"][0]["rerank_rescued"])
+        self.assertEqual(out["candidates"], [])
+        self.assertEqual(out["status"], "ok")
+
+    def test_two_term_query_requires_both_terms(self):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [item("s", 0.9, content="报表分组字段")])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+            layered=True,
+        )
+
+        out = pipeline.run_query(Query(text="memory 分组", language="mixed"), limit=2)
+
+        self.assertEqual(out["results"], [])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["s"])
+
+    def test_long_query_does_not_rescue(self):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [item("s", 0.9, content="memory group detail")])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+            layered=True,
+        )
+
+        out = pipeline.run_query(
+            Query(text="memory group detail missing context", language="en"),
+            limit=2,
+        )
+
+        self.assertEqual(out["results"], [])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["s"])
+
+    def test_stopwords_do_not_count_as_covered_terms(self):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [item("s", 0.9, content="the memory cache")])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+            layered=True,
+        )
+
+        out = pipeline.run_query(Query(text="the memory group", language="en"), limit=2)
+
+        self.assertEqual(out["results"], [])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["s"])
+
+    def test_cjk_bigrams_tolerate_one_word_boundary_miss(self):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [item("s", 0.9, content="报表按分组统计")])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+            layered=True,
+        )
+
+        out = pipeline.run_query(Query(text="报表分组", language="cjk"), limit=2)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["s"])
+
+    def test_boost_does_not_lift_rescued_rows_above_ranked(self):
+        ranked = item("a", 0.2, content="unrelated")
+        rescued = item("s", 0.7, content="memory detail", extra={"task": "t"})
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [ranked, rescued])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [ranked],
+            layered=True,
+        )
+
+        out = pipeline.run_query(
+            Query(text="memory", language="en", boost={"task": "t"}), limit=2
+        )
+
+        self.assertEqual([row["id"] for row in out["results"]], ["a", "s"])
+
+    def test_ascii_terms_match_whole_words(self):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [item("s", 0.9, content="memory detail")])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+            layered=True,
+        )
+
+        out = pipeline.run_query(Query(text="mem", language="en"), limit=2)
+
+        self.assertEqual(out["results"], [])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["s"])
+
+    def test_absent_query_does_not_rescue(self):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [item("s", 0.9, content="q memory detail")])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+            layered=True,
+        )
+
+        out = pipeline.run_query(Query(text="qzx-void-9471", language="en"), limit=2)
+
+        self.assertEqual(out["results"], [])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["s"])
+        self.assertEqual(out["status"], "candidates_only")
+
+    def test_rerank_rejected_outranks_below_floor_candidates(self):
+        arm = FakeArm("a", [item("s", 0.03)], weak=[item("w", 0.5)])
+        pipeline = Pipeline(
+            name="t",
+            arms=[arm],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+            layered=True,
+        )
+
+        out = pipeline.run_query(Query(text="q", language="en"), limit=2)
+
+        self.assertEqual([row["id"] for row in out["candidates"]], ["s", "w"])
+        self.assertEqual(
+            [row["reason"] for row in out["candidates"]],
+            ["rerank_rejected", "below_floor"],
+        )
+
+    def test_legacy_profile_revives_rejected_strict_rows(self):
+        pipeline = Pipeline(
+            name="t",
+            arms=[FakeArm("a", [item("s", 0.9), item("u", 0.8)])],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+        )
+
+        out = pipeline.run_query(Query(text="q", language="en"), limit=2)
+
+        self.assertEqual([row["id"] for row in out["results"]], ["s", "u"])
+        self.assertNotIn("candidates", out)
+
+    def test_partial_drop_moves_rejected_rows_to_candidates(self):
         out = self._run(lambda q, rows: rows[:1], [item("s", 0.9), item("u", 0.8)])
 
-        self.assertEqual([row["id"] for row in out["results"]], ["s", "u"])
-        self.assertEqual(out["rerank_fallback_count"], 1)
+        self.assertEqual([row["id"] for row in out["results"]], ["s"])
+        self.assertEqual([row["id"] for row in out["candidates"]], ["u"])
+        self.assertEqual(out["candidates"][0]["reason"], "rerank_rejected")
+        self.assertEqual(out["rerank_fallback_count"], 0)
         self.assertEqual(out["status"], "ok")
 
 
@@ -753,6 +943,79 @@ class TraceStatsTest(unittest.TestCase):
         payload = captured[0]
         self.assertEqual(payload["floor_fallback_count"], 1)
         self.assertEqual(payload["passes"][0]["arms"][0]["stats"]["raw"], 2)
+
+    def test_layered_trace_records_status_and_candidates(self):
+        captured: list[dict] = []
+        arm = FakeArm("a", [], weak=[item("w", 0.5)], stats={"raw": 1, "kept": 0})
+        pipeline = Pipeline(
+            name="t",
+            arms=[arm],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            layered=True,
+        )
+        with mock.patch.object(trace, "record", side_effect=captured.append):
+            out = pipeline.run_query(Query(text="q", language="en"), limit=3)
+
+        payload = captured[0]
+        self.assertEqual(payload["status"], "candidates_only")
+        self.assertEqual(payload["status"], out["status"])
+        self.assertEqual(payload["candidate_count"], 1)
+        self.assertEqual(payload["candidate_ids"], ["w"])
+
+    def test_layered_trace_counts_rescued_rows(self):
+        captured: list[dict] = []
+        arm = FakeArm("a", [item("s", 0.9, content="memory detail")])
+        pipeline = Pipeline(
+            name="t",
+            arms=[arm],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            reranker=lambda q, rows: [],
+            layered=True,
+        )
+        with mock.patch.object(trace, "record", side_effect=captured.append):
+            out = pipeline.run_query(Query(text="memory", language="en"), limit=2)
+
+        self.assertEqual(captured[0]["rerank_rescued_count"], 1)
+        self.assertTrue(out["results"][0]["rerank_rescued"])
+
+    def test_layered_trace_status_matches_every_state(self):
+        cases = [
+            ([item("s", 0.9)], [], "ok"),
+            ([], [item("w", 0.5)], "candidates_only"),
+            ([], [], "empty"),
+        ]
+        for items, weak, expected in cases:
+            captured: list[dict] = []
+            arm = FakeArm("a", items, weak=weak)
+            pipeline = Pipeline(
+                name="t",
+                arms=[arm],
+                fusion=RRFFusion(),
+                gate=LayerPresenceGate(),
+                layered=True,
+            )
+            with mock.patch.object(trace, "record", side_effect=captured.append):
+                out = pipeline.run_query(Query(text="q", language="en"), limit=3)
+            self.assertEqual(captured[0]["status"], expected)
+            self.assertEqual(out["status"], expected)
+
+    def test_candidates_carry_only_a_reason(self):
+        arm = FakeArm("a", [item("s", 0.9)], weak=[item("w", 0.5)])
+        pipeline = Pipeline(
+            name="t",
+            arms=[arm],
+            fusion=RRFFusion(),
+            gate=LayerPresenceGate(),
+            layered=True,
+        )
+        out = pipeline.run_query(Query(text="q", language="en"), limit=3)
+        candidate = out["candidates"][0]
+
+        self.assertEqual(candidate["reason"], "below_floor")
+        for legacy in ("floor_fallback", "filter_fallback", "rerank_fallback"):
+            self.assertNotIn(legacy, candidate)
 
 
 class ConfigTest(unittest.TestCase):

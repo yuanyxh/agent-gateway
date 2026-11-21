@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -9,7 +10,7 @@ from typing import Any, Callable
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.services.retrieval import trace as trace_mod
 from agent_gateway.services.retrieval.fusion.score import RRFFusion
-from agent_gateway.services.retrieval.text.analyzer import detect_language
+from agent_gateway.services.retrieval.text.analyzer import detect_language, split_terms
 from agent_gateway.services.retrieval.types import (
     ArmResult,
     Query,
@@ -34,6 +35,50 @@ MAX_TERM_VARIANTS = 3
 #: at 1.30. Only order changes, never the score the gate reads.
 BOOST_STEP = 0.10
 BOOST_MAX_FIELDS = 3
+
+#: Candidate order is provenance first: fused, dense-floor and rerank scores
+#: are not on one scale, so a rejected strict hit must outrank a near miss.
+CANDIDATE_PRIORITY = {"rerank_rejected": 0, "below_floor": 1, "filter_miss": 2}
+
+#: Short queries make the cross-encoder unreliable, so a rejected row is rescued
+#: when its terms appear. The gate counts whitespace tokens: CJK has no word
+#: boundaries, and a no-space phrase is naturally one token. Two terms require
+#: both; longer queries allow one miss, because bigrams straddle CJK word edges.
+RERANK_RESCUE_MAX_TOKENS = 3
+#: Function words appear in every row and would count as a covered term.
+RERANK_RESCUE_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "of",
+        "to",
+        "in",
+        "on",
+        "at",
+        "by",
+        "for",
+        "is",
+        "and",
+        "or",
+        "with",
+    }
+)
+
+
+def _term_coverage(content: str, needles: list[str]) -> float:
+    """ASCII terms match whole words; CJK terms match as substrings."""
+    if not needles:
+        return 0.0
+    lowered = content.lower()
+    hits = 0
+    for needle in needles:
+        if needle.isascii():
+            if re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", lowered):
+                hits += 1
+        elif needle in lowered:
+            hits += 1
+    return hits / len(needles)
 
 
 @dataclass
@@ -67,6 +112,7 @@ class Pipeline:
         stages: list[Stage] | None = None,
         reranker: Reranker | None = None,
         semantic_fusion: Any = None,
+        layered: bool = False,
     ):
         self.name = name
         self.arms = arms
@@ -74,6 +120,9 @@ class Pipeline:
         self.gate = gate
         self.expander = expander
         self.reranker = reranker
+        #: Recall splits confirmed hits from entry candidates; other profiles
+        #: keep the legacy padding contract their callers already consume.
+        self.layered = layered
         self.stages = stages if stages is not None else self._compile(arms)
         #: Merges the keyword pass with the semantic pass; only used when the
         #: caller supplied both query forms.
@@ -264,20 +313,34 @@ class Pipeline:
         strict = items[:limit]
         strict_ids = {item.id for item in strict}
         merged = list(strict)
-        if len(strict) < limit:
-            # Near-miss rows below the floor come first: they passed every other
-            # filter and were only rejected on score.
-            merged.extend(
-                self._weak_candidates(weak_pool, limit - len(merged), strict_ids)
-            )
-        if len(merged) < limit:
-            # A short strict result is padded from excluded rows, and the padded
-            # rows must pass through the same rerank as the strict ones.
-            merged.extend(
-                self._fallback_candidates(
-                    query, fallback, limit - len(merged), strict_ids
+        candidates: list[RetrievedItem] = []
+        if self.layered:
+            for item in self._weak_candidates(weak_pool, limit * 2, strict_ids):
+                candidates.append(
+                    replace(
+                        item, extra=self._candidate_extra(item.extra, "below_floor")
+                    )
                 )
-            )
+            for item in self._fallback_candidates(
+                query, fallback, limit * 2, strict_ids
+            ):
+                candidates.append(
+                    replace(
+                        item, extra=self._candidate_extra(item.extra, "filter_miss")
+                    )
+                )
+        else:
+            if len(strict) < limit:
+                merged.extend(
+                    self._weak_candidates(weak_pool, limit - len(merged), strict_ids)
+                )
+            if len(merged) < limit:
+                merged.extend(
+                    self._fallback_candidates(
+                        query, fallback, limit - len(merged), strict_ids
+                    )
+                )
+        reranked = False
         if self.reranker is not None and merged:
             rerank_started = time.perf_counter()
             try:
@@ -285,56 +348,132 @@ class Pipeline:
             except Exception as e:  # noqa: BLE001 - reranking must not kill the call
                 logger.warning(f"[pipeline:{self.name}] rerank failed: {e!r}")
             else:
-                # Rerank may lift a padded row; the caller asked for strict rows,
-                # so keep that group ahead and preserve rerank order inside both.
-                reranked_ids = {item.id for item in ranked}
-                dropped = [item for item in merged if item.id not in reranked_ids]
-                merged = [
-                    *[item for item in ranked if item.id in strict_ids],
-                    *[item for item in ranked if item.id not in strict_ids],
-                ]
-                # Revive strict and filter-excluded rows; never floor padding.
-                trusted_dropped = [
-                    item
-                    for item in dropped
-                    if item.id in strict_ids or item.extra.get("filter_fallback")
-                ]
-                if len(merged) < limit and trusted_dropped:
-                    merged.extend(
-                        replace(item, extra={**item.extra, "rerank_fallback": True})
-                        for item in trusted_dropped[: limit - len(merged)]
+                reranked = True
+                if self.layered:
+                    ranked_ids = {item.id for item in ranked}
+                    text = query.root_text or query.text
+                    needles = [
+                        term
+                        for term in split_terms(text)
+                        if term not in RERANK_RESCUE_STOPWORDS
+                    ]
+                    need = (
+                        1.0 if len(needles) <= 2 else (len(needles) - 1) / len(needles)
                     )
+                    rescued: list[RetrievedItem] = []
+                    for item in merged:
+                        if item.id in ranked_ids:
+                            continue
+                        if (
+                            len(text.split()) <= RERANK_RESCUE_MAX_TOKENS
+                            and _term_coverage(item.content, needles) >= need
+                        ):
+                            rescued.append(
+                                replace(
+                                    item,
+                                    extra={**item.extra, "rerank_rescued": True},
+                                )
+                            )
+                        else:
+                            candidates.append(
+                                replace(
+                                    item,
+                                    extra=self._candidate_extra(
+                                        item.extra, "rerank_rejected"
+                                    ),
+                                )
+                            )
+                    merged = [*self._prefer(query, ranked), *rescued]
+                else:
+                    reranked_ids = {item.id for item in ranked}
+                    dropped = [item for item in merged if item.id not in reranked_ids]
+                    merged = [
+                        *[item for item in ranked if item.id in strict_ids],
+                        *[item for item in ranked if item.id not in strict_ids],
+                    ]
+                    trusted_dropped = [
+                        item
+                        for item in dropped
+                        if item.id in strict_ids or item.extra.get("filter_fallback")
+                    ]
+                    if len(merged) < limit and trusted_dropped:
+                        merged.extend(
+                            replace(item, extra={**item.extra, "rerank_fallback": True})
+                            for item in trusted_dropped[: limit - len(merged)]
+                        )
             latency["rerank"] = round((time.perf_counter() - rerank_started) * 1000, 2)
 
-        items = [
-            *self._prefer(query, [item for item in merged if item.id in strict_ids]),
-            *self._prefer(
-                query, [item for item in merged if item.id not in strict_ids]
-            ),
-        ]
-        related = self.expander(query, items[:limit], filters) if self.expander else []
-        # Expansion reaches other groups through edges; a constraint must still
-        # hold for what the caller sees as related context.
-        related = self._narrow(query, related)
+        if self.layered:
+            if not reranked:
+                merged = self._prefer(query, merged)
+            related = (
+                self.expander(query, merged[:limit], filters) if self.expander else []
+            )
+            related = self._narrow(query, related)
+            top = merged[:limit]
+        else:
+            items = [
+                *self._prefer(
+                    query, [item for item in merged if item.id in strict_ids]
+                ),
+                *self._prefer(
+                    query, [item for item in merged if item.id not in strict_ids]
+                ),
+            ]
+            related = (
+                self.expander(query, items[:limit], filters) if self.expander else []
+            )
+            related = self._narrow(query, related)
+            top = items[:limit]
 
-        top = items[:limit]
-        fallback_count = sum(1 for item in top if item.extra.get("filter_fallback"))
-        floor_fallback_count = sum(
-            1 for item in top if item.extra.get("floor_fallback")
-        )
-        rerank_fallback_count = sum(
-            1 for item in top if item.extra.get("rerank_fallback")
-        )
         verdict = self.gate.judge(query, top, related)
-        padded = fallback_count + floor_fallback_count + rerank_fallback_count
-        if top and padded >= len(top) and verdict.status == "ok":
-            if rerank_fallback_count:
-                reason = "rerank_fallback_only"
-            elif floor_fallback_count:
-                reason = "floor_fallback_only"
+        if self.layered:
+            top_ids = {item.id for item in top}
+            seen: set[str] = set()
+            ordered: list[RetrievedItem] = []
+            for item in sorted(
+                candidates,
+                key=lambda i: (
+                    CANDIDATE_PRIORITY.get(
+                        str(i.extra.get("candidate_reason") or ""), 3
+                    ),
+                    -float(i.score),
+                ),
+            ):
+                if item.id in top_ids or item.id in seen:
+                    continue
+                seen.add(item.id)
+                ordered.append(item)
+            candidates = ordered[: limit * 2]
+            if top:
+                status = "ok" if verdict.status == "ok" else "weak_match"
+            elif related:
+                status = "weak_match"
+            elif candidates:
+                status = "candidates_only"
             else:
-                reason = "filter_fallback_only"
-            verdict = replace(verdict, status="weak_match", reason=reason)
+                status = "empty"
+            fallback_count = 0
+            floor_fallback_count = 0
+            rerank_fallback_count = 0
+        else:
+            fallback_count = sum(1 for item in top if item.extra.get("filter_fallback"))
+            floor_fallback_count = sum(
+                1 for item in top if item.extra.get("floor_fallback")
+            )
+            rerank_fallback_count = sum(
+                1 for item in top if item.extra.get("rerank_fallback")
+            )
+            padded = fallback_count + floor_fallback_count + rerank_fallback_count
+            if top and padded >= len(top) and verdict.status == "ok":
+                if rerank_fallback_count:
+                    reason = "rerank_fallback_only"
+                elif floor_fallback_count:
+                    reason = "floor_fallback_only"
+                else:
+                    reason = "filter_fallback_only"
+                verdict = replace(verdict, status="weak_match", reason=reason)
+            status = verdict.status
 
         related = related[:limit]
         errors = [
@@ -358,10 +497,17 @@ class Pipeline:
             floor_fallback_count,
             rerank_fallback_count,
         )
+        if self.layered:
+            trace_payload["status"] = status
+            trace_payload["candidate_count"] = len(candidates)
+            trace_payload["candidate_ids"] = [item.id for item in candidates]
+            trace_payload["rerank_rescued_count"] = sum(
+                1 for item in top if item.extra.get("rerank_rescued")
+            )
         trace_mod.record(trace_payload)
 
-        return {
-            "status": verdict.status,
+        payload: dict[str, Any] = {
+            "status": status,
             "results": [item.to_result(query.expose) for item in top],
             "related": [item.to_result(query.expose) for item in related],
             "count": len(top),
@@ -369,16 +515,33 @@ class Pipeline:
             # Rows a caller's constraint removed; a miss and a filtered-out
             # match look identical otherwise.
             "filtered": filtered,
-            # How many of those rows came back to fill a short result.
             "fallback_count": fallback_count,
-            # Floor misses kept only because the strict result was short.
             "floor_fallback_count": floor_fallback_count,
-            # Rows the cross-encoder rejected that the short result still needs.
             "rerank_fallback_count": rerank_fallback_count,
             # Arm failures are otherwise indistinguishable from a real miss.
             "errors": errors,
             "trace_id": trace_payload["trace_id"],
         }
+        if self.layered:
+            payload["candidates"] = [
+                {
+                    **item.to_result(query.expose),
+                    "reason": str(item.extra.get("candidate_reason") or ""),
+                }
+                for item in candidates
+            ]
+        return payload
+
+    @staticmethod
+    def _candidate_extra(extra: dict[str, Any], reason: str) -> dict[str, Any]:
+        """Mark a candidate with one reason; legacy padding flags do not travel."""
+        cleaned = {
+            key: value
+            for key, value in extra.items()
+            if key not in ("floor_fallback", "filter_fallback", "rerank_fallback")
+        }
+        cleaned["candidate_reason"] = reason
+        return cleaned
 
     @staticmethod
     def _allowed(value: Any) -> set[str]:
