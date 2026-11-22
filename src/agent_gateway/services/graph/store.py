@@ -212,28 +212,7 @@ class GraphStore:
         ).fetchone()
         return row["content_hash"] if row else None
 
-    def unresolved_paths(self, names: set[str]) -> set[str]:
-        if not names:
-            return set()
-        found: set[str] = set()
-        items = list(names)
-        for start in range(0, len(items), 500):
-            chunk = items[start : start + 500]
-            marks = ",".join("?" for _ in chunk)
-            rows = self.conn.execute(
-                f"SELECT DISTINCT path FROM unresolved WHERE raw_name IN ({marks})",
-                chunk,
-            )
-            found |= {row["path"] for row in rows}
-        return found
-
     # -- writes --------------------------------------------------------------
-
-    def update_file_meta(self, path: str, size: int, mtime: float) -> None:
-        with self.conn:
-            self.conn.execute(
-                "UPDATE files SET size=?, mtime=? WHERE path=?", (size, mtime, path)
-            )
 
     def delete_dangling_stale_edges(self) -> None:
         with self.conn:

@@ -196,11 +196,6 @@ def _run_provider(
     ]
 
 
-def _search_google(query: str, limit: int) -> list:
-    """Backward-compatible alias for the injected Google provider."""
-    return _run_provider("google", query, limit)
-
-
 def fetch(url: str, engine: str = "bing", timeout: int = TIMEOUT) -> str:
     """Fetch raw HTML with a browser-like request (kept for the knowledge pipeline)."""
     host = urllib.parse.urlparse(url).netloc.lower()

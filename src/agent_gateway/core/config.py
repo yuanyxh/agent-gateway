@@ -5,7 +5,7 @@ The duplicated env reads and defaults of the three monoliths
 eliminating "the same variable read in 2-3 files, defaults hardcoded
 and scattered" duplication.
 
-Usage (flat same-directory import, reusing the log_utils/agent_call pattern):
+Usage (flat same-directory import, reusing the log_utils pattern):
     from agent_gateway.core.config import ai_api_key, summary_model, summary_api_url, notes_dir, data_dir
 
 Notes:

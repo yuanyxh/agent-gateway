@@ -513,25 +513,6 @@ def set_status(node_id: str, status: str, db_path: str | None = None) -> bool:
         return False
 
 
-def update_metadata(node_id: str, updates: dict, db_path: str | None = None) -> bool:
-    """Patch selected metadata keys in place; other keys and the body stay untouched."""
-    try:
-        with connect(db_path) as connection:
-            cursor = connection.execute(
-                "UPDATE memory_nodes SET metadata=json_patch(metadata, ?), updated_at=? "
-                "WHERE node_id=?",
-                (
-                    json.dumps(updates, ensure_ascii=False),
-                    datetime.now().isoformat(),
-                    node_id,
-                ),
-            )
-            return cursor.rowcount > 0
-    except sqlite3.Error as e:
-        logger.warning(f"[memory-store] metadata update failed for {node_id}: {e}")
-        return False
-
-
 def batch_update_metadata(
     updates: list[tuple[str, dict]], db_path: str | None = None
 ) -> int:

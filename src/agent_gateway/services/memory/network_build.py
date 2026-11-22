@@ -1119,18 +1119,6 @@ def write_bridges(bridges: list[dict], *, db_path: str | None = None) -> int:
     return written
 
 
-def top_synapses(
-    neuron_id: str,
-    *,
-    min_weight: float = 0.0,
-    limit: int = MAX_SYNAPSE_DEGREE,
-    db_path: str | None = None,
-) -> list[dict]:
-    return network.synapses_of(
-        neuron_id, min_weight=min_weight, limit=limit, db_path=db_path
-    )
-
-
 def enforce_degree_cap(
     *,
     db_path: str | None = None,

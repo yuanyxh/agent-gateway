@@ -9,7 +9,6 @@ from agent_gateway.core.log_utils import setup_logging
 # Configuration (same as pre-split server.py; NOTE_*/PROJECT_MARKER_* are server-specific)
 # ---------------------------------------------------------------------------
 
-NOTE_DB_FILENAME = "note_vectors.sqlite"
 NOTE_EXCLUDE_DIRS = frozenset(
     {
         ".build",

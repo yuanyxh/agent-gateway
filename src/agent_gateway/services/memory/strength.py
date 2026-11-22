@@ -21,12 +21,6 @@ UNBIND_WEIGHT = 0.15
 UNBIND_DAYS = 60
 
 
-def _iso(now: datetime | str | None = None) -> str:
-    if isinstance(now, datetime):
-        return now.isoformat()
-    return str(now or datetime.now().isoformat())
-
-
 def _parse(value: str) -> datetime | None:
     try:
         return datetime.fromisoformat(str(value))

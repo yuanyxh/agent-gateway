@@ -238,21 +238,3 @@ def record_dispute(
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[graph] dispute edge failed {left_id} <-> {right_id}: {e}")
-
-
-def record_episode_node(
-    node_id: str, episode_id: str, db_path: str | None = None
-) -> None:
-    """Join an existing node to its episode group without rewriting its metadata."""
-    if not node_id or not episode_id:
-        return
-    try:
-        members = store.find_nodes_by_metadata(
-            "episode_id", episode_id, exclude=node_id, db_path=db_path
-        )
-        graph.add_edges(
-            [(node_id, member["node_id"], "episode") for member in members],
-            db_path=db_path,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"[graph] episode link failed for {node_id}: {e}")

@@ -20,8 +20,6 @@ from typing import Any
 from agent_gateway.core import config_loader, paths
 from agent_gateway.core.paths import gateway_cache
 
-MCP_BASE_PORT = 9001
-PROXY_BASE_PORT = 8613
 DEFAULT_CONTEXT_WARN = 300_000
 
 

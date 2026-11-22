@@ -370,7 +370,7 @@ def _gen_merge(group: dict, target_file: Path, existing_text: str) -> dict | Non
     }
 
 
-def _topical_related(g1: dict, g2: dict, kw1: list[str], kw2: list[str]) -> bool:
+def _topical_related(kw1: list[str], kw2: list[str]) -> bool:
     """Pre-aggregation merge decision: shared topic keywords + Jaccard >= SUMMARY_TOPIC_JACCARD (purely deterministic, 0 LLM).
 
     Measured calibration (2026-08-06, real 20 unprocessed memories -> 12 groups -> 4 hit targets):
@@ -475,8 +475,6 @@ def _pre_aggregate_same_target(
             placed = False
             for rep in reps:
                 if _topical_related(
-                    groups[gi],
-                    rep["group"],
                     resolved[gi]["keywords"],
                     rep["resolved"]["keywords"],
                 ):

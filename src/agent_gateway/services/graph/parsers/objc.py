@@ -31,11 +31,6 @@ SKIP_SELECTORS = frozenset(
 
 TYPE_SELECTORS = frozenset({"alloc", "new"})
 
-BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-LINE_COMMENT = re.compile(r"//[^\n]*")
-STRING_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"')
-CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\])*'")
-
 IMPORT_RE = re.compile(r'^[ \t]*#[ \t]*import[ \t]+[<"]([^">]+)[>"]', re.MULTILINE)
 INTERFACE_RE = re.compile(
     r"^[ \t]*@(interface|implementation)[ \t]+([A-Za-z_]\w*)", re.MULTILINE
@@ -50,10 +45,6 @@ BLOCK_PROPERTY_RE = re.compile(r"\([ \t]*\^[ \t]*([A-Za-z_]\w*)[ \t]*\)")
 PROPERTY_NAME_RE = re.compile(r"([A-Za-z_]\w*)[ \t]*;$")
 RECEIVER_RE = re.compile(r"[A-Za-z_]\w*(?:(?:\.|->)[A-Za-z_]\w*)*")
 IDENT_RE = re.compile(r"[A-Za-z_]\w*")
-
-
-def _blank(text: str) -> str:
-    return "".join("\n" if char == "\n" else " " for char in text)
 
 
 def _blank_range(chars: list[str], start: int, end: int) -> None:

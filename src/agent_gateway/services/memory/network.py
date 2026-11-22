@@ -157,17 +157,6 @@ def upsert_neuron(neuron: dict, db_path: str | None = None) -> bool:
     return True
 
 
-def set_neuron_centroid(neuron_id: str, values, db_path: str | None = None) -> bool:
-    if not neuron_id:
-        return False
-    with store.connect(db_path) as connection:
-        cursor = connection.execute(
-            "UPDATE neurons SET centroid=?, updated_at=? WHERE neuron_id=?",
-            (encode_centroid(values), datetime.now().isoformat(), neuron_id),
-        )
-    return cursor.rowcount > 0
-
-
 def set_neuron_sparse(
     neuron_id: str,
     code: bytes,
