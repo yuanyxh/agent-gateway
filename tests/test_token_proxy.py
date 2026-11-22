@@ -342,6 +342,87 @@ class NoteTests(ProxyTestBase):
         self.assertIn("upstream-model", text)
         self.assertIn(proxy_response_note.SEG_JOIN, text)
 
+    @staticmethod
+    def _sse(*deltas: str) -> str:
+        head = (
+            'event: message_start\ndata: {"type":"message_start","message":{"model":"upstream-model","usage":{"input_tokens":5}}}\n\n'
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
+        )
+        body = "".join(
+            "event: content_block_delta\ndata: "
+            + json.dumps(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": delta},
+                }
+            )
+            + "\n\n"
+            for delta in deltas
+        )
+        tail = (
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n'
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n'
+            'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+        )
+        return head + body + tail
+
+    async def _call(self) -> str:
+        resp = await self.proxy.post(
+            "/v1/messages",
+            json={
+                "model": "test-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        return await resp.text()
+
+    async def test_stream_note_is_skipped_for_json_reply(self) -> None:
+        proxy_rewrite.RESPONSE_NOTE_ENABLED = True
+        self.upstream.enqueue_sse(self._sse('{"ok": true, "reason": "done"}'))
+
+        text = await self._call()
+
+        self.assertIn('{\\"ok\\": true', text)
+        self.assertNotIn(proxy_response_note.SEG_JOIN, text)
+
+    async def test_stream_note_is_skipped_for_json_split_across_deltas(self) -> None:
+        proxy_rewrite.RESPONSE_NOTE_ENABLED = True
+        self.upstream.enqueue_sse(self._sse('{"ok":', ' true, "reason": "done"}'))
+
+        text = await self._call()
+
+        self.assertNotIn(proxy_response_note.SEG_JOIN, text)
+
+    async def test_non_stream_note_is_skipped_for_json_reply(self) -> None:
+        proxy_rewrite.RESPONSE_NOTE_ENABLED = True
+        self.upstream.enqueue_json(
+            {
+                "model": "test-model",
+                "content": [{"type": "text", "text": '{"ok": true, "reason": "done"}'}],
+                "usage": {"input_tokens": 2, "output_tokens": 1},
+            }
+        )
+
+        text = await self._call()
+
+        self.assertNotIn(proxy_response_note.SEG_JOIN, text)
+
+    async def test_non_stream_note_is_appended_for_prose(self) -> None:
+        proxy_rewrite.RESPONSE_NOTE_ENABLED = True
+        self.upstream.enqueue_json(
+            {
+                "model": "test-model",
+                "content": [{"type": "text", "text": "hello {world"}],
+                "usage": {"input_tokens": 2, "output_tokens": 1},
+            }
+        )
+
+        text = await self._call()
+
+        self.assertIn(proxy_response_note.SEG_JOIN, text)
+
     async def test_assistant_note_echo_is_stripped_before_upstream(self) -> None:
         proxy_rewrite.RESPONSE_NOTE_ENABLED = True
         note = (

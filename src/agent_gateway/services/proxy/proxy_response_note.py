@@ -11,6 +11,10 @@ client's parsing of the tool block. The criterion is the block type, not
 stop_reason: the latter only appears at message_delta, by which time the content
 block has already stopped and there is no time to add another delta.
 
+**Never appended to a structured reply**: a final text block that is one JSON
+object belongs to a machine consumer (the `/goal` evaluator, a json_schema
+request), whose strict parse fails on any trailing line.
+
 The SSE injection point is a **deferred content_block_stop**: on receiving stop
 it is buffered first, and only when the next event arrives is it known whether
 it is the last — if so, a content_block_delta is inserted before it (reusing that
@@ -194,6 +198,18 @@ def _data_of(event: str) -> dict:
     return {}
 
 
+def is_structured_reply(text: str) -> bool:
+    """A reply that is one JSON object belongs to a machine consumer, not a human: the
+    `/goal` evaluator parses it strictly, so an appended line turns it into a parse error."""
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return False
+    try:
+        return isinstance(json.loads(stripped), dict)
+    except (json.JSONDecodeError, ValueError):
+        return False
+
+
 def append_note_to_body(
     resp: dict,
     model: str,
@@ -211,7 +227,10 @@ def append_note_to_body(
     last = content[-1]
     if not isinstance(last, dict) or last.get("type") != "text":
         return False
-    last["text"] = (last.get("text") or "") + NOTE_SEPARATOR + note
+    text = last.get("text") or ""
+    if is_structured_reply(text):
+        return False
+    last["text"] = text + NOTE_SEPARATOR + note
     return True
 
 
@@ -224,6 +243,9 @@ class SSENoteInjector:
         self._note: str | None = None
         self._buf = ""
         self._block_type: dict = {}
+        #: Text accumulated per block, kept only until the block is released, so the
+        #: injector can tell a structured reply from prose before appending.
+        self._text_by_index: dict[int, str] = {}
         self._pending_stop: tuple | None = None
         # Hard stop at one note per response. The line answers "what did the proxy rewrite
         # this turn", so a second copy carries no information — and when the stream happens
@@ -264,10 +286,18 @@ class SSENoteInjector:
         if etype == "content_block_start":
             block = data.get("content_block")
             self._block_type[index] = (block or {}).get("type")
+            self._text_by_index[index] = ""
             return self._release_pending(is_last=False) + event
         if etype == "content_block_stop":
             self._pending_stop = (index, event)
             return ""
+        if etype == "content_block_delta":
+            delta = data.get("delta") or {}
+            if delta.get("type") == "text_delta":
+                self._text_by_index[index] = self._text_by_index.get(index, "") + (
+                    delta.get("text") or ""
+                )
+            return event
         if etype == "message_start":
             self.message_starts += 1
             message = data.get("message") or {}
@@ -288,14 +318,19 @@ class SSENoteInjector:
         index, raw = self._pending_stop
         self._pending_stop = None
         if not is_last or not self._note:
+            self._text_by_index.pop(index, None)
             return raw
-        return self._note_delta(index) + raw
+        note = self._note_delta(index)
+        self._text_by_index.pop(index, None)
+        return note + raw
 
     def _note_delta(self, index) -> str:
-        """Only append when a text block closes; tool_use blocks are left as-is."""
+        """Only append when a text block closes; tool_use and structured replies are left as-is."""
         if self._injected:
             return ""
         if self._block_type.get(index) != "text":
+            return ""
+        if is_structured_reply(self._text_by_index.get(index, "")):
             return ""
         self._injected = True
         payload = {
