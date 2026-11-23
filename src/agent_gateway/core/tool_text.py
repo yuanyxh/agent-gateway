@@ -16,8 +16,10 @@ PARAM_DESCRIPTIONS: dict[str, str] = {
         "put those in context."
     ),
     "param.memory_context": (
-        "Why the fact matters, when it applies, and what it relates to. Embedded "
-        "together with content, so it is searchable."
+        "Background that makes the fact understandable: the situation, problem, "
+        "or trigger that produced it; when and where it applies; which items it "
+        "relates to. Do not put validation status, to-do notes, or 'why we keep "
+        "this' remarks here."
     ),
     "param.memory_type": (
         "Optional memory type, e.g. decision, preference, bug, convention"

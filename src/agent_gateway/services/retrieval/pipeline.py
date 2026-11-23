@@ -446,7 +446,10 @@ class Pipeline:
                 ordered.append(item)
             candidates = ordered[: limit * 2]
             if top:
-                status = "ok" if verdict.status == "ok" else "weak_match"
+                rescued = any(item.extra.get("rerank_rescued") for item in top)
+                status = (
+                    "ok" if verdict.status == "ok" and not rescued else "weak_match"
+                )
             elif related:
                 status = "weak_match"
             elif candidates:

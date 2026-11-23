@@ -36,10 +36,13 @@ class ForgettingMathTests(unittest.TestCase):
             forgetting.retrievability(10, 10), forgetting.retrievability(100, 10)
         )
 
-    def test_days_between_mixes_naive_and_aware(self):
+    def test_days_between_reads_naive_as_local_time(self):
         aware = datetime(2026, 11, 1, tzinfo=timezone.utc)
         naive = datetime(2026, 11, 11)
-        self.assertAlmostEqual(forgetting.days_between(aware.isoformat(), naive), 10.0)
+        expected = (naive.astimezone(timezone.utc) - aware).total_seconds() / 86400
+        self.assertAlmostEqual(
+            forgetting.days_between(aware.isoformat(), naive), expected
+        )
         self.assertAlmostEqual(forgetting.days_between(naive, aware), 0.0)
 
 
@@ -75,6 +78,12 @@ class DecayTests(unittest.TestCase):
                     "SELECT node_id, strength FROM memory_activation"
                 ).fetchall()
             )
+
+    def test_decay_persists_utc_aware_timestamp(self):
+        forgetting.apply_decay_v3(now=self.now, db_path=self.db)
+        self.assertTrue(
+            network.get_meta("last_decay_at", db_path=self.db).endswith("+00:00")
+        )
 
     def test_per_row_decay_uses_stability(self):
         result = forgetting.apply_decay_v3(now=self.now, db_path=self.db)

@@ -21,22 +21,8 @@ UNBIND_WEIGHT = 0.15
 UNBIND_DAYS = 60
 
 
-def _parse(value: str) -> datetime | None:
-    try:
-        return datetime.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _days_between(start: str, now: datetime) -> float:
-    parsed = _parse(start)
-    if parsed is None:
-        return 0.0
-    return max(
-        0.0,
-        (now.replace(tzinfo=None) - parsed.replace(tzinfo=None)).total_seconds()
-        / 86400,
-    )
+def _now(value: datetime | None) -> datetime:
+    return forgetting.as_utc(value) if value else datetime.now(timezone.utc)
 
 
 def _bump(current: float, delta: float) -> float:
@@ -57,12 +43,12 @@ def apply_decay(
     now: datetime | None = None,
     db_path: str | None = None,
 ) -> dict:
-    now = now or datetime.now()
+    now = _now(now)
     last = network.get_meta("last_decay_at", db_path=db_path)
     if not last:
         network.set_meta("last_decay_at", now.isoformat(), db_path=db_path)
         return {"memory_rows": 0, "synapse_rows": 0, "days": 0.0}
-    days = _days_between(last, now)
+    days = forgetting.days_between(last, now)
     if days <= 0:
         return {"memory_rows": 0, "synapse_rows": 0, "days": 0.0}
     if config.memory_brain_forgetting():
@@ -90,7 +76,7 @@ def reinforce_memory(
     now: datetime | None = None,
     db_path: str | None = None,
 ) -> float:
-    now = now or datetime.now(timezone.utc)
+    now = _now(now)
     with store.connect(db_path) as connection:
         # Reinforcing a node the graph never mirrored used to insert an orphan row.
         if (
@@ -144,7 +130,7 @@ def reinforce_synapse(
     now: datetime | None = None,
     db_path: str | None = None,
 ) -> float:
-    now = now or datetime.now()
+    now = _now(now)
     with store.connect(db_path) as connection:
         row = connection.execute(
             "SELECT weight, activation_count FROM synapses WHERE synapse_id=?",
@@ -171,7 +157,7 @@ def coactivate(
 ) -> bool:
     if not left_neuron or not right_neuron or left_neuron == right_neuron:
         return False
-    now = now or datetime.now()
+    now = _now(now)
     left, right = sorted((left_neuron, right_neuron))
     with store.connect(db_path) as connection:
         row = connection.execute(
@@ -201,7 +187,7 @@ def reinforce_after_recall(
 ) -> dict:
     if not config.memory_neuron_enabled():
         return {"memories": 0, "synapses": 0}
-    now = now or datetime.now()
+    now = _now(now)
     memories = 0
     synapses = 0
     seen_memories: set[str] = set()
@@ -266,7 +252,7 @@ def apply_ltd(
     db_path: str | None = None,
 ) -> dict:
     """Weaken the synapses around one memory and halve its stability."""
-    now = now or datetime.now()
+    now = _now(now)
     neuron_id = network.neuron_of(memory_id, db_path=db_path)
     if not neuron_id:
         return {"synapses": 0, "stability": 0.0}
@@ -301,7 +287,7 @@ def unbind_weak(
     db_path: str | None = None,
     dry_run: bool = False,
 ) -> int:
-    now = now or datetime.now()
+    now = _now(now)
     cutoff = (now - timedelta(days=UNBIND_DAYS)).isoformat()
     where = (
         "status='active' AND weight<? AND COALESCE(last_activated_at, created_at)<=?"

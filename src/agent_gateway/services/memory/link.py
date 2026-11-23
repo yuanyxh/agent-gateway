@@ -36,6 +36,19 @@ def _int(value, default: int) -> int:
         return default
 
 
+def _float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _tags(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(tag) for tag in value if tag]
+
+
 def record_hot_memory(
     memory_id: str,
     content: str,
@@ -77,6 +90,8 @@ def record_hot_memory(
             "level": _int(meta.get("level"), 0),
             "importance": _int(meta.get("importance"), 5),
             "protected": bool(meta.get("protected", False)),
+            "tags": _tags(meta.get("tags")),
+            "confidence": _float(meta.get("confidence"), 1.0),
             # Scope must survive the mirror: consolidation reads graph metadata.
             VISIBILITY_FIELD: str(meta.get(VISIBILITY_FIELD) or "all"),
             OWNER_AGENT_FIELD: str(meta.get(OWNER_AGENT_FIELD) or "unknown"),

@@ -5,14 +5,16 @@ record from both layers, query each by its own full text, and take a low
 percentile of the scores it earns. Writes the result where `floors_for` reads
 it, so the next process starts calibrated.
 
-Sampling is deliberately absent. A 100-record prefix is not the distribution the
-retriever sees, and neither is a record's opening 20 characters; both produced
-floors that rejected the very records they were meant to admit.
+Scoring is bounded by a uniform reservoir sample; a prefix is never used. A
+100-record prefix is not the distribution the retriever sees, and neither is a
+record's opening 20 characters; both produced floors that rejected the very
+records they were meant to admit.
 """
 
 from __future__ import annotations
 
 import json
+import random
 import shutil
 import time
 from datetime import datetime
@@ -35,6 +37,8 @@ SEARCH_LIMIT = 10
 LOG_EVERY = 250
 #: A record shorter than this has no retrievable probe.
 MIN_RECORD_CHARS = 8
+#: Probe budget: a compute bound, not a ranking threshold. Sampling is uniform.
+MAX_PROBES = 2000
 #: Probes used to detect an identity self-query before running the full layer.
 DEGENERATE_PROBES = 20
 #: A self-score this high means the probe vector equals the stored vector.
@@ -47,6 +51,21 @@ NOTES_SEMANTIC_RATIO = 0.65
 #: Coverage is a share of query terms, not a similarity, so it does not move
 #: with the model.
 NOTES_COVERAGE = 0.50
+
+
+def sample_probes(
+    samples: list[tuple[str, str]], cap: int = MAX_PROBES, seed: int = 0
+) -> list[tuple[str, str]]:
+    """Uniform reservoir sample; deterministic seed keeps runs comparable."""
+    if cap <= 0 or len(samples) <= cap:
+        return list(samples)
+    rng = random.Random(seed)
+    chosen = list(samples[:cap])
+    for index in range(cap, len(samples)):
+        slot = rng.randrange(index + 1)
+        if slot < cap:
+            chosen[slot] = samples[index]
+    return chosen
 
 
 def _hot_samples() -> list[tuple[str, str]]:
@@ -255,8 +274,14 @@ def _degenerate_result() -> dict[str, Any]:
 
 def measure() -> dict[str, Any]:
     """Floor candidates for both layers plus the probe counts they came from."""
-    hot_samples = _hot_samples()
-    cold_samples = _cold_samples()
+    hot_all = _hot_samples()
+    cold_all = _cold_samples()
+    hot_samples = sample_probes(hot_all)
+    cold_samples = sample_probes(cold_all)
+    if len(hot_samples) < len(hot_all):
+        logger.info(f"[calibrate] hot sampled {len(hot_samples)}/{len(hot_all)}")
+    if len(cold_samples) < len(cold_all):
+        logger.info(f"[calibrate] cold sampled {len(cold_samples)}/{len(cold_all)}")
     hot_skip = _degenerate(hot_samples, _hot_search)
     cold_skip = _degenerate(cold_samples, _cold_search)
     if hot_skip:

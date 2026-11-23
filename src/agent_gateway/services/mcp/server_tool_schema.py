@@ -202,13 +202,13 @@ MEMORY_ITEM_SCHEMA: dict = {
 
 #: Fixed English tool descriptions; parameter guidance lives in `tool_text.PARAM_DESCRIPTIONS`.
 TOOL_DESCRIPTIONS: dict[str, str] = {
-    "remember": "Trigger: the moment you learn a durable fact, fix a bug, make a decision, or discover a reusable convention — record it immediately, do not wait until the session ends. content holds only the fact; context holds why it matters and when it applies. Pass supersedes with the id of the memory this fact replaces; the old entry is retired, not deleted.",
+    "remember": "Trigger: the moment you learn a durable fact, fix a bug, make a decision, or discover a reusable convention — record it immediately, do not wait until the session ends. content holds only the fact; context holds the situation and background that make it understandable. Pass supersedes with the id of the memory this fact replaces; the old entry is retired, not deleted.",
     "remember_batch": (
         "Batch version of remember; use it when several durable facts land at once. "
         "Same trigger as remember. "
         "Optional episode_id and dimensions apply to the whole batch."
     ),
-    "recall": "Trigger: anytime you are unsure, blocked, debugging, about to change unfamiliar code, or the user refers to earlier work. Search shared memory, knowledge base, and notes first, before guessing or re-deriving. results are confirmed hits and may be empty; candidates are unconfirmed entry points, each carrying a reason (below_floor / rerank_rejected / filter_miss). Short queries may return term-matched rejects flagged rerank_rescued. A short or empty result does not mean the store is empty; same-episode context is returned in related.",
+    "recall": "Trigger: anytime you are unsure, blocked, debugging, about to change unfamiliar code, or the user refers to earlier work. Search shared memory, knowledge base, and notes first, before guessing or re-deriving. results are confirmed hits and may be empty (rerank_rescued rows only appear with status weak_match); candidates are unconfirmed entry points, each carrying a reason (below_floor / rerank_rejected / filter_miss). Short queries may return term-matched rejects flagged rerank_rescued. A short or empty result does not mean the store is empty; same-episode context is returned in related.",
     "catch_up": "Trigger: user says just now/last time/previously/recently, or asks what was done, the progress, or what remains unresolved. Do not substitute git log.",
     "forget": "Trigger: user asks to delete a memory, or a memory is wrong/outdated. Deletes it permanently.",
     "project_lookup": "Locate a symbol or file and return its definition with one-hop caller context. Prefer over grep for definition lookup. Omit query for a graph overview (files, symbols, edges, languages).",

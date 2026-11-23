@@ -24,6 +24,13 @@
 | 记忆分组治理 | 已接入日任务：增量候选、默认应用 split/merge、写 `episode_prev`/`episode_source`、12 次调用预算；628 例通过。2026-11-20 修复：写入继承改近邻多数投票 + 阈值 0.65、周任务全量回扫、候选注入 session/task/file、神经元 importance 聚合、重放种子限有边神经元；883 例与 ruff 通过 | 待打包部署；下一次日/周任务的治理与重放效果待观察 |
 | 记忆神经网 v2 | T1-T18 完成；2026-11-11 两仓 review 修复 11 项与三观察项（事件循环阻塞、readonly、时区锚点、治理断边、配置嵌套），724 例与 ruff 通过；Lume VM 复验 daily/weekly 心跳 max 204/326 ms、`llm_skipped=false`、共激活建边 13（证据 `tests/eval/memory_network/2026-11-11/vm-fixes/`） | 待重新打包 utility；关联臂召回质量尚无前后对比；治理 split/merge 的 seed 重建未端到端 |
 
+## 最近完成（2026-11-23）
+
+- `param.memory_context` 与 `remember` 描述改为情境/背景口径：明确要求触发问题、适用时机与关联项，禁止验证状态、待办与「为什么保留」类备注；920 例与 ruff 通过。
+- `link.record_hot_memory` 的 `node_meta` 白名单补 `tags` / `confidence`：此前主存储有值、图镜像全缺（9,109 条）；新增 `_tags` / `_float` 归一化与 LinkTest 回归；920 例与 ruff 通过。
+- `knowledge_expand` 空响应修复：MiMo OpenAI 端点不认 `enable_thinking=false`，推理 token 吃满 `max_tokens` 后返回空内容（`finish_reason=length`）；实测 `thinking={"type":"disabled"}` 关闭推理。`llm/client.py` 对所有 OpenAI 端点同时发送 `thinking=disabled` 与 `reasoning_effort=none`（不按域名过拟合），新增 `tests/test_llm_body.py`；919 例与 ruff 通过；真实提示词 1,485 字符 2 秒返回 concept（修复前约 60 秒后失败）。已随 utility 1.2.40 部署（venv wheel 戳 15:19）。
+- review 五项修复：冷层摘要继承源记忆最高 importance；naive 时间按本地时间解释、新写入带 UTC 时区（读端统一 `as_utc`，不改历史数据）；结果含 `rerank_rescued` 时分层状态强制 `weak_match`；自标定改为均匀蓄水池抽样（上限 2000，确定性种子），不再用前缀；默认模板 `brain` 移至 `mcp.brain`（utility 仓）。新增 `test_summarize_storage.py` / `test_autocalibrate.py`，925 例与 ruff 全过；安装版 wheel 已核验含全部修复，未提交。
+
 ## 最近完成（2026-11-22）
 
 - 死代码清理（未提交）：删除 12 处零引用符号与 `core/agent_call.py`（移入废纸篓），去掉 `_topical_related` 未用参数；随后移除无消费者的 `AGENT_TIMEOUT` 契约并重新导出 `contracts/env.json`。验证：916 例、ruff check/format 全过。

@@ -772,7 +772,7 @@ class RerankFallbackTest(unittest.TestCase):
         self.assertEqual([row["id"] for row in out["results"]], ["s"])
         self.assertTrue(out["results"][0]["rerank_rescued"])
         self.assertEqual(out["candidates"], [])
-        self.assertEqual(out["status"], "ok")
+        self.assertEqual(out["status"], "weak_match")
 
     def test_two_term_query_requires_both_terms(self):
         pipeline = Pipeline(

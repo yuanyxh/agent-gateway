@@ -12,6 +12,7 @@ from agent_gateway.core.log_utils import setup_logging as _log_setup
 from agent_gateway.core.memory_lifecycle import (
     COLD_SOURCE_MEMORY_IDS_FIELD,
 )
+from agent_gateway.services.memory import store as memory_store
 from agent_gateway.services.summarize.summary_llm import (
     _HTTP,
     write_error_log,
@@ -57,6 +58,19 @@ def _cold_already_synced(content: str, source_file: str) -> bool:
         return False
 
 
+def _inherited_importance(source_memory_ids: list | None) -> int:
+    """Keep the strongest source importance; a summary of an important fact matters."""
+    try:
+        nodes = memory_store.get_nodes(list(source_memory_ids or []))
+    except Exception:
+        return 5
+    values = [
+        int((node.get("metadata") or {}).get("importance") or 5)
+        for node in nodes.values()
+    ]
+    return max(values) if values else 5
+
+
 def write_to_cold_layer(
     content: str,
     source_file: str,
@@ -77,6 +91,7 @@ def write_to_cold_layer(
                 "category": category,
                 "tags": tags or [],
                 "confidence": confidence,
+                "importance": _inherited_importance(source_memory_ids),
                 COLD_SOURCE_MEMORY_IDS_FIELD: source_memory_ids or [],
             },
         )

@@ -222,6 +222,29 @@ class LinkTest(_GraphCase):
         self.assertIn(("m1", "m0", "supersedes"), edge_types)
         self.assertIn(("m1", "m0", "episode"), edge_types)
 
+    def test_hot_write_mirrors_tags_and_confidence(self):
+        link.record_hot_memory(
+            "m2",
+            "tagged fact",
+            {"tags": ["bug", "", "workflow"], "confidence": 0.8},
+            created_at="2026-03-02",
+            db_path=self.db,
+        )
+        link.record_hot_memory(
+            "m3",
+            "plain fact",
+            {},
+            created_at="2026-03-02",
+            db_path=self.db,
+        )
+
+        tagged = store.get_node("m2", db_path=self.db)["metadata"]
+        self.assertEqual(tagged["tags"], ["bug", "workflow"])
+        self.assertEqual(tagged["confidence"], 0.8)
+        plain = store.get_node("m3", db_path=self.db)["metadata"]
+        self.assertEqual(plain["tags"], [])
+        self.assertEqual(plain["confidence"], 1.0)
+
     def test_cold_write_links_back_to_sources(self):
         self.node("h1")
         node_id = link.record_cold_memory(

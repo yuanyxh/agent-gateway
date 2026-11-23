@@ -47,9 +47,8 @@ def _parse(value) -> datetime | None:
         return None
 
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+def as_utc(value: datetime) -> datetime:
+    """Naive values are local wall time (legacy writes); both forms become UTC."""
     return value.astimezone(timezone.utc)
 
 
@@ -57,11 +56,11 @@ def days_between(start, now: datetime) -> float:
     parsed = _parse(start)
     if parsed is None:
         return 0.0
-    return max(0.0, (_as_utc(now) - _as_utc(parsed)).total_seconds() / 86400)
+    return max(0.0, (as_utc(now) - as_utc(parsed)).total_seconds() / 86400)
 
 
 def apply_decay_v3(*, now: datetime | None = None, db_path: str | None = None) -> dict:
-    now = now or datetime.now()
+    now = as_utc(now) if now else datetime.now(timezone.utc)
     last = network.get_meta("last_decay_at", db_path=db_path)
     if not last:
         network.set_meta("last_decay_at", now.isoformat(), db_path=db_path)
