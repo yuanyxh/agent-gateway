@@ -198,20 +198,15 @@ def _body(
         body["max_tokens"] = max_tokens
 
     if disable_thinking:
-        # Disabling thinking is a **protocol difference**: Anthropic has a
-        # thinking block; the OpenAI protocol has no standard field, so the
-        # known reasoning params (reasoning_effort / output_config) are removed.
-        if target.api_format == API_ANTHROPIC:
-            body["thinking"] = {"type": "disabled"}
-        body.pop("reasoning_effort", None)
+        # Both forms are sent so any OpenAI-compatible endpoint matches one.
+        body["thinking"] = {"type": "disabled"}
+        if target.api_format != API_ANTHROPIC:
+            body["reasoning_effort"] = "none"
         body.pop("output_config", None)
 
     if extra_body:
-        # The **sole entry point** for provider-private extensions (e.g. deepseek's
-        # OpenAI-compatible endpoint accepts thinking). Such fields are not a
-        # protocol fact; putting them in the common layer would make other openai
-        # providers receive an unknown field and 400, so the caller must pass
-        # them explicitly and explicitly accept the provider binding.
+        # Caller-supplied provider extensions go here; the caller accepts the
+        # provider binding rather than relying on a protocol fact.
         body.update(extra_body)
     return body
 
