@@ -232,3 +232,8 @@
 - 2026-11-19 维度过滤空召回已定位并修复：filter_fallback 行在 rerank 全负时被丢弃；冷层 project 缺失（source_file 可推断 573/1297）。修复已随 wheel 部署（14:18，MCP 同刻重启）；历史回填经用户决定不做，仅新写入按 source_file 推断。
 - 2026-11-20 notes 预热改为按需触发：宿主 `-a` 启动不再调用 `/api/project/notes/prewarm`；prewarm 线程在 macOS 降为 Background QoS（ctypes `pthread_set_qos_class_self_np`，非 darwin 跳过）；新增 QoS 调用路径测试。`test_project_notes_cache.py` + `test_embedder_lifecycle.py` 23 例通过；宿主侧 A/B 对照与首次查询触发均已实测。
 - 2026-11-20 trace_id 贯穿代理与 MCP：`core/trace_context.py`（contextvar）作为唯一 id 来源，响应头在 `prepare()` 前写入，`api_usage`/`gateway_log` 新增可空列并自动迁移；895 测试通过，本机与 Lume `utility-env` 端到端全 PASS，真实库副本迁移演练通过。
+
+## 基座升级（2026-11-25）
+
+- seed_version 1.6.0 → 1.6.1：更新 `DOC-13` 英文标点空格；`build`/`hunt`/`review`/`init` 补 1.6.0 回路要求；`UIX-06` 因 `ui.has_ui: false` 跳过并登记。
+- 验证：`verify-instantiation.sh` 0 errors / 1 warning（既有：`stack.lockfile: none`）。

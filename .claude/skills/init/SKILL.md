@@ -98,7 +98,7 @@ description: 当用户提出任何从零开始的项目、产品、游戏、网�
 
 1. 在目标路径创建目录；目标路径不得是种子仓库。
 2. `.agent/profile.yaml`、`status.md`、`backlog.md`、`upgrades.md`、`decisions.md`、`lessons.md`、`memory/README.md`；`.agent/plans/_template.md` 为计划模板，任务计划按需从模板创建。探测 `stack.lockfile`，推导 `verify.outdated` 与 `verify.audit`；把首次扫描写入 `upgrades.md`，不可用时填 `none` 并记录原因。
-3. 执行 `protocols/zh/environment.md` 的环境探测，写入 `.agent/environment.md`。
+3. 执行 `protocols/zh/environment.md` 的环境探测，写入 `.agent/environment.md`。必须写明可脚本化驱动方式与 `## 反馈回路` 段（启动与热更新命令、驱动入口、观测与证据手段、日志路径、脚本路径），并实际运行一次回路，记录结果或降级原因。
 4. 项目骨架：优先使用 `packs/zh/` 中匹配的技术包；没有匹配包时按 `seeds/scaffolds/README.md` 的结构要求现场生成，并在报告中标注“未使用技术包”。
 5. 版本控制：探测默认分支并记录为 `delivery.trunk_branch`；按画像初始化仓库，生成忽略规则，覆盖构建产物、依赖、本地配置与验证数据；首次提交需用户授权。
 6. 工程化配置：生成格式化、静态检查、类型检查与本地钩子配置，命令与 `verify.*` 一致。
