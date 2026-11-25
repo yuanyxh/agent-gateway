@@ -27,6 +27,7 @@
 ## 最近完成（2026-11-25）
 
 - 基座升级 seed 1.5.0 → 1.6.0：新增 `rules/testing.md` TST-10 与 `knowledge/interaction-observability.md`，`environment.md` 补 `## 反馈回路` 段，`profile.yaml` 升版。`verify-instantiation.sh` 0 errors，1 既有 warning（`stack.lockfile` 未声明）。
+- 工具去重注记文案更新：zh-Hans「本次工具调用结果与上一次工具调用结果相同，可直接复用，可复用工具结果 id: {tool_id}」，en 同步；占位符 `id` 更名 `tool_id`，未知 id 渲染 `?`。925 例与 ruff 通过。
 
 ## 最近完成（2026-11-23）
 
