@@ -263,6 +263,14 @@ without the protocol path; the proxy appends `v1/messages` or
 | `websearch_engine` | Search the web and optionally fetch top pages |
 | `read_url` | Convert a page to Markdown |
 | `tool_resource` | Load a packaged reference or script when instructed |
+| `service_register` | Register or update a service card in the mesh registry |
+| `service_deregister` | Move a service card to the mesh trash |
+| `service_list` | List service cards, merging configured peers |
+| `service_probe` | Check one card's liveness and status |
+| `service_send` | Deliver a message to a service, forwarding to its peer gateway |
+| `service_inbox` | Read messages delivered to a service |
+| `service_heartbeat` | Refresh liveness and optionally report a status |
+| `service_start` | Ask a service to start its command |
 
 Skills found under `<notes>/MCP/Skills` are also exposed as zero-argument tools.
 
@@ -299,6 +307,36 @@ The token proxy adds:
 | `GET` | `/usage/summary` | Token usage summary |
 | `GET` | `/usage/tools` | Per-tool call counts |
 | `GET` | `/usage/layers` | Request-level usage records |
+
+### Service mesh
+
+The same port serves a small service registry under `/mesh/*`, so agents can find and message each other across processes and machines. Cards are JSON files under `server.mesh.dataDir`; a card without a heartbeat for `heartbeatTtlSeconds` expires but stays readable until deregistered.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/mesh/register` | Register or update a card (loopback only) |
+| `POST` | `/mesh/deregister` | Move a card to `.trash` (loopback only) |
+| `POST` | `/mesh/send` | Deliver a message, forwarding to a peer when owned elsewhere |
+| `POST` | `/mesh/heartbeat` | Refresh liveness and optional status |
+| `GET` | `/mesh/services` | List cards, merging reachable peers |
+| `GET` | `/mesh/services/{id}` | Read one card |
+| `GET` | `/mesh/health` | Mesh liveness |
+
+The eight `service_*` tools wrap this API. Delivery is best-effort: failures return `target_offline` (with `startable`) or `peer_unreachable`, and the caller decides whether to retry. `server.mesh.peers[].name` must equal the peer's own `server.mesh.gatewayId`. When `server.mcp.bind` is not loopback, `server.mesh.token` is required: REST, MCP and `/mesh/*` all demand `Authorization: Bearer <token>`, and the server refuses to start without one.
+
+```yaml
+server:
+  mcp:
+    bind: 127.0.0.1
+  mesh:
+    enabled: true
+    gatewayId: gw-local
+    dataDir: ~/.config/utility/mesh
+    heartbeatTtlSeconds: 120
+    peers:
+      - name: gw-b
+        baseUrl: http://10.0.0.2:9001
+```
 
 ## Configuration
 
@@ -359,7 +397,7 @@ pip install ruff build
 
 ruff format --check src tests scripts
 ruff check src tests scripts
-PYTHONPATH=src python -m unittest discover -s tests -t .
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -t .
 python -m build
 agent-gateway --check
 ```

@@ -27,6 +27,7 @@ import concurrent.futures
 import functools
 import logging
 import resource
+import socket
 import sys
 from datetime import datetime, timedelta
 
@@ -38,6 +39,7 @@ from qdrant_client.models import (
     PointStruct,
 )
 from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import (
     TextContent,
 )
@@ -98,7 +100,14 @@ from agent_gateway.services.memory.consolidate import (
     run_daily,
     run_weekly,
 )
-from agent_gateway.core import trace_context
+from agent_gateway.core import config_loader, trace_context
+from agent_gateway.services.mesh import state as mesh_state
+from agent_gateway.services.mesh.api import build_mesh_routes, remote_token_middleware
+from agent_gateway.services.mesh.tools import register_mesh_tools
+from agent_gateway.services.mesh.registry import FileRegistry
+from agent_gateway.services.mesh.router import Router
+from agent_gateway.services.mesh.settings import load as load_mesh_settings
+from agent_gateway.services.mesh.transport import DirectoryTransport, HTTPTransport
 from agent_gateway.services.retrieval import rebuild
 from agent_gateway.services.retrieval import trace as retrieval_trace
 from agent_gateway.services.retrieval.arms.project_lookup import ProjectLookupArm
@@ -680,14 +689,23 @@ register_tools(
     mcp, {name: functools.partial(_dispatch_tool, name) for name in HANDLERS}
 )
 register_skill_tools(mcp)
+register_mesh_tools(mcp)
 
 
-def build_asgi(rest_app: Starlette) -> Starlette:
+def build_asgi(rest_app: Starlette, allow_remote: bool = False) -> Starlette:
+    security = None
+    if allow_remote:
+        security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["*"],
+            allowed_origins=["*"],
+        )
     app = mcp.streamable_http_app(
         streamable_http_path="/",
         # SSE stream is required for notifications/progress; JSON mode drops them.
         json_response=False,
         stateless_http=True,
+        transport_security=security,
         host="127.0.0.1",
     )
     # Scripts under scripts/ default to /mcp; the v1 transport accepted every path,
@@ -1161,11 +1179,46 @@ async def serve():
         ]
     )
 
-    app = build_asgi(rest_app)
+    bind_host = str(config_loader.value("server.mcp.bind", "127.0.0.1") or "127.0.0.1")
+    loopback = bind_host in ("127.0.0.1", "localhost", "::1")
+    mesh = load_mesh_settings(True)
+    if mesh is not None:
+        registry = FileRegistry(mesh.data_dir, mesh.gateway_id)
+        remote = HTTPTransport(mesh.peers) if mesh.peers else None
+        mesh_router = Router(
+            registry,
+            DirectoryTransport(mesh.data_dir / "inbox"),
+            remote=remote,
+            gateway_id=mesh.gateway_id,
+        )
+        mesh_state.set_router(mesh_router)
+        advertised = str(
+            config_loader.value("server.mesh.advertiseUrl", "") or ""
+        ).strip()
+        if not advertised:
+            host = socket.gethostname() if bind_host in ("0.0.0.0", "::") else bind_host
+            advertised = f"http://{host}:{MCP_PORT}"
+        rest_app.routes.extend(
+            build_mesh_routes(
+                mesh_router,
+                mesh.token,
+                mesh.gateway_id,
+                advertised,
+            )
+        )
+
+    app = build_asgi(rest_app, allow_remote=not loopback)
+    token = str(config_loader.value("server.mesh.token", "") or "")
+    if not loopback:
+        if not token:
+            raise RuntimeError(
+                "server.mesh.token is required when server.mcp.bind is not loopback"
+            )
+        app = remote_token_middleware(app, token)
     # Bounded shutdown: idle MCP clients keep a stream open and would block SIGTERM.
     config = uvicorn.Config(
         app,
-        host="127.0.0.1",
+        host=bind_host,
         port=MCP_PORT,
         log_level="info",
         timeout_graceful_shutdown=2,

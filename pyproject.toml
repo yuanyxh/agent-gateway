@@ -58,6 +58,7 @@ server = [
     "starlette>=1.10",
     "anyio>=4.16",
     "trafilatura>=2.3",
+    "pydantic>=2.9",
 ]
 # Audit-only; never shipped in the host wheel.
 dev = [

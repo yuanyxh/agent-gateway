@@ -44,6 +44,17 @@
 - MCP 通知（含 `notifications/progress`）依赖 SSE 响应流：`build_asgi` 的 `json_response` 必须为 `False`；
   JSON 单响应没有 sink，进度会被静默丢弃
 
+## Mesh（服务间通信）
+
+- 实现在 `services/mesh/`，参考 A2A 的 Card/Message 概念，不实现 JWS/OAuth/JSON-RPC
+- 注册表是文件目录（每服务一个 JSON，原子写，TTL 120s，上限 500），**无数据库**
+- 不保投递、不重试：失败返回错误码，由调用方决定重发；`service_start` 只写 control 消息
+- 协议是「网关即代理」：agent 只连一个网关，跨机由 `server.mesh.peers` 转发，转发前探测存活
+- 反向注册只接受已鉴权 peer 的 `workspace/agent` 卡，TTL ≤ 300s，不覆盖已有卡
+- `server.mcp.bind` 默认 `127.0.0.1`；非本机来源对 `/mesh/*`、REST 与 MCP 全部要求 Bearer token，bind 非回环且无 token 时拒绝启动
+- `register/deregister` 只接受本机来源；目录卡 endpoint 必须落在 inbox 根内；心跳 status 只接受六个合法值
+- `service_start` 以卡 status 判定运行态（offline 即拉起）；control start 需要 startable；远端错误码原样保留
+
 ## 加载策略
 
 | 内容 | 层 | 触发 | 机制 |
@@ -95,7 +106,7 @@
 | --- | --- |
 | 格式化 | `ruff format --check src tests scripts` |
 | 静态检查 | `ruff check src tests scripts` |
-| 测试 | `PYTHONPATH=src python -m unittest discover -s tests -t .` |
+| 测试 | `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -t .`（系统 `python3` 是 Xcode 3.9，缺依赖） |
 | 构建 | `python -m build` |
 | 自检 | `agent-gateway --check` |
 | 版本检测 | `pip list --outdated` |
@@ -117,7 +128,7 @@
 | 构建 | `python -m build` |
 | 格式化检查 | `ruff format --check src tests scripts` |
 | 静态检查 | `ruff check src tests scripts` |
-| 测试 | `PYTHONPATH=src python -m unittest discover -s tests -t .` |
+| 测试 | `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -t .`（系统 `python3` 是 Xcode 3.9，缺依赖） |
 | 运行 | `agent-gateway --check` |
 | 版本检测 | `pip list --outdated` |
 | 契约导出 | `agent-gateway --export-contracts` |

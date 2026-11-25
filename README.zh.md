@@ -244,6 +244,14 @@ agent-gateway --serve --service proxy
 | `websearch_engine` | 搜索网页，可选抓取首页内容 |
 | `read_url` | 把页面转换为 Markdown |
 | `tool_resource` | 在收到指令时加载包内参考文件或脚本 |
+| `service_register` | 注册或更新服务卡 |
+| `service_deregister` | 把服务卡移入网格废纸篓 |
+| `service_list` | 列出服务卡，合并已配置的 peer |
+| `service_probe` | 探测单个服务的存活与状态 |
+| `service_send` | 投递消息，必要时转发到服务的归属网关 |
+| `service_inbox` | 读取投递给某服务的消息 |
+| `service_heartbeat` | 刷新存活时间，可选上报状态 |
+| `service_start` | 请求服务启动其命令 |
 
 `<笔记目录>/MCP/Skills` 下的 skill 也会以无参数工具的形式暴露。
 
@@ -280,6 +288,36 @@ token 代理额外提供：
 | `GET` | `/usage/summary` | token 用量汇总 |
 | `GET` | `/usage/tools` | 按工具统计调用次数 |
 | `GET` | `/usage/layers` | 请求级用量记录 |
+
+### 服务网格
+
+同一端口在 `/mesh/*` 下提供一个小型服务注册表，让 agent 跨进程、跨机器互相发现和投递消息。服务卡以 JSON 文件存放在 `server.mesh.dataDir`；超过 `heartbeatTtlSeconds` 未心跳的卡会过期，但在注销前仍可读取。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/mesh/register` | 注册或更新服务卡（仅本机） |
+| `POST` | `/mesh/deregister` | 把服务卡移入 `.trash`（仅本机） |
+| `POST` | `/mesh/send` | 投递消息，归属他机时转发到 peer |
+| `POST` | `/mesh/heartbeat` | 刷新存活时间与可选状态 |
+| `GET` | `/mesh/services` | 列出服务卡，合并可达 peer |
+| `GET` | `/mesh/services/{id}` | 读取单个服务卡 |
+| `GET` | `/mesh/health` | 网格存活检查 |
+
+8 个 `service_*` 工具封装同一套 API。投递不保证送达：失败返回 `target_offline`（附 `startable`）或 `peer_unreachable`，由调用方决定是否重试。`server.mesh.peers[].name` 必须等于对方的 `server.mesh.gatewayId`。`server.mcp.bind` 非回环时必须配置 `server.mesh.token`：REST、MCP 与 `/mesh/*` 统一要求 `Authorization: Bearer <token>`，缺失时服务拒绝启动。
+
+```yaml
+server:
+  mcp:
+    bind: 127.0.0.1
+  mesh:
+    enabled: true
+    gatewayId: gw-local
+    dataDir: ~/.config/utility/mesh
+    heartbeatTtlSeconds: 120
+    peers:
+      - name: gw-b
+        baseUrl: http://10.0.0.2:9001
+```
 
 ## 配置
 

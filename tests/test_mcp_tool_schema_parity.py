@@ -29,9 +29,15 @@ def _old_schemas():
     }
 
 
+MESH_TOOL_PREFIX = "service_"
+
+
 def _new_schemas():
+    # Mesh tools have no legacy schema; test_mesh_tools.py covers their wiring.
     return {
-        tool.name: tool.input_schema for tool in asyncio.run(server.mcp.list_tools())
+        tool.name: tool.input_schema
+        for tool in asyncio.run(server.mcp.list_tools())
+        if not tool.name.startswith(MESH_TOOL_PREFIX)
     }
 
 
