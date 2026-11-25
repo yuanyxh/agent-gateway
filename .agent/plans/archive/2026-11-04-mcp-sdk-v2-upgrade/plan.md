@@ -119,7 +119,7 @@ flowchart TD
 
 **文件**
 
-- 新建：`/Users/yuanyxh/Documents/selfdata/projects/agent-gateway/.agent/plans/2026-11-04-mcp-sdk-v2-upgrade/baseline.md`
+- 新建：`<repo>/.agent/plans/2026-11-04-mcp-sdk-v2-upgrade/baseline.md`
 - 只读：`pyproject.toml`、`.venv`
 
 **接口**
@@ -135,13 +135,13 @@ flowchart TD
 
 **验证**
 
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/agent-gateway && PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -t .`
+- 命令：`cd <repo> && PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -t .`
 - 期望：`Ran 522 tests ... OK`
 
 **依赖 / 规模**：无 / XS
 
 - [ ] 步骤 1：跑 unittest 与 `ruff format --check src tests scripts && ruff check src tests scripts`，写入 `baseline.md`
-- [ ] 步骤 2：`git -C /Users/yuanyxh/Documents/selfdata/projects/agent-gateway diff > /tmp/gateway-pre-upgrade.patch`；utility 仓同样保存
+- [ ] 步骤 2：`git -C <repo> diff > /tmp/gateway-pre-upgrade.patch`；utility 仓同样保存
 - [ ] 步骤 3：记录两仓 `pip list` 与 `Package.resolved`
 
 ### T2：依赖地板
@@ -163,7 +163,7 @@ flowchart TD
 
 **验证**
 
-- 命令：`python3 -m venv /tmp/gw-clean && /tmp/gw-clean/bin/pip install -e "/Users/yuanyxh/Documents/selfdata/projects/agent-gateway[proxy,memory,server]"`
+- 命令：`python3 -m venv /tmp/gw-clean && /tmp/gw-clean/bin/pip install -e "<repo>[proxy,memory,server]"`
 - 命令：`/tmp/gw-clean/bin/pip list --format=freeze | rg "^mcp"`
 - 期望：两行 2.3.0
 
@@ -381,8 +381,8 @@ flowchart TD
 
 **文件**
 
-- 修改：`/Users/yuanyxh/Documents/selfdata/projects/utility/Package.swift:8-11`
-- 重新生成：`/Users/yuanyxh/Documents/selfdata/projects/utility/Package.resolved`
+- 修改：`<utility-repo>/Package.swift:8-11`
+- 重新生成：`<utility-repo>/Package.resolved`
 
 **接口**
 
@@ -397,7 +397,7 @@ flowchart TD
 
 **验证**
 
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/utility && swift package update && swift build`
+- 命令：`cd <utility-repo> && swift package update && swift build`
 - 命令：`bash scripts/run-tests.sh`
 
 **依赖 / 规模**：T9 / M
@@ -411,7 +411,7 @@ flowchart TD
 
 **文件**
 
-- 重新生成：`/Users/yuanyxh/Documents/selfdata/projects/utility/Sources/Gateway/constraints.txt`
+- 重新生成：`<utility-repo>/Sources/Gateway/constraints.txt`
 - 记录：`.agent/decisions.md` 的 2026-07-28 实测结论
 
 **接口**
@@ -429,7 +429,7 @@ flowchart TD
 
 **验证**
 
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/utility && SIGNING_IDENTITY=<本机签名> scripts/package-utility.sh`
+- 命令：`cd <utility-repo> && SIGNING_IDENTITY=<本机签名> scripts/package-utility.sh`
 - 命令：`rg "^mcp" Sources/Gateway/constraints.txt`
 - 手工：启动 app，`~/.config/utility/mcp-venv/bin/python -c "import mcp;print(mcp.__version__)"`，再调 `memory_graph`
 - 手工：抓取服务日志中的 `server/discover` 请求记录

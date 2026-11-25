@@ -147,7 +147,7 @@ flowchart TD
 
 **验证**
 
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/agent-gateway && PYTHONPATH=src python -m unittest tests.graph.test_indexer_marker -v`
+- 命令：`cd <repo> && PYTHONPATH=src python -m unittest tests.graph.test_indexer_marker -v`
 - 期望：PASS。
 
 **依赖 / 规模**：无 / M
@@ -180,7 +180,7 @@ flowchart TD
 
 **验证**
 
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/utility && swift build`
+- 命令：`cd <utility-repo> && swift build`
 - 期望：BUILD SUCCEEDED。
 - 命令：`bash scripts/e2e-isolated.sh`
 - 期望：原有断言全过，新增登记断言通过。
@@ -236,7 +236,7 @@ flowchart TD
 
 **验证**
 
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/agent-gateway && PYTHONPATH=src python -m unittest tests.graph.test_refresh -v`
+- 命令：`cd <repo> && PYTHONPATH=src python -m unittest tests.graph.test_refresh -v`
 - 期望：PASS。
 - 命令：`ruff check src/agent_gateway/services/graph/refresh.py src/agent_gateway/services/mcp/server.py`
 - 期望：无输出，退出码 0。
@@ -273,9 +273,9 @@ flowchart TD
 
 **验证**
 
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/agent-gateway && PYTHONPATH=src python -m unittest tests.graph.test_refresh_integration -v`
+- 命令：`cd <repo> && PYTHONPATH=src python -m unittest tests.graph.test_refresh_integration -v`
 - 期望：PASS。
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/utility && bash scripts/e2e-isolated.sh`
+- 命令：`cd <utility-repo> && bash scripts/e2e-isolated.sh`
 - 期望：原有断言与新增登记断言全部通过。
 
 **依赖 / 规模**：任务 2、任务 3 / M
@@ -292,8 +292,8 @@ flowchart TD
 **文件**
 
 - 修改：`.claude/docs/architecture/project-graph.md`
-- 修改：`/Users/yuanyxh/Documents/selfdata/projects/agent-gateway/.agent/status.md`
-- 修改：`/Users/yuanyxh/Documents/selfdata/projects/utility/.agent/status.md`
+- 修改：`<repo>/.agent/status.md`
+- 修改：`<utility-repo>/.agent/status.md`
 
 **接口**
 
@@ -308,11 +308,11 @@ flowchart TD
 
 **验证**
 
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/agent-gateway && PYTHONPATH=src python -m unittest discover -s tests -t . && ruff format --check src tests scripts && ruff check src tests scripts`
+- 命令：`cd <repo> && PYTHONPATH=src python -m unittest discover -s tests -t . && ruff format --check src tests scripts && ruff check src tests scripts`
 - 期望：全部通过，ruff 退出码 0。
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/utility && swift build && bash scripts/run-tests.sh`
+- 命令：`cd <utility-repo> && swift build && bash scripts/run-tests.sh`
 - 期望：BUILD SUCCEEDED，测试全过。
-- 命令：`cd /Users/yuanyxh/Documents/selfdata/projects/utility && bash scripts/e2e-isolated.sh`
+- 命令：`cd <utility-repo> && bash scripts/e2e-isolated.sh`
 - 期望：全过。
 
 **依赖 / 规模**：任务 1-4 / S

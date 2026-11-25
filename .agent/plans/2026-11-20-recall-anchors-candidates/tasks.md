@@ -21,7 +21,7 @@
 - 文件：VM `~/recall-ab/src-base`（`git archive HEAD` 解包）
 - 依赖：T1
 - 步骤：
-  1. 宿主 `git -C /Users/yuanyxh/Documents/selfdata/projects/agent-gateway archive HEAD | tar -x -C /tmp/recall-ab/src-base`。
+  1. 宿主 `git -C <repo> archive HEAD | tar -x -C /tmp/recall-ab/src-base`。
   2. 传到 VM `~/recall-ab/src-base`。
   3. 以环境变量启动：`PYTHONPATH=src QDRANT_PATH=~/recall-ab/data/qdrant_data GATEWAY_CACHE=~/recall-ab/cache/gateway MCP_PORT=19001`，模型目录指向 `~/recall-ab/cache`。
   4. 打印实际解析路径（`QDRANT_PATH`、`MEM0_QDRANT_PATH`、embedder cache、rerank dir、notes dir）。
