@@ -62,7 +62,8 @@ def _inherited_importance(source_memory_ids: list | None) -> int:
     """Keep the strongest source importance; a summary of an important fact matters."""
     try:
         nodes = memory_store.get_nodes(list(source_memory_ids or []))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - a lookup failure must not block the write
+        logger.warning("inherited importance lookup failed: %s", exc)
         return 5
     values = [
         int((node.get("metadata") or {}).get("importance") or 5)

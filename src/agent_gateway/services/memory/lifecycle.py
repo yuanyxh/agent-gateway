@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from agent_gateway.core import config
 from agent_gateway.core.log_utils import setup_logging
 from agent_gateway.core.paths import gateway_cache
-from agent_gateway.services.memory import network, network_build, store
+from agent_gateway.services.memory import forgetting, network, network_build, store
 
 logger = setup_logging("server")
 
@@ -47,10 +47,13 @@ def _degrees(db_path: str | None = None) -> dict[str, int]:
 
 def _days_since(value: str, now: datetime) -> float:
     try:
-        start = datetime.fromisoformat(str(value)).replace(tzinfo=None)
+        start = datetime.fromisoformat(str(value))
     except (TypeError, ValueError):
         return 0.0
-    return max(0.0, (now.replace(tzinfo=None) - start).total_seconds() / 86400)
+    return max(
+        0.0,
+        (forgetting.as_utc(now) - forgetting.as_utc(start)).total_seconds() / 86400,
+    )
 
 
 def _meta(node: dict) -> dict:

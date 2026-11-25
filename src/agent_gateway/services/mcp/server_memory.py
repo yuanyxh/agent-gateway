@@ -500,10 +500,11 @@ def _active_similar(
             row_owner = str(meta.get(OWNER_AGENT_FIELD) or "unknown")
             if row_owner != agent_id:
                 continue
+        text = str(r.get("memory") or r.get("content") or "")
         similar.append(
             {
                 "id": r["id"],
-                "content": str(r.get("memory") or r.get("content") or "")[:120],
+                "content": text[:117] + "..." if len(text) > 120 else text,
                 "score": round(float(score), 3),
                 "episode_id": str(meta.get(EPISODE_FIELD) or "").strip(),
                 "fact": str(meta.get("fact") or ""),

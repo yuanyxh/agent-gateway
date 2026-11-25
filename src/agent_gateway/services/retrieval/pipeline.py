@@ -740,6 +740,15 @@ class Pipeline:
             "status": verdict.status,
             "count": len(top),
             "related_count": len(related),
+            "related": [
+                {
+                    "id": item.id,
+                    "layer": item.layer,
+                    "score": float(item.score),
+                    "locator": item.locator,
+                }
+                for item in related
+            ],
             # Rows a caller's constraint removed and how many came back.
             "filtered": filtered,
             "fallback_count": fallback_count,
