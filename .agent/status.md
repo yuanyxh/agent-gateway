@@ -24,6 +24,10 @@
 | 记忆分组治理 | 已接入日任务：增量候选、默认应用 split/merge、写 `episode_prev`/`episode_source`、12 次调用预算；628 例通过。2026-11-20 修复：写入继承改近邻多数投票 + 阈值 0.65、周任务全量回扫、候选注入 session/task/file、神经元 importance 聚合、重放种子限有边神经元；883 例与 ruff 通过 | 待打包部署；下一次日/周任务的治理与重放效果待观察 |
 | 记忆神经网 v2 | T1-T18 完成；2026-11-11 两仓 review 修复 11 项与三观察项（事件循环阻塞、readonly、时区锚点、治理断边、配置嵌套），724 例与 ruff 通过；Lume VM 复验 daily/weekly 心跳 max 204/326 ms、`llm_skipped=false`、共激活建边 13（证据 `tests/eval/memory_network/2026-11-11/vm-fixes/`） | 待重新打包 utility；关联臂召回质量尚无前后对比；治理 split/merge 的 seed 重建未端到端 |
 
+## 最近完成（2026-11-25）
+
+- 基座升级 seed 1.5.0 → 1.6.0：新增 `rules/testing.md` TST-10 与 `knowledge/interaction-observability.md`，`environment.md` 补 `## 反馈回路` 段，`profile.yaml` 升版。`verify-instantiation.sh` 0 errors，1 既有 warning（`stack.lockfile` 未声明）。
+
 ## 最近完成（2026-11-23）
 
 - `param.memory_context` 与 `remember` 描述改为情境/背景口径：明确要求触发问题、适用时机与关联项，禁止验证状态、待办与「为什么保留」类备注；920 例与 ruff 通过。

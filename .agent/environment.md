@@ -33,3 +33,14 @@
 ## 刷新规则
 
 环境变化、命令失败或新会话开始时重新探测；旧记录保留时间戳，不覆盖历史。
+
+## 反馈回路
+
+按交互面记录可重复回路（TST-10）。
+
+| 交互面 | 启动 | 驱动 | 观测 | 证据脚本 |
+| --- | --- | --- | --- | --- |
+| 协议 | `.venv/bin/python -c "from agent_gateway.services.mcp.server import main; main()"` | `curl 127.0.0.1:9001/health` | 响应与 `~/.cache/utility/server.log` | 待补 |
+| 终端 | 同上 | MCP 工具调用 | `~/.cache/utility/server.log` | 待补 |
+
+首次回路运行：升级到 1.6.0 时无交互改动，按 TST-09 人工移交。
