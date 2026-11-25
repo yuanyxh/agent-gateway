@@ -27,7 +27,7 @@ UNKNOWN_REF = "?"
 
 def note_for(ref: str, lang: str) -> str:
     """Render the short note, pointing at the first occurrence's tool result id."""
-    return t("proxy.dedup.note", lang=lang, id=ref or UNKNOWN_REF)
+    return t("proxy.dedup.note", lang=lang, tool_id=ref or UNKNOWN_REF)
 
 
 def _tool_result_text(block: dict) -> str | None:

@@ -34,7 +34,8 @@ class AnthropicDedupTest(unittest.TestCase):
         self.assertEqual(first["content"], "same body")
         self.assertEqual(second["tool_use_id"], "toolu_b")
         self.assertEqual(
-            second["content"], "本次运行结果与上次结果相同（工具结果 toolu_a）"
+            second["content"],
+            "本次工具调用结果与上一次工具调用结果相同，可直接复用，可复用工具结果 id: toolu_a",
         )
 
     def test_distinct_text_is_untouched(self):
@@ -50,7 +51,7 @@ class AnthropicDedupTest(unittest.TestCase):
             "toolu_b", "write", "same body"
         )
         dedup_tool_results({"messages": messages}, "anthropic", "en")
-        self.assertIn("(tool result ?)", messages[3]["content"][0]["content"])
+        self.assertIn("tool result id: ?", messages[3]["content"][0]["content"])
 
 
 class OpenAIDedupTest(unittest.TestCase):
@@ -67,7 +68,8 @@ class OpenAIDedupTest(unittest.TestCase):
         self.assertEqual(messages[3]["tool_call_id"], "call_b")
         self.assertEqual(
             messages[3]["content"],
-            "This result is the same as the previous one (tool result call_a)",
+            "This tool call result is identical to the previous tool call result "
+            "and can be reused directly; reusable tool result id: call_a",
         )
 
 
