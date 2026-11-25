@@ -101,7 +101,7 @@
 | 版本检测 | `pip list --outdated` |
 | 漏洞扫描 | `pip-audit`（未安装时登记降级） |
 
-本地与 CI 执行同一组命令；CI 见 `.github/workflows/ci.yml`。
+本地与 CI 执行同一组命令；CI 见 `.github/workflows/ci.yml`（Actions 由用户关闭，质量门当前以本地命令为准）。
 
 本地钩子：`git config core.hooksPath .githooks`。`pre-commit` 执行 ruff format/check，`commit-msg` 校验 `类型(范围): 摘要`。
 

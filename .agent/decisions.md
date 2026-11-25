@@ -57,7 +57,7 @@
 | 2026-11-01 | D3 | 取代「`MEMORY_*`/`RANK_SIGNAL_*` 只读 env」一条：开关已接入宿主配置链（`MCPConfig` 字段 + `memoryEnvironment()` 两个注入点 + `_YAML_FALLBACKS`），并导出契约 | Agent | 用户要求同步配置；只读 env 的开关在宿主侧既不可见也无法启用 | 配置项保留默认 0，行为与未接入时一致 |
 | 2026-11-02 | D1 | 公开发布：仓库公开，`.agent/` 与 `CLAUDE.md` 作为开发者文档保留公开；许可证 MIT；`README.md` 为英文权威入口，`README.zh.md` 为中文镜像 | 用户 | 用户明确选择公开开源、保留内部文档与 MIT；双语为发布要求 | 改回私有需撤销远端公开与许可证声明 |
 | 2026-11-03 | D3 | `route_tier` 记录实际 provider 名，`route_reason` 记录 `model_match`/`default_provider`/`legacy_upstream`；不恢复旧 strong/weak 路由 | Agent | 当前仓只有 provider 选择，没有分层路由；旧列全空，按实际路由写入才能回答「这一轮走了哪个上游」 | 恢复留空即可；历史 strong/weak 行保留 |
-| 2026-11-03 | D3 | 基座升级到 agent-vibe 1.4.0：合并规则/技能，补 backlog/upgrades/plans；跳过 ship/deploy/ui；lockfile 暂为 none | Agent | 用户确认升级；画像 `deploy_target: none`、`has_ui: false`；项目按 pyproject extras 安装，无锁定文件 | 按 `.agent/plans/base-upgrade-1.4.0.md` 的清单与 git 历史回退 |
+| 2026-11-03 | D3 | 基座升级到 agent-vibe 1.4.0：合并规则/技能，补 backlog/upgrades/plans；跳过 ship/deploy/ui；lockfile 暂为 none | Agent | 用户确认升级；画像 `deploy_target: none`、`has_ui: false`；项目按 pyproject extras 安装，无锁定文件 | 按 `.agent/plans/archive/base-upgrade-1.4.0.md` 的清单与 git 历史回退 |
 | 2026-11-04 | D3 | 项目内数据目录改为 `.agent-gateway/`，图库 schema 与写入归 gateway；utility 只发文件事件 | 用户 | utility 退化为客户端，宿主不应拥有图库写权；旧 `.utility/` 仅复制回退，避免迁移丢数据 | `GATEWAY_PROJECT_DIR=.utility` 回退旧布局；旧文件不移动不删除 |
 | 2026-11-04 | D3 | 配置唯一写入格式 `agent-gateway.yaml`；旧 `config.yaml` 只读翻译一个发布周期 | 用户 | 配置 schema 与宿主解耦，同时保证存量用户无感升级 | `GATEWAY_CONFIG_FORMAT=legacy` 强制适配；移除适配需用户确认 |
 | 2026-11-04 | D3 | `skillDedupEnabled` 更名 `toolOutputDedup`，env/模块/注记键同步 | 用户 | 实际判定是 byte-identical 的 `tool_result`，与 skill 无关，旧命名误导配置理解 | 旧配置键与 `MODEL_PROXY_SKILL_DEDUP` 保留一个周期 |
@@ -76,7 +76,7 @@
 | 2026-11-19 | D2 | recall 的单关键词变体按需触发：base 两路去重后不足 limit 才跑，最多 3 路 | Agent | 常驻 3 路使 p50 3057ms；按需后 2899ms 且命中率不变 | 删除 `_term_variants` 调用 |
 | 2026-11-19 | D2 | rerank 负分丢弃只从 strict 行回填，不复活 floor 补充分 | Agent | 全量回填时无内容查询命中从 18.8% 升到 50%；仅 strict 回填后误报不增 | 删除 `strict_dropped` 回填块 |
 | 2026-11-19 | D2 | 实体臂 ASCII 名按词边界匹配，纯符号排除；CJK 仍子串匹配 | Agent | 随机串 `zzz-nonexistent-abc` 因实体 `en`、`-` 召回 10 条 | 恢复 `instr` 子串匹配 |
-| 2026-11-19 | D3 | hot floor 暂维持 0.616；0.55 在矩阵上提升命中但会与 rerank 兜底叠加放大弱结果 | Agent | 评估数据见 `.agent/plans/2026-11-19-recall-recallability/plan.md` | 把 `retrieval_thresholds.json` 的 hot 改为 0.55 |
+| 2026-11-19 | D3 | hot floor 暂维持 0.616；0.55 在矩阵上提升命中但会与 rerank 兜底叠加放大弱结果 | Agent | 评估数据见 `.agent/plans/archive/2026-11-19-recall-recallability/plan.md` | 把 `retrieval_thresholds.json` 的 hot 改为 0.55 |
 | 2026-11-19 | D2 | 候选：floor 改由 gold 249 条完整查询的 dense 分数离线校准，自校准只做向量一致性体检；生产阈值暂不动 | Agent | 全量正文自检索恒等 1.0（冷层 1297 条 self p50=1.0）；gold 数据见计划 P0 实证 | 恢复 20 字探针会重新引入截断，禁用 |
 | 2026-11-19 | D2 | cold/expanded floor 0.569→0.50，hot 0.616 与 notes_semantic 0.37 不变 | 用户批准写入生产 | 生产 trace 冷层最终出现率 3.2%→21.1%；形态矩阵命中 100%、误报 0、p50 2.8s | 恢复 `retrieval_thresholds.json.bak-cold050-20261119T175105` 即回退 |
 | 2026-11-19 | D2 | 候选：部署 filter_fallback 修复与冷层 project 推断，并回填生产冷层 573 条 | Agent | source_file 可推断 44% 冷层 project；无来源/冲突的 724 条保持空 | 回填备份 JSON 可逐条恢复项目字段 |
@@ -90,3 +90,4 @@
 | 2026-11-20 | D1 | recall 结果分层：`results` 只含 floor+rerank 双通过的命中，可为空、不填满；低分/判负/被过滤行进 `candidates` 并带 `reason`；`status` 改 `ok`/`weak_match`/`candidates_only`/`empty`，不再用补齐行填 `results` | 用户批准 | 生产 11-20 trace 67% 返回行为 rerank 判负复活；VM 真实副本 249 条 gold A/B：specific 精度 4.5%→8.6%，入口覆盖 21.8%→23.5%，基线命中 38 条零丢失；基线 79 条「不空」查询平均 5.41 条仅命中 1 条 | 恢复 `pipeline.py` 的 weak/fallback 填 `top` 与 `rerank_fallback` 复活块；`server_memory.py` 删除 `candidates` 字段 |
 | 2026-11-21 | D2 | 短查询词面救援（补充 D1 分层）：≤3 个空白分词的查询里，rerank 判负行按词面覆盖救援回 `results` 并标 `rerank_rescued`；N≤2 需全覆盖、更长查询允许缺 1 个词（CJK bigram 会跨词，75% 在 N=3 不可达），ASCII 词边界、CJK 子串、排除停用词；救援行固定排在 rerank 通过行之后，不参与 logit 混排 | Agent | 交叉编码器对短查询漂移 0.4~1.0，VM 真实副本 12/12 短查询补回 anchors、20 条不存在查询 0 anchors | 删除 `RERANK_RESCUE_*` 常量与 `_term_coverage` 调用，恢复判负行仅进 `candidates` |
 | 2026-11-25 | D1 | 工具去重注记文案改为「本次工具调用结果与上一次工具调用结果相同，可直接复用，可复用工具结果 id: {tool_id}」，英文同步；占位符 `id` 更名 `tool_id` | 用户 | 用户指定文案并要求其他语种同步；未知 id 仍渲染 `?` | 恢复旧文案「本次运行结果与上次结果相同（工具结果 {id}）」与 `id=` 传参 |
+| 2026-11-25 | D1 | GitHub Actions 保持关闭：11-05 后无新 run 是用户主动关闭，非平台故障；质量门以本地 ruff + unittest + build 为准 | 用户 | 用户确认「我关了」；`ci.yml` 的 memory extra 修复保留，供将来开启时使用 | 用户重新启用 Actions 后下次 push 即触发 |
