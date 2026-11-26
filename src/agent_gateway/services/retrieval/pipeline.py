@@ -36,9 +36,9 @@ MAX_TERM_VARIANTS = 3
 BOOST_STEP = 0.10
 BOOST_MAX_FIELDS = 3
 
-#: Candidate order is provenance first: fused, dense-floor and rerank scores
-#: are not on one scale, so a rejected strict hit must outrank a near miss.
-CANDIDATE_PRIORITY = {"rerank_rejected": 0, "below_floor": 1, "filter_miss": 2}
+#: Candidate order is provenance first: a near miss is a stronger entry point
+#: than a row the caller's own filter excluded.
+CANDIDATE_PRIORITY = {"below_floor": 0, "filter_miss": 1}
 
 #: Short queries make the cross-encoder unreliable, so a rejected row is rescued
 #: when its terms appear. The gate counts whitespace tokens: CJK has no word
@@ -341,10 +341,25 @@ class Pipeline:
                     )
                 )
         reranked = False
-        if self.reranker is not None and merged:
+        rejected_ids: set[str] = set()
+        promoted_ids: set[str] = set()
+        rerank_input = list(merged)
+        reranked_near_ids: set[str] = set()
+        if self.layered and self.reranker is not None:
+            # Near misses fill the slots strict rows leave open; the best `limit`
+            # of them take the same cross-encoder verdict as a strict row.
+            near = [
+                item
+                for item in candidates
+                if item.extra.get("candidate_reason") == "below_floor"
+            ]
+            for item in near[:limit]:
+                rerank_input.append(item)
+                reranked_near_ids.add(item.id)
+        if self.reranker is not None and rerank_input:
             rerank_started = time.perf_counter()
             try:
-                ranked = self.reranker(query, merged)
+                ranked = self.reranker(query, rerank_input)
             except Exception as e:  # noqa: BLE001 - reranking must not kill the call
                 logger.warning(f"[pipeline:{self.name}] rerank failed: {e!r}")
             else:
@@ -375,15 +390,38 @@ class Pipeline:
                                 )
                             )
                         else:
-                            candidates.append(
-                                replace(
-                                    item,
-                                    extra=self._candidate_extra(
-                                        item.extra, "rerank_rejected"
-                                    ),
-                                )
-                            )
-                    merged = [*self._prefer(query, ranked), *rescued]
+                            rejected_ids.add(item.id)
+                    head = [
+                        *self._prefer(
+                            query,
+                            [item for item in ranked if item.id in strict_ids],
+                        ),
+                        *rescued,
+                    ]
+                    room = max(0, limit - len(head))
+                    near_misses = [item for item in ranked if item.id not in strict_ids]
+                    promoted = [
+                        replace(item, extra=self._promoted_extra(item.extra))
+                        for item in near_misses[:room]
+                    ]
+                    promoted_ids = {item.id for item in promoted}
+                    # Rows the reranker declined are not entry points. A near miss
+                    # that wins a positive score but no free slot stays a candidate
+                    # instead of disappearing from the payload.
+                    accepted_ids = {item.id for item in near_misses}
+                    candidates = [
+                        item
+                        for item in candidates
+                        if item.id not in promoted_ids
+                        and (
+                            item.id not in reranked_near_ids or item.id in accepted_ids
+                        )
+                    ]
+                    held = {item.id for item in candidates}
+                    candidates.extend(
+                        item for item in near_misses[room:] if item.id not in held
+                    )
+                    merged = [*head, *promoted]
                 else:
                     reranked_ids = {item.id for item in ranked}
                     dropped = [item for item in merged if item.id not in reranked_ids]
@@ -447,8 +485,11 @@ class Pipeline:
             candidates = ordered[: limit * 2]
             if top:
                 rescued = any(item.extra.get("rerank_rescued") for item in top)
+                promoted = any(item.extra.get("promoted_candidate") for item in top)
                 status = (
-                    "ok" if verdict.status == "ok" and not rescued else "weak_match"
+                    "ok"
+                    if verdict.status == "ok" and not rescued and not promoted
+                    else "weak_match"
                 )
             elif related:
                 status = "weak_match"
@@ -507,6 +548,10 @@ class Pipeline:
             trace_payload["rerank_rescued_count"] = sum(
                 1 for item in top if item.extra.get("rerank_rescued")
             )
+            trace_payload["rerank_rejected_count"] = len(rejected_ids)
+            trace_payload["rerank_rejected_ids"] = sorted(rejected_ids)
+            trace_payload["promoted_count"] = len(promoted_ids)
+            trace_payload["promoted_ids"] = sorted(promoted_ids)
         trace_mod.record(trace_payload)
 
         payload: dict[str, Any] = {
@@ -545,6 +590,18 @@ class Pipeline:
         }
         cleaned["candidate_reason"] = reason
         return cleaned
+
+    @staticmethod
+    def _promoted_extra(extra: dict[str, Any]) -> dict[str, Any]:
+        """A promoted near miss drops its candidate flags and records its origin."""
+        origin = str(extra.get("candidate_reason") or "")
+        kept = {
+            key: value
+            for key, value in extra.items()
+            if key not in ("candidate_reason", "floor_fallback")
+        }
+        kept["promoted_candidate"] = origin
+        return kept
 
     @staticmethod
     def _allowed(value: Any) -> set[str]:

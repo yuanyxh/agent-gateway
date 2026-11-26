@@ -85,6 +85,7 @@ class RetrievedItem:
         "floor_fallback",
         "rerank_fallback",
         "rerank_rescued",
+        "promoted_candidate",
         "path",
         "hops",
         "neuron_id",

@@ -50,8 +50,11 @@ HTTP endpoints and JSON contracts instead of importing internals.
   the model changes.
 - Recall responses are layered: `results` holds confirmed hits only (may be empty),
   `candidates` holds unconfirmed entry points with a `reason` (`below_floor` /
-  `rerank_rejected` / `filter_miss`), and `status` is `ok` / `weak_match` /
-  `candidates_only` / `empty`. `weak_match` means the hits are lexical or related
+  `filter_miss`), and `status` is `ok` / `weak_match` / `candidates_only` /
+  `empty`. Rows the reranker rejects are dropped. A below-floor near miss the
+  reranker accepts takes a free result slot with `promoted_candidate` and then
+  reports `weak_match`; with no free slot it stays a `below_floor` candidate.
+  `weak_match` means the hits are lexical or related
   context rather than semantic matches. Short queries (≤3 terms), where the
   cross-encoder is unreliable, rescue term-matched rejects into `results` with
   `rerank_rescued`; they never outrank rerank-passed rows. Trace metadata joins a

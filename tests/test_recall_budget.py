@@ -109,6 +109,48 @@ class RecallBudgetTest(unittest.TestCase):
             [row["id"] for row in data["results"]], ["first", "second", "third"]
         )
 
+    def test_promoted_rows_are_not_reinforced(self):
+        out = _out(
+            [
+                {"id": "confirmed", "content": "a"},
+                {
+                    "id": "weak",
+                    "content": "b",
+                    "promoted_candidate": "below_floor",
+                },
+            ],
+            [],
+        )
+        touched: list[list[dict]] = []
+        reinforced: list[list[dict]] = []
+        coactivated: list[list[dict]] = []
+        with (
+            mock.patch.object(
+                server_memory,
+                "_touch_hot_access",
+                side_effect=lambda rows: touched.append(rows),
+            ),
+            mock.patch.object(server_memory, "memory_strength") as strength,
+        ):
+            strength.reinforce_after_recall.side_effect = lambda rows: (
+                reinforced.append(rows)
+            )
+            strength.coactivate_recalled.side_effect = lambda rows: coactivated.append(
+                rows
+            )
+            data = self._run(out, {"keywords": ["q"], "max_chars": 100000})
+
+        self.assertEqual([row["id"] for row in data["results"]], ["confirmed", "weak"])
+        self.assertEqual(
+            [[row["id"] for row in rows] for rows in touched], [["confirmed"]]
+        )
+        self.assertEqual(
+            [[row["id"] for row in rows] for rows in reinforced], [["confirmed"]]
+        )
+        self.assertEqual(
+            [[row["id"] for row in rows] for rows in coactivated], [["confirmed"]]
+        )
+
 
 class EdgeExpansionTest(unittest.TestCase):
     def test_neighbour_is_labelled_with_its_edge_type(self):

@@ -1399,10 +1399,13 @@ async def _handle_recall(arguments: dict) -> list[TextContent]:
             else ([], False, 0)
         )
     # After truncation: only the rows that survived are ones the caller saw.
-    await asyncio.to_thread(_touch_hot_access, top)
+    # Promoted below-floor rows are weak hits; counting them as access or
+    # co-activation would let a near miss reinforce itself into a confident one.
+    confirmed = [row for row in top if not row.get("promoted_candidate")]
+    await asyncio.to_thread(_touch_hot_access, confirmed)
     try:
-        await asyncio.to_thread(memory_strength.reinforce_after_recall, top)
-        await asyncio.to_thread(memory_strength.coactivate_recalled, top)
+        await asyncio.to_thread(memory_strength.reinforce_after_recall, confirmed)
+        await asyncio.to_thread(memory_strength.coactivate_recalled, confirmed)
     except Exception as e:  # noqa: BLE001 - reinforcement must not drop recalled rows
         logger.warning(f"[memory] reinforce after recall failed: {e}")
     status = out["status"]

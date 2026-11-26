@@ -2,12 +2,15 @@
 
 ## 当前目标
 
-2026-11-20/21 recall 结果分层 + 短查询词面救援：已正式化，外派复审修复 6 项；912 例与 ruff 通过；lume 真实副本 gold 249 条 precision 8.9% vs 6.7%、入口覆盖 35.7% vs 32.9%、相关命中零丢失。
+2026-11-26 recall candidates 降噪（R3+R1）：已随 Utility 1.2.44 部署生效，1020 passed + ruff check/format 全过。
 
-- 计划：`.agent/plans/2026-11-20-recall-anchors-candidates/plan.md`
-- 决策：`.agent/decisions.md` 2026-11-20 D1（分层）、2026-11-21 D2（救援）
-- 已验证：短查询 12/12 有 anchors；20 条不存在查询无词面误报；VM 内评测需 `NO_PROXY`
-- 状态：工作区未提交、生产未部署；用户实测后决定提交与打包
+- 决策：`.agent/decisions.md` 2026-11-26 D1（降噪）、D2（promoted 不强化）
+- 已验证：venv 包与源码 md5 一致；MCP 进程 22:48 重启后加载；实调 `candidates` 仅 `below_floor`、无 `rerank_rejected`
+- 状态：用户已授权提交推送
+
+## 最近完成
+
+2026-11-20/21 recall 结果分层 + 短查询词面救援：912 例与 ruff 通过；lume 真实副本 gold 249 条 precision 8.9% vs 6.7%、入口覆盖 35.7% vs 32.9%、相关命中零丢失。决策见 `.agent/decisions.md` 2026-11-20 D1、2026-11-21 D2。
 
 ## 进行中
 
